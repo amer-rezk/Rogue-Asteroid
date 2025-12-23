@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Missile Turrets (Multiplayer)</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div id="ui">
+    <div class="row">
+      <div class="title">Missile Turrets (1–4p)</div>
+      <div class="status" id="status">Connecting…</div>
+    </div>
+
+    <div class="panel">
+      <div class="row" style="gap:10px; flex-wrap:wrap;">
+        <label class="label">Server:</label>
+        <input id="serverUrl" class="input" placeholder="ws(s)://your-server.com/ws" />
+        <button id="connectBtn" class="btn">Connect</button>
+      </div>
+      <div class="hint">Tip: On GitHub Pages you must set this to your deployed server, e.g. <code>wss://YOUR-SERVER/ws</code>.</div>
+    </div>
+
+    <div class="panel">
+      <div class="row" style="gap:10px; flex-wrap:wrap;">
+        <label class="label">Name:</label>
+        <input id="name" class="input" maxlength="16" />
+        <button id="saveName" class="btn">Save</button>
+        <button id="startBtn" class="btn primary" style="margin-left:auto; display:none;">Start</button>
+      </div>
+      <div class="sub" id="lobbyInfo">Lobby…</div>
+      <div id="playerList" class="list"></div>
+    </div>
+
+    <div class="panel" id="upgradePanel" style="display:none;">
+      <div class="sub">Pick an upgrade:</div>
+      <div id="upgradeOptions" class="upgrades"></div>
+    </div>
+
+    <div class="panel">
+      <div class="sub">Controls</div>
+      <div class="hint">
+        Aim with mouse. Hold left-click to shoot. (Your turret can only aim inside your own segment.)
+      </div>
+    </div>
+  </div>
+
+  <canvas id="game" width="900" height="600"></canvas>
+
+  <script src="./client.js"></script>
+</body>
+</html>
