@@ -18,6 +18,27 @@
   const upgradePanel = document.getElementById("upgradePanel");
   const upgradeOptionsEl = document.getElementById("upgradeOptions");
 
+  // Neon color palette
+  const COLORS = {
+    cyan: "#0ff",
+    magenta: "#f0f",
+    yellow: "#ff0",
+    orange: "#f80",
+    red: "#f55",
+    purple: "#a0f",
+    green: "#0f8",
+    white: "#fff",
+    darkBg: "#0a0a18",
+  };
+
+  // Player colors for different slots
+  const PLAYER_COLORS = [
+    { main: "#0ff", glow: "rgba(0,255,255,", name: "Cyan" },
+    { main: "#f0f", glow: "rgba(255,0,255,", name: "Magenta" },
+    { main: "#0f8", glow: "rgba(0,255,136,", name: "Green" },
+    { main: "#fa0", glow: "rgba(255,170,0,", name: "Orange" },
+  ];
+
   function setStatus(txt) {
     statusEl.textContent = txt;
   }
@@ -26,15 +47,12 @@
   function normalizeWsUrl(input) {
     let url = (input || "").trim();
     if (!url) return null;
-
     if (url.startsWith("http://")) url = "ws://" + url.slice(7);
     if (url.startsWith("https://")) url = "wss://" + url.slice(8);
-
     if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
       const proto = location.protocol === "https:" ? "wss://" : "ws://";
       url = proto + url;
     }
-
     url = url.replace(/\/+$/, "");
     if (!url.endsWith("/ws")) url += "/ws";
     return url;
@@ -50,21 +68,14 @@
   }
 
   function chooseInitialServer() {
-    // 1) URL param wins (shareable link)
     const qs = new URLSearchParams(location.search);
     const q = qs.get("server");
     if (q) return normalizeWsUrl(q);
-
-    // 2) HTML prefill wins (index.html value="")
     const fromHtml = (serverEl.value || "").trim();
     if (fromHtml) return normalizeWsUrl(fromHtml);
-
-    // 3) localStorage (but never allow github.io)
     const stored = (localStorage.getItem("serverUrl") || "").trim();
     const storedNorm = stored ? normalizeWsUrl(stored) : null;
     if (storedNorm && !isGithubWs(storedNorm)) return storedNorm;
-
-    // 4) hard default (your Render)
     return normalizeWsUrl(HARD_DEFAULT_SERVER);
   }
 
@@ -78,13 +89,32 @@
   let world = { width: 360, height: 600, segmentWidth: 360 };
   let wave = 0;
   let baseHp = 0;
+  let maxBaseHp = 0;
 
   let lastSnap = null;
 
   // Input
   let mouseXWorld = 0;
   let shooting = false;
-  let lastInputSend = 0;
+
+  // Visual effects
+  let screenShake = 0;
+  let stars = [];
+
+  // Initialize stars
+  function initStars() {
+    stars = [];
+    for (let i = 0; i < 100; i++) {
+      stars.push({
+        x: Math.random(),
+        y: Math.random(),
+        size: Math.random() * 1.5 + 0.5,
+        speed: Math.random() * 0.02 + 0.01,
+        twinkle: Math.random() * Math.PI * 2,
+      });
+    }
+  }
+  initStars();
 
   function connect(url) {
     const wsUrl = normalizeWsUrl(url);
@@ -93,9 +123,7 @@
       return;
     }
 
-    // Never store a github.io websocket (it will always fail)
     if (!isGithubWs(wsUrl)) localStorage.setItem("serverUrl", wsUrl);
-
     serverEl.value = wsUrl;
 
     if (ws) {
@@ -122,7 +150,7 @@
     };
 
     ws.onerror = () => {
-      setStatus("Connection error (see console)");
+      setStatus("Connection error");
     };
 
     ws.onmessage = (ev) => {
@@ -140,7 +168,6 @@
         isHost = !!msg.isHost;
         phase = msg.phase;
         world = msg.world;
-
         startBtn.style.display = isHost ? "inline-block" : "none";
         setStatus(isHost ? "Connected (Host)" : "Connected");
         return;
@@ -163,6 +190,7 @@
       if (msg.t === "wave") {
         wave = msg.wave;
         upgradePanel.style.display = "none";
+        screenShake = 10;
         return;
       }
 
@@ -178,32 +206,42 @@
       }
 
       if (msg.t === "state") {
+        // Check for damage
+        if (lastSnap && msg.baseHp < lastSnap.baseHp) {
+          screenShake = 15;
+        }
         lastSnap = msg;
         phase = msg.phase;
         wave = msg.wave;
         world = msg.world;
         baseHp = msg.baseHp;
+        maxBaseHp = msg.maxBaseHp;
         return;
       }
 
       if (msg.t === "gameOver") {
         phase = "gameover";
-        setStatus(`Game Over (reached wave ${msg.wave})`);
+        setStatus(`Game Over — Wave ${msg.wave}`);
         upgradePanel.style.display = "none";
+        showGameOver(msg);
       }
     };
   }
 
   function renderLobby(players, hostId) {
-    lobbyInfo.textContent = `Players: ${players.length}/4 — Host: ${hostId === myId ? "you" : "someone else"}`;
+    lobbyInfo.textContent = `Players: ${players.length}/4`;
     playerList.innerHTML = "";
 
     for (const p of players) {
       const div = document.createElement("div");
       div.className = "card";
-      const hostMark = p.id === hostId ? " ⭐" : "";
+      const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
+      const hostMark = p.id === hostId ? " 👑" : "";
       const meMark = p.id === myId ? " (you)" : "";
-      div.innerHTML = `<div><b>${p.name}</b>${hostMark}${meMark}</div><div class="sub">Slot ${p.slot + 1}</div>`;
+      div.innerHTML = `
+        <div style="color:${color.main}"><b>${p.name}</b>${hostMark}${meMark}</div>
+        <div class="sub">Slot ${p.slot + 1} • ${color.name}</div>
+      `;
       playerList.appendChild(div);
     }
 
@@ -217,7 +255,15 @@
     for (const opt of options) {
       const b = document.createElement("button");
       b.className = "upg";
-      b.innerHTML = `<div class="t">${opt.title}</div><div class="d">${opt.desc}</div>`;
+      const catColor = opt.category === "offensive" ? COLORS.red :
+                       opt.category === "turret" ? COLORS.cyan :
+                       opt.category === "defensive" ? COLORS.green : COLORS.purple;
+      b.innerHTML = `
+        <div class="icon">${opt.icon || "⬆"}</div>
+        <div class="t">${opt.title}</div>
+        <div class="d">${opt.desc}</div>
+        <div class="cat" style="color:${catColor}">${opt.category}</div>
+      `;
       b.onclick = () => {
         if (ws && ws.readyState === 1) {
           ws.send(JSON.stringify({ t: "pickUpgrade", key: opt.key }));
@@ -226,6 +272,24 @@
       };
       upgradeOptionsEl.appendChild(b);
     }
+  }
+
+  function showGameOver(msg) {
+    upgradePanel.style.display = "block";
+    upgradeOptionsEl.innerHTML = `
+      <div style="text-align:center; padding: 20px;">
+        <h2 style="color: ${COLORS.red}; margin: 0 0 10px 0;">GAME OVER</h2>
+        <p style="color: ${COLORS.white}; margin: 0 0 20px 0;">Reached Wave ${msg.wave}</p>
+        <div style="text-align:left;">
+          ${msg.scores ? msg.scores.map((s, i) => `
+            <div style="color: ${PLAYER_COLORS[i]?.main || '#fff'}; margin: 5px 0;">
+              ${i + 1}. ${s.name}: ${s.score} pts
+            </div>
+          `).join('') : ''}
+        </div>
+        <p style="color: ${COLORS.cyan}; margin-top: 20px;">Returning to lobby...</p>
+      </div>
+    `;
   }
 
   // --- UI events ---
@@ -248,14 +312,17 @@
 
   // --- Canvas sizing ---
   function fitCanvas() {
-    const maxW = Math.min(980, window.innerWidth - 24);
+    const maxW = Math.min(1200, window.innerWidth - 24);
     const aspect = 900 / 600;
     const w = maxW;
     const h = Math.round(w / aspect);
     canvas.style.width = w + "px";
     canvas.style.height = h + "px";
   }
-  window.addEventListener("resize", fitCanvas);
+  window.addEventListener("resize", () => {
+    fitCanvas();
+    initStars();
+  });
   fitCanvas();
 
   // --- Input handling ---
@@ -276,7 +343,7 @@
     if (e.button === 0) shooting = false;
   });
 
-  // Touch support for mobile
+  // Touch support
   canvas.addEventListener("touchstart", (e) => {
     e.preventDefault();
     shooting = true;
@@ -298,10 +365,8 @@
   // --- Input sending loop ---
   function sendInput() {
     if (ws && ws.readyState === 1 && phase === "playing" && mySlot >= 0) {
-      // Convert world X to normalized X within player's segment
       const segX0 = mySlot * world.segmentWidth;
       const aimXNorm = Math.max(0, Math.min(1, (mouseXWorld - segX0) / world.segmentWidth));
-      
       ws.send(JSON.stringify({
         t: "input",
         aimXNorm: aimXNorm,
@@ -309,22 +374,125 @@
       }));
     }
   }
-
-  // Send input at ~30fps
   setInterval(sendInput, 33);
 
+  // --- Neon rendering helpers ---
+  function hexToRgba(hex, alpha) {
+    const r = parseInt(hex.slice(1, 3), 16) || parseInt(hex.slice(1, 2).repeat(2), 16);
+    const g = parseInt(hex.slice(3, 5), 16) || parseInt(hex.slice(2, 3).repeat(2), 16);
+    const b = parseInt(hex.slice(5, 7), 16) || parseInt(hex.slice(3, 4).repeat(2), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+
+  function drawNeonLine(x1, y1, x2, y2, color, width = 2) {
+    // Outer glow
+    ctx.strokeStyle = hexToRgba(color, 0.3);
+    ctx.lineWidth = width + 6;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    
+    // Inner glow
+    ctx.strokeStyle = hexToRgba(color, 0.6);
+    ctx.lineWidth = width + 2;
+    ctx.stroke();
+    
+    // Core
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.stroke();
+  }
+
+  function drawNeonCircle(x, y, r, color, filled = true) {
+    // Outer glow
+    ctx.beginPath();
+    ctx.arc(x, y, r + 4, 0, Math.PI * 2);
+    ctx.fillStyle = hexToRgba(color, 0.2);
+    ctx.fill();
+    
+    // Inner glow
+    ctx.beginPath();
+    ctx.arc(x, y, r + 2, 0, Math.PI * 2);
+    ctx.fillStyle = hexToRgba(color, 0.4);
+    ctx.fill();
+    
+    // Core
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = filled ? color : "transparent";
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    if (filled) ctx.fill();
+    ctx.stroke();
+  }
+
+  function drawNeonRect(x, y, w, h, color, filled = true) {
+    // Glow
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 10;
+    
+    ctx.fillStyle = filled ? hexToRgba(color, 0.8) : "transparent";
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, 3);
+    if (filled) ctx.fill();
+    ctx.stroke();
+    
+    ctx.shadowBlur = 0;
+  }
+
   // --- Rendering ---
+  let lastTime = performance.now();
+
   function draw() {
     requestAnimationFrame(draw);
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const now = performance.now();
+    const dt = (now - lastTime) / 1000;
+    lastTime = now;
+
+    // Update screen shake
+    screenShake *= 0.9;
+
+    // Apply screen shake
+    ctx.save();
+    if (screenShake > 0.5) {
+      ctx.translate(
+        (Math.random() - 0.5) * screenShake,
+        (Math.random() - 0.5) * screenShake
+      );
+    }
+
+    // Clear with dark background
+    ctx.fillStyle = COLORS.darkBg;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Draw animated stars
+    const time = now / 1000;
+    for (const star of stars) {
+      star.y += star.speed * dt * 10;
+      if (star.y > 1) star.y = 0;
+      
+      const twinkle = Math.sin(time * 2 + star.twinkle) * 0.3 + 0.7;
+      ctx.fillStyle = `rgba(255,255,255,${twinkle * 0.6})`;
+      ctx.beginPath();
+      ctx.arc(
+        star.x * canvas.width,
+        star.y * canvas.height,
+        star.size,
+        0, Math.PI * 2
+      );
+      ctx.fill();
+    }
 
     if (!lastSnap) {
-      ctx.fillStyle = "rgba(255,255,255,0.08)";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "rgba(255,255,255,0.75)";
-      ctx.font = "16px system-ui";
-      ctx.fillText("Waiting for server state…", 18, 28);
+      ctx.fillStyle = hexToRgba(COLORS.cyan, 0.8);
+      ctx.font = "bold 18px 'Courier New', monospace";
+      ctx.fillText("AWAITING CONNECTION...", 20, 35);
+      ctx.restore();
       return;
     }
 
@@ -333,66 +501,235 @@
     const wx = (x) => x * sx;
     const wy = (y) => y * sy;
 
-    const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
-    g.addColorStop(0, "rgba(255,255,255,0.06)");
-    g.addColorStop(1, "rgba(0,0,0,0.18)");
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Segment separators
-    ctx.strokeStyle = "rgba(255,255,255,0.12)";
-    ctx.lineWidth = 2;
-    const segCount = Math.max(1, Math.round(world.width / world.segmentWidth));
-    for (let i = 1; i < segCount; i++) {
-      const x = wx(i * world.segmentWidth);
+    // Grid lines (subtle)
+    ctx.strokeStyle = hexToRgba(COLORS.cyan, 0.05);
+    ctx.lineWidth = 1;
+    for (let i = 0; i < world.width; i += 40) {
       ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, canvas.height);
+      ctx.moveTo(wx(i), 0);
+      ctx.lineTo(wx(i), canvas.height);
+      ctx.stroke();
+    }
+    for (let i = 0; i < world.height; i += 40) {
+      ctx.beginPath();
+      ctx.moveTo(0, wy(i));
+      ctx.lineTo(canvas.width, wy(i));
       ctx.stroke();
     }
 
-    // Ground line
-    ctx.strokeStyle = "rgba(255,255,255,0.25)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(0, wy(560));
-    ctx.lineTo(canvas.width, wy(560));
-    ctx.stroke();
+    // Segment separators with neon glow
+    const segCount = Math.max(1, Math.round(world.width / world.segmentWidth));
+    for (let i = 1; i < segCount; i++) {
+      const x = wx(i * world.segmentWidth);
+      drawNeonLine(x, 0, x, canvas.height, COLORS.purple, 1);
+    }
 
-    // HUD
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
-    ctx.font = "14px system-ui";
-    ctx.fillText(`Wave: ${wave}   Base HP: ${baseHp}`, 14, 22);
+    // Ground line with intense glow
+    const groundY = wy(560);
+    drawNeonLine(0, groundY, canvas.width, groundY, COLORS.cyan, 3);
 
-    // Missiles
+    // Draw slow field zones
+    for (const p of lastSnap.players) {
+      if (p.upgrades?.slowfield) {
+        const segX0 = p.slot * world.segmentWidth;
+        const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
+        ctx.fillStyle = hexToRgba(color.main, 0.05);
+        ctx.fillRect(wx(segX0), 0, wx(world.segmentWidth), groundY);
+        
+        // Animated waves
+        ctx.strokeStyle = hexToRgba(color.main, 0.15);
+        ctx.lineWidth = 1;
+        for (let y = 0; y < groundY; y += 30) {
+          ctx.beginPath();
+          for (let x = wx(segX0); x < wx(segX0 + world.segmentWidth); x += 5) {
+            const offset = Math.sin(time * 2 + x * 0.02 + y * 0.01) * 5;
+            if (x === wx(segX0)) ctx.moveTo(x, y + offset);
+            else ctx.lineTo(x, y + offset);
+          }
+          ctx.stroke();
+        }
+      }
+    }
+
+    // Draw shield indicators
+    for (const p of lastSnap.players) {
+      if (p.upgrades?.shieldActive > 0) {
+        const segX0 = p.slot * world.segmentWidth;
+        const cx = wx(segX0 + world.segmentWidth / 2);
+        const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
+        
+        // Shield arc at bottom
+        ctx.strokeStyle = hexToRgba(color.main, 0.6);
+        ctx.lineWidth = 4;
+        ctx.shadowColor = color.main;
+        ctx.shadowBlur = 15;
+        ctx.beginPath();
+        ctx.arc(cx, groundY, wx(world.segmentWidth / 2) - 10, Math.PI, 0);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        
+        // Shield count
+        ctx.fillStyle = color.main;
+        ctx.font = "bold 12px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(`🛡️ ${p.upgrades.shieldActive}`, cx, groundY + 25);
+        ctx.textAlign = "left";
+      }
+    }
+
+    // HUD - Top bar
+    const hudHeight = 40;
+    ctx.fillStyle = hexToRgba("#000", 0.6);
+    ctx.fillRect(0, 0, canvas.width, hudHeight);
+    
+    // Wave indicator
+    ctx.fillStyle = COLORS.yellow;
+    ctx.font = "bold 16px 'Courier New', monospace";
+    ctx.fillText(`WAVE ${wave}`, 15, 26);
+
+    // Base HP bar
+    const hpBarW = 200;
+    const hpBarH = 16;
+    const hpBarX = canvas.width / 2 - hpBarW / 2;
+    const hpBarY = 12;
+    const hpFrac = baseHp / maxBaseHp;
+    const hpColor = hpFrac > 0.5 ? COLORS.green : hpFrac > 0.25 ? COLORS.orange : COLORS.red;
+    
+    ctx.fillStyle = hexToRgba("#000", 0.5);
+    ctx.fillRect(hpBarX - 2, hpBarY - 2, hpBarW + 4, hpBarH + 4);
+    
+    ctx.fillStyle = hexToRgba(hpColor, 0.3);
+    ctx.fillRect(hpBarX, hpBarY, hpBarW, hpBarH);
+    
+    ctx.fillStyle = hpColor;
+    ctx.shadowColor = hpColor;
+    ctx.shadowBlur = 10;
+    ctx.fillRect(hpBarX, hpBarY, hpBarW * hpFrac, hpBarH);
+    ctx.shadowBlur = 0;
+    
+    ctx.fillStyle = COLORS.white;
+    ctx.font = "bold 11px 'Courier New', monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(`BASE: ${baseHp}/${maxBaseHp}`, canvas.width / 2, hpBarY + 12);
+    ctx.textAlign = "left";
+
+    // Scores
+    ctx.font = "12px 'Courier New', monospace";
+    let scoreX = canvas.width - 15;
+    for (let i = lastSnap.players.length - 1; i >= 0; i--) {
+      const p = lastSnap.players[i];
+      const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
+      ctx.fillStyle = color.main;
+      ctx.textAlign = "right";
+      ctx.fillText(`${p.name}: ${p.score}`, scoreX, 26);
+      scoreX -= ctx.measureText(`${p.name}: ${p.score}`).width + 20;
+    }
+    ctx.textAlign = "left";
+
+    // Particles (behind everything else)
+    if (lastSnap.particles) {
+      for (const p of lastSnap.particles) {
+        const alpha = Math.min(1, p.life * 2);
+        const size = 3 + (1 - p.life) * 5;
+        ctx.fillStyle = hexToRgba(p.color, alpha);
+        ctx.shadowColor = p.color;
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.arc(wx(p.x), wy(p.y), size * sx, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+    }
+
+    // Missiles (asteroids)
     for (const m of lastSnap.missiles) {
-      ctx.fillStyle = "rgba(255,120,120,0.95)";
+      const x = wx(m.x);
+      const y = wy(m.y);
+      const r = m.r * sx;
+      
+      // Outer glow based on type
+      const asteroidColor = m.type === "large" ? COLORS.red :
+                           m.type === "medium" ? COLORS.orange : COLORS.yellow;
+      
+      ctx.shadowColor = asteroidColor;
+      ctx.shadowBlur = 15;
+      
+      // Draw rotating asteroid shape
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(m.rotation || 0);
+      
+      // Irregular asteroid shape
+      ctx.fillStyle = hexToRgba(asteroidColor, 0.8);
+      ctx.strokeStyle = asteroidColor;
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(wx(m.x), wy(m.y), m.r * sx, 0, Math.PI * 2);
+      const points = 8;
+      for (let i = 0; i <= points; i++) {
+        const angle = (i / points) * Math.PI * 2;
+        const variance = 0.7 + Math.sin(i * 3.7) * 0.3;
+        const px = Math.cos(angle) * r * variance;
+        const py = Math.sin(angle) * r * variance;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
       ctx.fill();
+      ctx.stroke();
+      
+      ctx.restore();
+      ctx.shadowBlur = 0;
 
-      // HP bar background
-      ctx.fillStyle = "rgba(0,0,0,0.35)";
-      ctx.fillRect(wx(m.x - m.r), wy(m.y - m.r - 10), (m.r * 2) * sx, 6);
-
-      // HP bar fill
-      ctx.fillStyle = "rgba(255,255,255,0.75)";
-      const frac = Math.max(0, Math.min(1, m.hp / 6));
-      ctx.fillRect(wx(m.x - m.r), wy(m.y - m.r - 10), (m.r * 2) * sx * frac, 6);
+      // HP bar
+      if (m.hp < m.maxHp) {
+        const barW = r * 2;
+        const barH = 4;
+        const barY = y - r - 10;
+        
+        ctx.fillStyle = hexToRgba("#000", 0.6);
+        ctx.fillRect(x - barW / 2 - 1, barY - 1, barW + 2, barH + 2);
+        
+        ctx.fillStyle = hexToRgba(COLORS.red, 0.5);
+        ctx.fillRect(x - barW / 2, barY, barW, barH);
+        
+        const hpFrac = m.hp / m.maxHp;
+        ctx.fillStyle = COLORS.green;
+        ctx.fillRect(x - barW / 2, barY, barW * hpFrac, barH);
+      }
     }
 
     // Bullets
-    ctx.fillStyle = "rgba(200,230,255,0.95)";
     for (const b of lastSnap.bullets) {
+      const x = wx(b.x);
+      const y = wy(b.y);
+      const r = b.r * sx;
+      const color = b.color || COLORS.cyan;
+      
+      // Trail
+      ctx.strokeStyle = hexToRgba(color, 0.4);
+      ctx.lineWidth = r * 1.5;
+      ctx.lineCap = "round";
       ctx.beginPath();
-      ctx.arc(wx(b.x), wy(b.y), b.r * sx, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - (b.vx || 0) * 0.02 * sx, y - (b.vy || 0) * 0.02 * sy);
+      ctx.stroke();
+      
+      // Bullet core
+      drawNeonCircle(x, y, r, color);
+      
+      // Crit indicator
+      if (b.isCrit) {
+        ctx.fillStyle = COLORS.yellow;
+        ctx.font = "bold 10px sans-serif";
+        ctx.fillText("!", x - 3, y - r - 5);
+      }
     }
 
     // Turrets
     for (const p of lastSnap.players) {
       if (p.slot < 0) continue;
 
+      const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
       const segX0 = p.slot * world.segmentWidth;
       const cx = segX0 + world.segmentWidth / 2;
       const offset = world.segmentWidth * 0.22;
@@ -406,56 +743,134 @@
       ];
 
       for (const t of positions) {
-        if (t.kind === "main") {
-          ctx.fillStyle = "rgba(124,92,255,0.9)";
-        } else if (t.kind === "mini") {
-          ctx.fillStyle = "rgba(124,92,255,0.7)";
-        } else {
-          ctx.fillStyle = "rgba(60,60,80,0.5)";
+        const tx = wx(t.x);
+        const ty = wy(t.y);
+        
+        if (t.kind === "slot") {
+          // Empty slot indicator
+          ctx.strokeStyle = hexToRgba(color.main, 0.2);
+          ctx.lineWidth = 1;
+          ctx.setLineDash([3, 3]);
+          ctx.beginPath();
+          ctx.arc(tx, ty - 8, 8, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          continue;
         }
 
-        // Turret base
-        const baseW = t.kind === "main" ? 28 : 18;
-        const baseH = t.kind === "main" ? 18 : 12;
-        ctx.fillRect(wx(t.x) - baseW * sx / 2, wy(t.y) - baseH * sy, baseW * sx, baseH * sy);
+        const isMain = t.kind === "main";
+        const baseW = isMain ? 36 : 24;
+        const baseH = isMain ? 20 : 14;
+        const barrelLen = isMain ? 35 : 22;
+        const barrelW = isMain ? 8 : 5;
 
-        // Turret barrel (only for main and mini)
-        if (t.kind !== "slot") {
-          const barrelLen = t.kind === "main" ? 30 : 20;
-          const barrelW = t.kind === "main" ? 6 : 4;
-          const angle = t.kind === "main" ? (p.turretAngle || -Math.PI / 2) : -Math.PI / 2;
+        // Turret base with glow
+        ctx.shadowColor = color.main;
+        ctx.shadowBlur = isMain ? 20 : 10;
+        
+        drawNeonRect(
+          tx - baseW / 2,
+          ty - baseH,
+          baseW,
+          baseH,
+          color.main
+        );
 
-          ctx.save();
-          ctx.translate(wx(t.x), wy(t.y) - baseH * sy / 2);
-          ctx.rotate(angle + Math.PI / 2);
-          ctx.fillStyle = t.kind === "main" ? "rgba(180,160,255,0.95)" : "rgba(140,120,200,0.85)";
-          ctx.fillRect(-barrelW * sx / 2, 0, barrelW * sx, -barrelLen * sy);
-          ctx.restore();
+        // Barrel
+        const angle = isMain ? (p.turretAngle || -Math.PI / 2) : -Math.PI / 2;
+        
+        ctx.save();
+        ctx.translate(tx, ty - baseH / 2);
+        ctx.rotate(angle + Math.PI / 2);
+        
+        // Barrel glow
+        ctx.fillStyle = hexToRgba(color.main, 0.9);
+        ctx.strokeStyle = COLORS.white;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(-barrelW / 2, -barrelLen, barrelW, barrelLen, 2);
+        ctx.fill();
+        ctx.stroke();
+        
+        // Barrel tip glow when shooting
+        if (isMain && p.isManual) {
+          ctx.fillStyle = hexToRgba(COLORS.white, 0.8);
+          ctx.beginPath();
+          ctx.arc(0, -barrelLen, barrelW / 2 + 2, 0, Math.PI * 2);
+          ctx.fill();
         }
+        
+        ctx.restore();
+        ctx.shadowBlur = 0;
       }
 
-      // Player name label
-      ctx.fillStyle = "rgba(255,255,255,0.7)";
-      ctx.font = "12px system-ui";
+      // Player name
+      ctx.fillStyle = color.main;
+      ctx.font = "bold 13px 'Courier New', monospace";
       ctx.textAlign = "center";
-      ctx.fillText(p.name || `P${p.slot + 1}`, wx(cx), wy(560) + 16);
+      ctx.shadowColor = color.main;
+      ctx.shadowBlur = 5;
+      ctx.fillText(p.name || `P${p.slot + 1}`, wx(cx), groundY + 22);
+      
+      // Mode indicator
+      ctx.font = "10px 'Courier New', monospace";
+      ctx.fillStyle = p.isManual ? COLORS.yellow : COLORS.green;
+      ctx.fillText(p.isManual ? "MANUAL" : "AUTO", wx(cx), groundY + 35);
+      
+      ctx.shadowBlur = 0;
       ctx.textAlign = "left";
     }
 
-    // Draw aim line for local player
-    if (phase === "playing" && mySlot >= 0) {
+    // Draw aim line for local player when manual shooting
+    if (phase === "playing" && mySlot >= 0 && shooting) {
       const segX0 = mySlot * world.segmentWidth;
-      const cx = segX0 + world.segmentWidth / 2;
+      const turretCx = segX0 + world.segmentWidth / 2;
+      const color = PLAYER_COLORS[mySlot] || PLAYER_COLORS[0];
       
-      ctx.strokeStyle = "rgba(124,92,255,0.3)";
-      ctx.lineWidth = 1;
-      ctx.setLineDash([5, 5]);
+      ctx.strokeStyle = hexToRgba(color.main, 0.4);
+      ctx.lineWidth = 2;
+      ctx.setLineDash([8, 8]);
       ctx.beginPath();
-      ctx.moveTo(wx(cx), wy(560 - 18));
-      ctx.lineTo(wx(mouseXWorld), wy(120));
+      ctx.moveTo(wx(turretCx), groundY - 20);
+      ctx.lineTo(wx(mouseXWorld), 50);
       ctx.stroke();
       ctx.setLineDash([]);
+      
+      // Crosshair at aim point
+      const aimX = wx(mouseXWorld);
+      const aimY = 50;
+      ctx.strokeStyle = color.main;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(aimX - 10, aimY);
+      ctx.lineTo(aimX + 10, aimY);
+      ctx.moveTo(aimX, aimY - 10);
+      ctx.lineTo(aimX, aimY + 10);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(aimX, aimY, 15, 0, Math.PI * 2);
+      ctx.stroke();
     }
+
+    // Instructions overlay in lobby/upgrade phase
+    if (phase === "lobby" || phase === "upgrades") {
+      ctx.fillStyle = hexToRgba("#000", 0.7);
+      ctx.fillRect(0, canvas.height - 60, canvas.width, 60);
+      
+      ctx.fillStyle = COLORS.cyan;
+      ctx.font = "14px 'Courier New', monospace";
+      ctx.textAlign = "center";
+      
+      if (phase === "lobby") {
+        ctx.fillText("🎮 AUTO-FIRE: Turrets automatically target asteroids", canvas.width / 2, canvas.height - 38);
+        ctx.fillText("🖱️ CLICK & HOLD: Manual aim override | 🎯 160° firing arc", canvas.width / 2, canvas.height - 18);
+      } else {
+        ctx.fillText("⬆️ SELECT AN UPGRADE ABOVE ⬆️", canvas.width / 2, canvas.height - 28);
+      }
+      ctx.textAlign = "left";
+    }
+
+    ctx.restore();
   }
 
   // Start render loop
