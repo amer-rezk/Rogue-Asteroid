@@ -1,464 +1,402 @@
 (() => {
-  const HARD_DEFAULT_SERVER = "wss://rogue-asteroid.onrender.com/ws";
+  // ===== Configuration =====
+  const DEFAULT_SERVER = "wss://rogue-asteroid.onrender.com/ws";
+  
+  // Player colors
+  const PLAYER_COLORS = [
+    { main: "#00ffff", dark: "#006666", name: "CYAN" },
+    { main: "#ff00ff", dark: "#660066", name: "MAGENTA" },
+    { main: "#00ff88", dark: "#006633", name: "GREEN" },
+    { main: "#ffaa00", dark: "#664400", name: "ORANGE" },
+  ];
 
+  // ===== DOM Elements =====
+  const menuScreen = document.getElementById("menuScreen");
+  const gameScreen = document.getElementById("gameScreen");
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
 
-  const statusEl = document.getElementById("status");
-  const serverEl = document.getElementById("serverUrl");
+  const serverInput = document.getElementById("serverUrl");
   const connectBtn = document.getElementById("connectBtn");
+  const statusEl = document.getElementById("status");
+  const nameInput = document.getElementById("nameInput");
+  const lobbyEl = document.getElementById("lobby");
+  const playersEl = document.getElementById("players");
+  const readyBtn = document.getElementById("readyBtn");
+  const launchBtn = document.getElementById("launchBtn");
 
-  const nameEl = document.getElementById("name");
-  const saveNameBtn = document.getElementById("saveName");
-  const startBtn = document.getElementById("startBtn");
+  // ===== State =====
+  let ws = null;
+  let myId = null;
+  let mySlot = 0;
+  let isHost = false;
+  let connected = false;
 
-  const lobbyInfo = document.getElementById("lobbyInfo");
-  const playerList = document.getElementById("playerList");
+  let phase = "menu"; // menu | lobby | playing | upgrades | gameover
+  let world = { width: 360, height: 600, segmentWidth: 360 };
+  let wave = 0;
+  let baseHp = 0;
+  let maxBaseHp = 0;
 
-  const upgradePanel = document.getElementById("upgradePanel");
-  const upgradeOptionsEl = document.getElementById("upgradeOptions");
+  let lobbyPlayers = [];
+  let allReady = false;
+  let lastSnap = null;
+  let upgradeOptions = [];
+  let upgradePicked = false;
+  let waitingFor = [];
+  let gameOverData = null;
 
-  // Neon color palette
-  const COLORS = {
-    cyan: "#0ff",
-    magenta: "#f0f",
-    yellow: "#ff0",
-    orange: "#f80",
-    red: "#f55",
-    purple: "#a0f",
-    green: "#0f8",
-    white: "#fff",
-    darkBg: "#0a0a18",
-  };
+  // Input
+  let mouseX = 0;
+  let mouseY = 0;
+  let mouseDown = false;
+  let hoveredUpgrade = -1;
 
-  // Player colors for different slots
-  const PLAYER_COLORS = [
-    { main: "#0ff", glow: "rgba(0,255,255,", name: "Cyan" },
-    { main: "#f0f", glow: "rgba(255,0,255,", name: "Magenta" },
-    { main: "#0f8", glow: "rgba(0,255,136,", name: "Green" },
-    { main: "#fa0", glow: "rgba(255,170,0,", name: "Orange" },
-  ];
+  // Visual
+  let stars = [];
+  let screenShake = 0;
+  let time = 0;
 
-  function setStatus(txt) {
-    statusEl.textContent = txt;
-  }
-
-  // --- URL helpers ---
+  // ===== Utilities =====
   function normalizeWsUrl(input) {
     let url = (input || "").trim();
     if (!url) return null;
     if (url.startsWith("http://")) url = "ws://" + url.slice(7);
     if (url.startsWith("https://")) url = "wss://" + url.slice(8);
     if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
-      const proto = location.protocol === "https:" ? "wss://" : "ws://";
-      url = proto + url;
+      url = (location.protocol === "https:" ? "wss://" : "ws://") + url;
     }
     url = url.replace(/\/+$/, "");
     if (!url.endsWith("/ws")) url += "/ws";
     return url;
   }
 
-  function isGithubWs(url) {
-    try {
-      const u = new URL(url);
-      return u.hostname.endsWith("github.io");
-    } catch {
-      return false;
-    }
+  function hexToRgba(hex, alpha) {
+    let c = hex.replace("#", "");
+    if (c.length === 3) c = c[0]+c[0]+c[1]+c[1]+c[2]+c[2];
+    const r = parseInt(c.slice(0,2), 16);
+    const g = parseInt(c.slice(2,4), 16);
+    const b = parseInt(c.slice(4,6), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
   }
 
-  function chooseInitialServer() {
-    const qs = new URLSearchParams(location.search);
-    const q = qs.get("server");
-    if (q) return normalizeWsUrl(q);
-    const fromHtml = (serverEl.value || "").trim();
-    if (fromHtml) return normalizeWsUrl(fromHtml);
-    const stored = (localStorage.getItem("serverUrl") || "").trim();
-    const storedNorm = stored ? normalizeWsUrl(stored) : null;
-    if (storedNorm && !isGithubWs(storedNorm)) return storedNorm;
-    return normalizeWsUrl(HARD_DEFAULT_SERVER);
-  }
-
-  // --- Multiplayer state ---
-  let ws = null;
-  let myId = null;
-  let mySlot = 0;
-  let isHost = false;
-
-  let phase = "lobby";
-  let world = { width: 360, height: 600, segmentWidth: 360 };
-  let wave = 0;
-  let baseHp = 0;
-  let maxBaseHp = 0;
-
-  let lastSnap = null;
-
-  // Input
-  let mouseXWorld = 0;
-  let shooting = false;
-
-  // Visual effects
-  let screenShake = 0;
-  let stars = [];
-
-  // Initialize stars
   function initStars() {
     stars = [];
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < 150; i++) {
       stars.push({
         x: Math.random(),
         y: Math.random(),
-        size: Math.random() * 1.5 + 0.5,
-        speed: Math.random() * 0.02 + 0.01,
+        size: Math.random() * 1.2 + 0.3,
+        speed: Math.random() * 0.01 + 0.002,
         twinkle: Math.random() * Math.PI * 2,
       });
     }
   }
   initStars();
 
-  function connect(url) {
-    const wsUrl = normalizeWsUrl(url);
-    if (!wsUrl) {
-      setStatus("No server URL.");
-      return;
-    }
+  // ===== Networking =====
+  function connect() {
+    const url = normalizeWsUrl(serverInput.value || DEFAULT_SERVER);
+    if (!url) return;
 
-    if (!isGithubWs(wsUrl)) localStorage.setItem("serverUrl", wsUrl);
-    serverEl.value = wsUrl;
+    serverInput.value = url;
+    statusEl.textContent = "CONNECTING...";
+    statusEl.className = "status";
 
-    if (ws) {
-      try { ws.close(); } catch {}
-      ws = null;
-    }
+    if (ws) try { ws.close(); } catch {}
 
-    setStatus("Connecting…");
-    console.log("Connecting to WS:", wsUrl);
-
-    ws = new WebSocket(wsUrl);
+    ws = new WebSocket(url);
 
     ws.onopen = () => {
-      setStatus("Connected");
-      const nm = (localStorage.getItem("playerName") || "").trim();
-      if (nm) ws.send(JSON.stringify({ t: "hello", name: nm }));
+      connected = true;
+      statusEl.textContent = "CONNECTED";
+      statusEl.className = "status connected";
+      lobbyEl.style.display = "block";
+      
+      const name = nameInput.value.trim() || `Player`;
+      if (name) ws.send(JSON.stringify({ t: "setName", name }));
     };
 
-    ws.onclose = (e) => {
-      setStatus(`Disconnected (code ${e.code})`);
-      myId = null;
-      isHost = false;
-      startBtn.style.display = "none";
+    ws.onclose = () => {
+      connected = false;
+      statusEl.textContent = "DISCONNECTED";
+      statusEl.className = "status";
+      lobbyEl.style.display = "none";
+      if (phase !== "menu") {
+        showMenu();
+      }
     };
 
     ws.onerror = () => {
-      setStatus("Connection error");
+      statusEl.textContent = "CONNECTION FAILED";
+      statusEl.className = "status";
     };
 
-    ws.onmessage = (ev) => {
-      let msg;
-      try { msg = JSON.parse(ev.data); } catch { return; }
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      handleMessage(msg);
+    };
+  }
 
-      if (msg.t === "reject") {
-        setStatus(`Rejected: ${msg.reason}`);
-        return;
-      }
+  function send(obj) {
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+  }
 
-      if (msg.t === "welcome") {
+  function handleMessage(msg) {
+    switch (msg.t) {
+      case "welcome":
         myId = msg.id;
         mySlot = msg.slot;
-        isHost = !!msg.isHost;
-        phase = msg.phase;
+        isHost = msg.isHost;
         world = msg.world;
-        startBtn.style.display = isHost ? "inline-block" : "none";
-        setStatus(isHost ? "Connected (Host)" : "Connected");
-        return;
-      }
-
-      if (msg.t === "lobby") {
         phase = "lobby";
-        renderLobby(msg.players, msg.hostId);
-        return;
-      }
+        break;
 
-      if (msg.t === "started") {
+      case "reject":
+        statusEl.textContent = msg.reason;
+        break;
+
+      case "lobby":
+        lobbyPlayers = msg.players;
+        allReady = msg.allReady;
+        isHost = msg.hostId === myId;
+        updateLobbyUI();
+        break;
+
+      case "started":
         phase = "playing";
         world = msg.world;
         wave = msg.wave;
-        upgradePanel.style.display = "none";
-        return;
-      }
+        upgradeOptions = [];
+        upgradePicked = false;
+        showGame();
+        break;
 
-      if (msg.t === "wave") {
+      case "wave":
         wave = msg.wave;
-        upgradePanel.style.display = "none";
+        upgradeOptions = [];
+        upgradePicked = false;
         screenShake = 10;
-        return;
-      }
+        break;
 
-      if (msg.t === "upgrade") {
+      case "upgrade":
+        upgradeOptions = msg.options;
+        upgradePicked = false;
+        break;
+
+      case "upgradePhase":
         phase = "upgrades";
-        showUpgrades(msg.options);
-        return;
-      }
+        break;
 
-      if (msg.t === "picked") {
-        upgradePanel.style.display = "none";
-        return;
-      }
+      case "picked":
+        upgradePicked = true;
+        break;
 
-      if (msg.t === "state") {
-        // Check for damage
-        if (lastSnap && msg.baseHp < lastSnap.baseHp) {
-          screenShake = 15;
-        }
+      case "upgradeWaiting":
+        waitingFor = msg.waiting;
+        break;
+
+      case "state":
         lastSnap = msg;
         phase = msg.phase;
         wave = msg.wave;
         world = msg.world;
         baseHp = msg.baseHp;
         maxBaseHp = msg.maxBaseHp;
-        return;
-      }
+        break;
 
-      if (msg.t === "gameOver") {
+      case "gameOver":
         phase = "gameover";
-        setStatus(`Game Over — Wave ${msg.wave}`);
-        upgradePanel.style.display = "none";
-        showGameOver(msg);
-      }
-    };
+        gameOverData = msg;
+        break;
+    }
   }
 
-  function renderLobby(players, hostId) {
-    lobbyInfo.textContent = `Players: ${players.length}/4`;
-    playerList.innerHTML = "";
+  // ===== UI =====
+  function showMenu() {
+    phase = "menu";
+    menuScreen.style.display = "flex";
+    gameScreen.style.display = "none";
+  }
 
-    for (const p of players) {
-      const div = document.createElement("div");
-      div.className = "card";
+  function showGame() {
+    menuScreen.style.display = "none";
+    gameScreen.style.display = "block";
+    resizeCanvas();
+  }
+
+  function updateLobbyUI() {
+    playersEl.innerHTML = "";
+    
+    for (const p of lobbyPlayers) {
       const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
-      const hostMark = p.id === hostId ? " 👑" : "";
-      const meMark = p.id === myId ? " (you)" : "";
+      const isMe = p.id === myId;
+      const div = document.createElement("div");
+      div.className = "player-card" + (p.ready ? " ready" : "");
       div.innerHTML = `
-        <div style="color:${color.main}"><b>${p.name}</b>${hostMark}${meMark}</div>
-        <div class="sub">Slot ${p.slot + 1} • ${color.name}</div>
-      `;
-      playerList.appendChild(div);
-    }
-
-    startBtn.style.display = (myId && myId === hostId) ? "inline-block" : "none";
-  }
-
-  function showUpgrades(options) {
-    upgradePanel.style.display = "block";
-    upgradeOptionsEl.innerHTML = "";
-
-    for (const opt of options) {
-      const b = document.createElement("button");
-      b.className = "upg";
-      const catColor = opt.category === "offensive" ? COLORS.red :
-                       opt.category === "turret" ? COLORS.cyan :
-                       opt.category === "defensive" ? COLORS.green : COLORS.purple;
-      b.innerHTML = `
-        <div class="icon">${opt.icon || "⬆"}</div>
-        <div class="t">${opt.title}</div>
-        <div class="d">${opt.desc}</div>
-        <div class="cat" style="color:${catColor}">${opt.category}</div>
-      `;
-      b.onclick = () => {
-        if (ws && ws.readyState === 1) {
-          ws.send(JSON.stringify({ t: "pickUpgrade", key: opt.key }));
-          upgradePanel.style.display = "none";
-        }
-      };
-      upgradeOptionsEl.appendChild(b);
-    }
-  }
-
-  function showGameOver(msg) {
-    upgradePanel.style.display = "block";
-    upgradeOptionsEl.innerHTML = `
-      <div style="text-align:center; padding: 20px;">
-        <h2 style="color: ${COLORS.red}; margin: 0 0 10px 0;">GAME OVER</h2>
-        <p style="color: ${COLORS.white}; margin: 0 0 20px 0;">Reached Wave ${msg.wave}</p>
-        <div style="text-align:left;">
-          ${msg.scores ? msg.scores.map((s, i) => `
-            <div style="color: ${PLAYER_COLORS[i]?.main || '#fff'}; margin: 5px 0;">
-              ${i + 1}. ${s.name}: ${s.score} pts
-            </div>
-          `).join('') : ''}
+        <div class="player-color" style="background:${color.main}"></div>
+        <div class="player-info">
+          <div class="player-name" style="color:${color.main}">${p.name}${isMe ? " (you)" : ""}</div>
+          <div class="player-status">${p.ready ? "✓ READY" : "waiting..."}</div>
         </div>
-        <p style="color: ${COLORS.cyan}; margin-top: 20px;">Returning to lobby...</p>
-      </div>
-    `;
+      `;
+      playersEl.appendChild(div);
+    }
+
+    const me = lobbyPlayers.find(p => p.id === myId);
+    readyBtn.textContent = me?.ready ? "✓ READY" : "READY UP";
+    readyBtn.className = "btn" + (me?.ready ? " ready" : "");
+    
+    launchBtn.style.display = isHost ? "block" : "none";
+    launchBtn.disabled = !allReady;
+    launchBtn.className = "btn launch" + (allReady ? "" : " disabled");
   }
 
-  // --- UI events ---
-  const initial = chooseInitialServer();
-  serverEl.value = initial;
-
-  connectBtn.onclick = () => connect(serverEl.value);
-
-  saveNameBtn.onclick = () => {
-    const nm = (nameEl.value || "").trim().slice(0, 16);
-    localStorage.setItem("playerName", nm);
-    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: "hello", name: nm }));
-  };
-
-  startBtn.onclick = () => {
-    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: "start" }));
-  };
-
-  nameEl.value = localStorage.getItem("playerName") || "";
-
-  // --- Canvas sizing ---
-  function fitCanvas() {
-    const maxW = Math.min(1200, window.innerWidth - 24);
-    const aspect = 900 / 600;
-    const w = maxW;
-    const h = Math.round(w / aspect);
-    canvas.style.width = w + "px";
-    canvas.style.height = h + "px";
+  // ===== Canvas =====
+  function resizeCanvas() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
   }
-  window.addEventListener("resize", () => {
-    fitCanvas();
-    initStars();
-  });
-  fitCanvas();
+  window.addEventListener("resize", resizeCanvas);
+  resizeCanvas();
 
-  // --- Input handling ---
-  function canvasToWorldX(clientX) {
-    const rect = canvas.getBoundingClientRect();
-    const nx = (clientX - rect.left) / rect.width;
-    return nx * world.width;
-  }
-
+  // ===== Input =====
   canvas.addEventListener("mousemove", (e) => {
-    mouseXWorld = canvasToWorldX(e.clientX);
+    mouseX = e.clientX;
+    mouseY = e.clientY;
   });
 
   canvas.addEventListener("mousedown", (e) => {
-    if (e.button === 0) shooting = true;
-  });
-  window.addEventListener("mouseup", (e) => {
-    if (e.button === 0) shooting = false;
+    if (e.button === 0) {
+      mouseDown = true;
+      handleClick();
+    }
   });
 
-  // Touch support
+  window.addEventListener("mouseup", (e) => {
+    if (e.button === 0) mouseDown = false;
+  });
+
   canvas.addEventListener("touchstart", (e) => {
     e.preventDefault();
-    shooting = true;
-    if (e.touches.length > 0) {
-      mouseXWorld = canvasToWorldX(e.touches[0].clientX);
+    mouseDown = true;
+    if (e.touches[0]) {
+      mouseX = e.touches[0].clientX;
+      mouseY = e.touches[0].clientY;
     }
-  });
-  canvas.addEventListener("touchmove", (e) => {
-    e.preventDefault();
-    if (e.touches.length > 0) {
-      mouseXWorld = canvasToWorldX(e.touches[0].clientX);
-    }
-  });
-  canvas.addEventListener("touchend", (e) => {
-    e.preventDefault();
-    shooting = false;
+    handleClick();
   });
 
-  // --- Input sending loop ---
-  function sendInput() {
-    if (ws && ws.readyState === 1 && phase === "playing" && mySlot >= 0) {
-      const segX0 = mySlot * world.segmentWidth;
-      const aimXNorm = Math.max(0, Math.min(1, (mouseXWorld - segX0) / world.segmentWidth));
-      ws.send(JSON.stringify({
-        t: "input",
-        aimXNorm: aimXNorm,
-        shooting: shooting
-      }));
+  canvas.addEventListener("touchmove", (e) => {
+    e.preventDefault();
+    if (e.touches[0]) {
+      mouseX = e.touches[0].clientX;
+      mouseY = e.touches[0].clientY;
     }
+  });
+
+  canvas.addEventListener("touchend", (e) => {
+    e.preventDefault();
+    mouseDown = false;
+  });
+
+  function handleClick() {
+    if (phase === "upgrades" && hoveredUpgrade >= 0 && !upgradePicked) {
+      const opt = upgradeOptions[hoveredUpgrade];
+      if (opt) {
+        send({ t: "pickUpgrade", key: opt.key });
+      }
+    }
+  }
+
+  // ===== Input Loop =====
+  function sendInput() {
+    if (phase !== "playing" || !lastSnap) return;
+
+    const scale = getScale();
+    const worldX = (mouseX - scale.offsetX) / scale.sx;
+    const segX0 = mySlot * world.segmentWidth;
+    const aimXNorm = Math.max(0, Math.min(1, (worldX - segX0) / world.segmentWidth));
+
+    send({
+      t: "input",
+      aimXNorm,
+      shooting: mouseDown
+    });
   }
   setInterval(sendInput, 33);
 
-  // --- Neon rendering helpers ---
-  function hexToRgba(hex, alpha) {
-    const r = parseInt(hex.slice(1, 3), 16) || parseInt(hex.slice(1, 2).repeat(2), 16);
-    const g = parseInt(hex.slice(3, 5), 16) || parseInt(hex.slice(2, 3).repeat(2), 16);
-    const b = parseInt(hex.slice(5, 7), 16) || parseInt(hex.slice(3, 4).repeat(2), 16);
-    return `rgba(${r},${g},${b},${alpha})`;
+  // ===== Rendering =====
+  function getScale() {
+    const sw = canvas.width;
+    const sh = canvas.height;
+    const ww = world.width;
+    const wh = world.height;
+
+    const scale = Math.min(sw / ww, sh / wh);
+    const renderW = ww * scale;
+    const renderH = wh * scale;
+    const offsetX = (sw - renderW) / 2;
+    const offsetY = (sh - renderH) / 2;
+
+    return { sx: scale, sy: scale, offsetX, offsetY, renderW, renderH };
   }
 
-  function drawNeonLine(x1, y1, x2, y2, color, width = 2) {
-    // Outer glow
-    ctx.strokeStyle = hexToRgba(color, 0.3);
-    ctx.lineWidth = width + 6;
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
+  function drawNeonText(text, x, y, color, size, align = "left") {
+    ctx.save();
+    ctx.font = `bold ${size}px 'Orbitron', 'Courier New', monospace`;
+    ctx.textAlign = align;
+    ctx.textBaseline = "middle";
     
-    // Inner glow
-    ctx.strokeStyle = hexToRgba(color, 0.6);
-    ctx.lineWidth = width + 2;
-    ctx.stroke();
-    
-    // Core
-    ctx.strokeStyle = color;
-    ctx.lineWidth = width;
-    ctx.stroke();
-  }
-
-  function drawNeonCircle(x, y, r, color, filled = true) {
-    // Outer glow
-    ctx.beginPath();
-    ctx.arc(x, y, r + 4, 0, Math.PI * 2);
-    ctx.fillStyle = hexToRgba(color, 0.2);
-    ctx.fill();
-    
-    // Inner glow
-    ctx.beginPath();
-    ctx.arc(x, y, r + 2, 0, Math.PI * 2);
-    ctx.fillStyle = hexToRgba(color, 0.4);
-    ctx.fill();
-    
-    // Core
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fillStyle = filled ? color : "transparent";
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    if (filled) ctx.fill();
-    ctx.stroke();
-  }
-
-  function drawNeonRect(x, y, w, h, color, filled = true) {
     // Glow
     ctx.shadowColor = color;
-    ctx.shadowBlur = 10;
+    ctx.shadowBlur = 15;
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
     
-    ctx.fillStyle = filled ? hexToRgba(color, 0.8) : "transparent";
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    
-    ctx.beginPath();
-    ctx.roundRect(x, y, w, h, 3);
-    if (filled) ctx.fill();
-    ctx.stroke();
-    
+    // Core
     ctx.shadowBlur = 0;
+    ctx.fillStyle = "#fff";
+    ctx.globalAlpha = 0.6;
+    ctx.fillText(text, x, y);
+    
+    ctx.restore();
   }
-
-  // --- Rendering ---
-  let lastTime = performance.now();
 
   function draw() {
     requestAnimationFrame(draw);
 
-    const now = performance.now();
-    const dt = (now - lastTime) / 1000;
-    lastTime = now;
+    const dt = 1/60;
+    time += dt;
+    screenShake *= 0.92;
 
-    // Update screen shake
-    screenShake *= 0.9;
+    ctx.fillStyle = "#050510";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Apply screen shake
+    // Stars
+    for (const s of stars) {
+      s.y += s.speed;
+      if (s.y > 1) s.y = 0;
+      const twinkle = Math.sin(time * 3 + s.twinkle) * 0.3 + 0.7;
+      ctx.fillStyle = `rgba(255,255,255,${twinkle * 0.5})`;
+      ctx.beginPath();
+      ctx.arc(s.x * canvas.width, s.y * canvas.height, s.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    if (phase === "menu" || phase === "lobby") {
+      // Title on canvas
+      drawNeonText("ROGUE ASTEROID", canvas.width/2, 60, "#0ff", 28, "center");
+      return;
+    }
+
+    if (!lastSnap) return;
+
+    const { sx, sy, offsetX, offsetY } = getScale();
+
     ctx.save();
+    
+    // Screen shake
     if (screenShake > 0.5) {
       ctx.translate(
         (Math.random() - 0.5) * screenShake,
@@ -466,262 +404,186 @@
       );
     }
 
-    // Clear with dark background
-    ctx.fillStyle = COLORS.darkBg;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.translate(offsetX, offsetY);
 
-    // Draw animated stars
-    const time = now / 1000;
-    for (const star of stars) {
-      star.y += star.speed * dt * 10;
-      if (star.y > 1) star.y = 0;
-      
-      const twinkle = Math.sin(time * 2 + star.twinkle) * 0.3 + 0.7;
-      ctx.fillStyle = `rgba(255,255,255,${twinkle * 0.6})`;
-      ctx.beginPath();
-      ctx.arc(
-        star.x * canvas.width,
-        star.y * canvas.height,
-        star.size,
-        0, Math.PI * 2
-      );
-      ctx.fill();
-    }
-
-    if (!lastSnap) {
-      ctx.fillStyle = hexToRgba(COLORS.cyan, 0.8);
-      ctx.font = "bold 18px 'Courier New', monospace";
-      ctx.fillText("AWAITING CONNECTION...", 20, 35);
-      ctx.restore();
-      return;
-    }
-
-    const sx = canvas.width / world.width;
-    const sy = canvas.height / world.height;
-    const wx = (x) => x * sx;
-    const wy = (y) => y * sy;
-
-    // Grid lines (subtle)
-    ctx.strokeStyle = hexToRgba(COLORS.cyan, 0.05);
+    // Subtle grid
+    ctx.strokeStyle = "rgba(0,255,255,0.03)";
     ctx.lineWidth = 1;
-    for (let i = 0; i < world.width; i += 40) {
+    for (let x = 0; x < world.width; x += 30) {
       ctx.beginPath();
-      ctx.moveTo(wx(i), 0);
-      ctx.lineTo(wx(i), canvas.height);
+      ctx.moveTo(x * sx, 0);
+      ctx.lineTo(x * sx, world.height * sy);
       ctx.stroke();
     }
-    for (let i = 0; i < world.height; i += 40) {
+    for (let y = 0; y < world.height; y += 30) {
       ctx.beginPath();
-      ctx.moveTo(0, wy(i));
-      ctx.lineTo(canvas.width, wy(i));
+      ctx.moveTo(0, y * sy);
+      ctx.lineTo(world.width * sx, y * sy);
       ctx.stroke();
     }
 
-    // Segment separators with neon glow
-    const segCount = Math.max(1, Math.round(world.width / world.segmentWidth));
+    // Segment dividers
+    const segCount = Math.round(world.width / world.segmentWidth);
     for (let i = 1; i < segCount; i++) {
-      const x = wx(i * world.segmentWidth);
-      drawNeonLine(x, 0, x, canvas.height, COLORS.purple, 1);
+      const x = i * world.segmentWidth * sx;
+      ctx.strokeStyle = "rgba(160,0,255,0.3)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([10, 10]);
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, world.height * sy);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
 
-    // Ground line with intense glow
-    const groundY = wy(560);
-    drawNeonLine(0, groundY, canvas.width, groundY, COLORS.cyan, 3);
-
-    // Draw slow field zones
+    // Slow field zones
     for (const p of lastSnap.players) {
       if (p.upgrades?.slowfield) {
         const segX0 = p.slot * world.segmentWidth;
         const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
-        ctx.fillStyle = hexToRgba(color.main, 0.05);
-        ctx.fillRect(wx(segX0), 0, wx(world.segmentWidth), groundY);
-        
-        // Animated waves
-        ctx.strokeStyle = hexToRgba(color.main, 0.15);
-        ctx.lineWidth = 1;
-        for (let y = 0; y < groundY; y += 30) {
-          ctx.beginPath();
-          for (let x = wx(segX0); x < wx(segX0 + world.segmentWidth); x += 5) {
-            const offset = Math.sin(time * 2 + x * 0.02 + y * 0.01) * 5;
-            if (x === wx(segX0)) ctx.moveTo(x, y + offset);
-            else ctx.lineTo(x, y + offset);
-          }
-          ctx.stroke();
-        }
+        ctx.fillStyle = hexToRgba(color.main, 0.04);
+        ctx.fillRect(segX0 * sx, 0, world.segmentWidth * sx, 560 * sy);
       }
     }
 
-    // Draw shield indicators
+    // Ground
+    const groundY = 560 * sy;
+    ctx.strokeStyle = "#0ff";
+    ctx.lineWidth = 3;
+    ctx.shadowColor = "#0ff";
+    ctx.shadowBlur = 20;
+    ctx.beginPath();
+    ctx.moveTo(0, groundY);
+    ctx.lineTo(world.width * sx, groundY);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Shield arcs
     for (const p of lastSnap.players) {
       if (p.upgrades?.shieldActive > 0) {
         const segX0 = p.slot * world.segmentWidth;
-        const cx = wx(segX0 + world.segmentWidth / 2);
+        const cx = (segX0 + world.segmentWidth / 2) * sx;
         const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
         
-        // Shield arc at bottom
-        ctx.strokeStyle = hexToRgba(color.main, 0.6);
-        ctx.lineWidth = 4;
+        ctx.strokeStyle = hexToRgba(color.main, 0.5);
+        ctx.lineWidth = 3;
         ctx.shadowColor = color.main;
         ctx.shadowBlur = 15;
         ctx.beginPath();
-        ctx.arc(cx, groundY, wx(world.segmentWidth / 2) - 10, Math.PI, 0);
+        ctx.arc(cx, groundY, world.segmentWidth * sx * 0.45, Math.PI, 0);
         ctx.stroke();
         ctx.shadowBlur = 0;
-        
-        // Shield count
-        ctx.fillStyle = color.main;
-        ctx.font = "bold 12px 'Courier New', monospace";
-        ctx.textAlign = "center";
-        ctx.fillText(`🛡️ ${p.upgrades.shieldActive}`, cx, groundY + 25);
-        ctx.textAlign = "left";
       }
     }
 
-    // HUD - Top bar
-    const hudHeight = 40;
-    ctx.fillStyle = hexToRgba("#000", 0.6);
-    ctx.fillRect(0, 0, canvas.width, hudHeight);
-    
-    // Wave indicator
-    ctx.fillStyle = COLORS.yellow;
-    ctx.font = "bold 16px 'Courier New', monospace";
-    ctx.fillText(`WAVE ${wave}`, 15, 26);
-
-    // Base HP bar
-    const hpBarW = 200;
-    const hpBarH = 16;
-    const hpBarX = canvas.width / 2 - hpBarW / 2;
-    const hpBarY = 12;
-    const hpFrac = baseHp / maxBaseHp;
-    const hpColor = hpFrac > 0.5 ? COLORS.green : hpFrac > 0.25 ? COLORS.orange : COLORS.red;
-    
-    ctx.fillStyle = hexToRgba("#000", 0.5);
-    ctx.fillRect(hpBarX - 2, hpBarY - 2, hpBarW + 4, hpBarH + 4);
-    
-    ctx.fillStyle = hexToRgba(hpColor, 0.3);
-    ctx.fillRect(hpBarX, hpBarY, hpBarW, hpBarH);
-    
-    ctx.fillStyle = hpColor;
-    ctx.shadowColor = hpColor;
-    ctx.shadowBlur = 10;
-    ctx.fillRect(hpBarX, hpBarY, hpBarW * hpFrac, hpBarH);
-    ctx.shadowBlur = 0;
-    
-    ctx.fillStyle = COLORS.white;
-    ctx.font = "bold 11px 'Courier New', monospace";
-    ctx.textAlign = "center";
-    ctx.fillText(`BASE: ${baseHp}/${maxBaseHp}`, canvas.width / 2, hpBarY + 12);
-    ctx.textAlign = "left";
-
-    // Scores
-    ctx.font = "12px 'Courier New', monospace";
-    let scoreX = canvas.width - 15;
-    for (let i = lastSnap.players.length - 1; i >= 0; i--) {
-      const p = lastSnap.players[i];
-      const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
-      ctx.fillStyle = color.main;
-      ctx.textAlign = "right";
-      ctx.fillText(`${p.name}: ${p.score}`, scoreX, 26);
-      scoreX -= ctx.measureText(`${p.name}: ${p.score}`).width + 20;
-    }
-    ctx.textAlign = "left";
-
-    // Particles (behind everything else)
+    // Particles
     if (lastSnap.particles) {
       for (const p of lastSnap.particles) {
-        const alpha = Math.min(1, p.life * 2);
-        const size = 3 + (1 - p.life) * 5;
+        const alpha = p.life / (p.maxLife || 0.5);
         ctx.fillStyle = hexToRgba(p.color, alpha);
         ctx.shadowColor = p.color;
         ctx.shadowBlur = 8;
         ctx.beginPath();
-        ctx.arc(wx(p.x), wy(p.y), size * sx, 0, Math.PI * 2);
+        ctx.arc(p.x * sx, p.y * sy, (p.size || 2) * sx, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.shadowBlur = 0;
     }
 
-    // Missiles (asteroids)
+    // Asteroids
     for (const m of lastSnap.missiles) {
-      const x = wx(m.x);
-      const y = wy(m.y);
+      const x = m.x * sx;
+      const y = m.y * sy;
       const r = m.r * sx;
-      
-      // Outer glow based on type
-      const asteroidColor = m.type === "large" ? COLORS.red :
-                           m.type === "medium" ? COLORS.orange : COLORS.yellow;
-      
-      ctx.shadowColor = asteroidColor;
-      ctx.shadowBlur = 15;
-      
-      // Draw rotating asteroid shape
+
+      const baseColor = m.type === "large" ? "#ff4444" :
+                       m.type === "medium" ? "#ff8800" : "#ffcc00";
+
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(m.rotation || 0);
-      
-      // Irregular asteroid shape
-      ctx.fillStyle = hexToRgba(asteroidColor, 0.8);
-      ctx.strokeStyle = asteroidColor;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      const points = 8;
-      for (let i = 0; i <= points; i++) {
-        const angle = (i / points) * Math.PI * 2;
-        const variance = 0.7 + Math.sin(i * 3.7) * 0.3;
-        const px = Math.cos(angle) * r * variance;
-        const py = Math.sin(angle) * r * variance;
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
+
+      // Draw asteroid shape
+      ctx.fillStyle = hexToRgba(baseColor, 0.7);
+      ctx.strokeStyle = baseColor;
+      ctx.lineWidth = 1.5;
+      ctx.shadowColor = baseColor;
+      ctx.shadowBlur = 8;
+
+      if (m.vertices && m.vertices.length > 0) {
+        ctx.beginPath();
+        for (let i = 0; i <= m.vertices.length; i++) {
+          const v = m.vertices[i % m.vertices.length];
+          const px = Math.cos(v.angle) * r * v.dist;
+          const py = Math.sin(v.angle) * r * v.dist;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      } else {
+        ctx.beginPath();
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
       }
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      
+
       ctx.restore();
       ctx.shadowBlur = 0;
 
-      // HP bar
+      // HP bar for damaged asteroids
       if (m.hp < m.maxHp) {
         const barW = r * 2;
-        const barH = 4;
-        const barY = y - r - 10;
+        const barH = 3 * sy;
+        const barX = x - barW/2;
+        const barY = y - r - 8 * sy;
         
-        ctx.fillStyle = hexToRgba("#000", 0.6);
-        ctx.fillRect(x - barW / 2 - 1, barY - 1, barW + 2, barH + 2);
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.fillRect(barX, barY, barW, barH);
         
-        ctx.fillStyle = hexToRgba(COLORS.red, 0.5);
-        ctx.fillRect(x - barW / 2, barY, barW, barH);
-        
-        const hpFrac = m.hp / m.maxHp;
-        ctx.fillStyle = COLORS.green;
-        ctx.fillRect(x - barW / 2, barY, barW * hpFrac, barH);
+        const frac = m.hp / m.maxHp;
+        ctx.fillStyle = frac > 0.5 ? "#0f8" : frac > 0.25 ? "#f80" : "#f44";
+        ctx.fillRect(barX, barY, barW * frac, barH);
       }
     }
 
     // Bullets
     for (const b of lastSnap.bullets) {
-      const x = wx(b.x);
-      const y = wy(b.y);
+      const x = b.x * sx;
+      const y = b.y * sy;
       const r = b.r * sx;
-      const color = b.color || COLORS.cyan;
-      
+      const color = PLAYER_COLORS[b.slot]?.main || "#0ff";
+
       // Trail
+      const angle = Math.atan2(b.vy, b.vx);
+      const trailLen = 12 * sx;
       ctx.strokeStyle = hexToRgba(color, 0.4);
       ctx.lineWidth = r * 1.5;
       ctx.lineCap = "round";
       ctx.beginPath();
       ctx.moveTo(x, y);
-      ctx.lineTo(x - (b.vx || 0) * 0.02 * sx, y - (b.vy || 0) * 0.02 * sy);
+      ctx.lineTo(x - Math.cos(angle) * trailLen, y - Math.sin(angle) * trailLen);
       ctx.stroke();
-      
-      // Bullet core
-      drawNeonCircle(x, y, r, color);
-      
-      // Crit indicator
-      if (b.isCrit) {
-        ctx.fillStyle = COLORS.yellow;
-        ctx.font = "bold 10px sans-serif";
-        ctx.fillText("!", x - 3, y - r - 5);
+
+      // Bullet
+      ctx.fillStyle = b.isCrit ? "#fff" : color;
+      ctx.shadowColor = b.isCrit ? "#ff0" : color;
+      ctx.shadowBlur = b.isCrit ? 15 : 8;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
+    // Damage numbers
+    if (lastSnap.damageNumbers) {
+      for (const d of lastSnap.damageNumbers) {
+        const alpha = d.life;
+        ctx.font = `bold ${d.isCrit ? 16 : 12}px 'Courier New', monospace`;
+        ctx.textAlign = "center";
+        ctx.fillStyle = d.isCrit ? `rgba(255,255,0,${alpha})` : `rgba(255,255,255,${alpha})`;
+        ctx.fillText(d.amount.toString(), d.x * sx, d.y * sy);
       }
     }
 
@@ -732,151 +594,261 @@
       const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
       const segX0 = p.slot * world.segmentWidth;
       const cx = segX0 + world.segmentWidth / 2;
-      const offset = world.segmentWidth * 0.22;
+      const offset = world.segmentWidth * 0.20;
 
-      const positions = [
-        { x: cx - offset * 2, y: 560, kind: "slot" },
-        { x: cx - offset, y: 560, kind: p.upgrades?.miniLeft ? "mini" : "slot" },
-        { x: cx, y: 560, kind: "main" },
-        { x: cx + offset, y: 560, kind: p.upgrades?.miniRight ? "mini" : "slot" },
-        { x: cx + offset * 2, y: 560, kind: "slot" },
+      const turrets = [
+        { x: cx, y: 560, kind: "main", angle: p.turretAngle },
+        { x: cx - offset, y: 560, kind: p.upgrades?.miniLeft ? "mini" : null },
+        { x: cx + offset, y: 560, kind: p.upgrades?.miniRight ? "mini" : null },
       ];
 
-      for (const t of positions) {
-        const tx = wx(t.x);
-        const ty = wy(t.y);
-        
-        if (t.kind === "slot") {
-          // Empty slot indicator
-          ctx.strokeStyle = hexToRgba(color.main, 0.2);
-          ctx.lineWidth = 1;
-          ctx.setLineDash([3, 3]);
-          ctx.beginPath();
-          ctx.arc(tx, ty - 8, 8, 0, Math.PI * 2);
-          ctx.stroke();
-          ctx.setLineDash([]);
-          continue;
-        }
+      for (const t of turrets) {
+        if (!t.kind) continue;
 
+        const tx = t.x * sx;
+        const ty = t.y * sy;
         const isMain = t.kind === "main";
-        const baseW = isMain ? 36 : 24;
-        const baseH = isMain ? 20 : 14;
-        const barrelLen = isMain ? 35 : 22;
-        const barrelW = isMain ? 8 : 5;
 
-        // Turret base with glow
+        // Base
+        const baseW = (isMain ? 24 : 16) * sx;
+        const baseH = (isMain ? 14 : 10) * sy;
+
+        ctx.fillStyle = hexToRgba(color.main, 0.8);
+        ctx.strokeStyle = color.main;
+        ctx.lineWidth = 1.5;
         ctx.shadowColor = color.main;
-        ctx.shadowBlur = isMain ? 20 : 10;
-        
-        drawNeonRect(
-          tx - baseW / 2,
-          ty - baseH,
-          baseW,
-          baseH,
-          color.main
-        );
+        ctx.shadowBlur = isMain ? 15 : 8;
 
-        // Barrel
-        const angle = isMain ? (p.turretAngle || -Math.PI / 2) : -Math.PI / 2;
-        
-        ctx.save();
-        ctx.translate(tx, ty - baseH / 2);
-        ctx.rotate(angle + Math.PI / 2);
-        
-        // Barrel glow
-        ctx.fillStyle = hexToRgba(color.main, 0.9);
-        ctx.strokeStyle = COLORS.white;
-        ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.roundRect(-barrelW / 2, -barrelLen, barrelW, barrelLen, 2);
+        ctx.roundRect(tx - baseW/2, ty - baseH, baseW, baseH, 3);
         ctx.fill();
         ctx.stroke();
-        
-        // Barrel tip glow when shooting
-        if (isMain && p.isManual) {
-          ctx.fillStyle = hexToRgba(COLORS.white, 0.8);
-          ctx.beginPath();
-          ctx.arc(0, -barrelLen, barrelW / 2 + 2, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        
+
+        // Barrel
+        const barrelLen = (isMain ? 22 : 14) * sy;
+        const barrelW = (isMain ? 5 : 3) * sx;
+        const angle = t.angle || -Math.PI/2;
+
+        ctx.save();
+        ctx.translate(tx, ty - baseH/2);
+        ctx.rotate(angle + Math.PI/2);
+
+        ctx.fillStyle = color.main;
+        ctx.beginPath();
+        ctx.roundRect(-barrelW/2, -barrelLen, barrelW, barrelLen, 2);
+        ctx.fill();
+
+        // Muzzle
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(0, -barrelLen, barrelW * 0.6, 0, Math.PI * 2);
+        ctx.fill();
+
         ctx.restore();
         ctx.shadowBlur = 0;
       }
 
       // Player name
-      ctx.fillStyle = color.main;
-      ctx.font = "bold 13px 'Courier New', monospace";
+      const nameCx = cx * sx;
+      ctx.font = "bold 11px 'Courier New', monospace";
       ctx.textAlign = "center";
+      ctx.fillStyle = color.main;
       ctx.shadowColor = color.main;
       ctx.shadowBlur = 5;
-      ctx.fillText(p.name || `P${p.slot + 1}`, wx(cx), groundY + 22);
+      ctx.fillText(p.name, nameCx, groundY + 14);
       
-      // Mode indicator
-      ctx.font = "10px 'Courier New', monospace";
-      ctx.fillStyle = p.isManual ? COLORS.yellow : COLORS.green;
-      ctx.fillText(p.isManual ? "MANUAL" : "AUTO", wx(cx), groundY + 35);
-      
+      // Mode
+      ctx.font = "9px 'Courier New', monospace";
+      ctx.fillStyle = p.isManual ? "#ff0" : "#0f8";
+      ctx.fillText(p.isManual ? "MANUAL" : "AUTO", nameCx, groundY + 26);
       ctx.shadowBlur = 0;
-      ctx.textAlign = "left";
-    }
-
-    // Draw aim line for local player when manual shooting
-    if (phase === "playing" && mySlot >= 0 && shooting) {
-      const segX0 = mySlot * world.segmentWidth;
-      const turretCx = segX0 + world.segmentWidth / 2;
-      const color = PLAYER_COLORS[mySlot] || PLAYER_COLORS[0];
-      
-      ctx.strokeStyle = hexToRgba(color.main, 0.4);
-      ctx.lineWidth = 2;
-      ctx.setLineDash([8, 8]);
-      ctx.beginPath();
-      ctx.moveTo(wx(turretCx), groundY - 20);
-      ctx.lineTo(wx(mouseXWorld), 50);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      
-      // Crosshair at aim point
-      const aimX = wx(mouseXWorld);
-      const aimY = 50;
-      ctx.strokeStyle = color.main;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(aimX - 10, aimY);
-      ctx.lineTo(aimX + 10, aimY);
-      ctx.moveTo(aimX, aimY - 10);
-      ctx.lineTo(aimX, aimY + 10);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(aimX, aimY, 15, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-
-    // Instructions overlay in lobby/upgrade phase
-    if (phase === "lobby" || phase === "upgrades") {
-      ctx.fillStyle = hexToRgba("#000", 0.7);
-      ctx.fillRect(0, canvas.height - 60, canvas.width, 60);
-      
-      ctx.fillStyle = COLORS.cyan;
-      ctx.font = "14px 'Courier New', monospace";
-      ctx.textAlign = "center";
-      
-      if (phase === "lobby") {
-        ctx.fillText("🎮 AUTO-FIRE: Turrets automatically target asteroids", canvas.width / 2, canvas.height - 38);
-        ctx.fillText("🖱️ CLICK & HOLD: Manual aim override | 🎯 160° firing arc", canvas.width / 2, canvas.height - 18);
-      } else {
-        ctx.fillText("⬆️ SELECT AN UPGRADE ABOVE ⬆️", canvas.width / 2, canvas.height - 28);
-      }
-      ctx.textAlign = "left";
     }
 
     ctx.restore();
+
+    // === HUD (screen space) ===
+    
+    // Top bar
+    ctx.fillStyle = "rgba(0,0,0,0.7)";
+    ctx.fillRect(0, 0, canvas.width, 50);
+
+    // Wave
+    drawNeonText(`WAVE ${wave}`, 20, 25, "#ff0", 18, "left");
+
+    // HP Bar
+    const hpBarW = 200;
+    const hpBarH = 20;
+    const hpBarX = canvas.width/2 - hpBarW/2;
+    const hpBarY = 15;
+    const hpFrac = baseHp / maxBaseHp;
+    const hpColor = hpFrac > 0.5 ? "#0f8" : hpFrac > 0.25 ? "#f80" : "#f44";
+
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fillRect(hpBarX, hpBarY, hpBarW, hpBarH);
+    
+    ctx.fillStyle = hpColor;
+    ctx.shadowColor = hpColor;
+    ctx.shadowBlur = 10;
+    ctx.fillRect(hpBarX, hpBarY, hpBarW * hpFrac, hpBarH);
+    ctx.shadowBlur = 0;
+
+    ctx.strokeStyle = "#0ff";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(hpBarX, hpBarY, hpBarW, hpBarH);
+
+    ctx.font = "bold 12px 'Courier New', monospace";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#fff";
+    ctx.fillText(`${baseHp} / ${maxBaseHp}`, canvas.width/2, hpBarY + 14);
+
+    // Scores
+    ctx.textAlign = "right";
+    ctx.font = "12px 'Courier New', monospace";
+    let scoreX = canvas.width - 20;
+    for (let i = lastSnap.players.length - 1; i >= 0; i--) {
+      const p = lastSnap.players[i];
+      const color = PLAYER_COLORS[p.slot]?.main || "#fff";
+      ctx.fillStyle = color;
+      const text = `${p.name}: ${p.score}`;
+      ctx.fillText(text, scoreX, 30);
+      scoreX -= ctx.measureText(text).width + 20;
+    }
+    ctx.textAlign = "left";
+
+    // === Upgrade UI ===
+    if (phase === "upgrades" && upgradeOptions.length > 0) {
+      // Darken background
+      ctx.fillStyle = "rgba(0,0,0,0.75)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      if (!upgradePicked) {
+        // Title
+        drawNeonText("CHOOSE UPGRADE", canvas.width/2, 80, "#ff0", 24, "center");
+
+        // Cards
+        const cardW = 220;
+        const cardH = 140;
+        const gap = 30;
+        const totalW = upgradeOptions.length * cardW + (upgradeOptions.length - 1) * gap;
+        const startX = canvas.width/2 - totalW/2;
+        const cardY = canvas.height/2 - cardH/2;
+
+        hoveredUpgrade = -1;
+
+        for (let i = 0; i < upgradeOptions.length; i++) {
+          const opt = upgradeOptions[i];
+          const cardX = startX + i * (cardW + gap);
+          
+          const isHovered = mouseX >= cardX && mouseX <= cardX + cardW &&
+                           mouseY >= cardY && mouseY <= cardY + cardH;
+          if (isHovered) hoveredUpgrade = i;
+
+          const catColor = opt.category === "offense" ? "#f55" :
+                          opt.category === "turret" ? "#0ff" :
+                          opt.category === "defense" ? "#0f8" : "#a0f";
+
+          // Card bg
+          ctx.fillStyle = isHovered ? "rgba(0,255,255,0.15)" : "rgba(20,20,40,0.9)";
+          ctx.strokeStyle = isHovered ? "#0ff" : "rgba(255,255,255,0.2)";
+          ctx.lineWidth = isHovered ? 3 : 1;
+          ctx.shadowColor = isHovered ? "#0ff" : "transparent";
+          ctx.shadowBlur = isHovered ? 20 : 0;
+          
+          ctx.beginPath();
+          ctx.roundRect(cardX, cardY, cardW, cardH, 10);
+          ctx.fill();
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+
+          // Icon
+          ctx.font = "32px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillStyle = "#fff";
+          ctx.fillText(opt.icon, cardX + cardW/2, cardY + 40);
+
+          // Title
+          ctx.font = "bold 14px 'Courier New', monospace";
+          ctx.fillStyle = catColor;
+          ctx.fillText(opt.title, cardX + cardW/2, cardY + 70);
+
+          // Desc
+          ctx.font = "11px 'Courier New', monospace";
+          ctx.fillStyle = "rgba(255,255,255,0.7)";
+          ctx.fillText(opt.desc, cardX + cardW/2, cardY + 95);
+
+          // Category
+          ctx.font = "9px 'Courier New', monospace";
+          ctx.fillStyle = catColor;
+          ctx.fillText(opt.category.toUpperCase(), cardX + cardW/2, cardY + 125);
+        }
+        ctx.textAlign = "left";
+      } else {
+        // Waiting screen
+        drawNeonText("UPGRADE SELECTED", canvas.width/2, canvas.height/2 - 20, "#0f8", 20, "center");
+        if (waitingFor.length > 0) {
+          ctx.font = "14px 'Courier New', monospace";
+          ctx.textAlign = "center";
+          ctx.fillStyle = "rgba(255,255,255,0.6)";
+          ctx.fillText(`Waiting for: ${waitingFor.join(", ")}`, canvas.width/2, canvas.height/2 + 20);
+        }
+      }
+    }
+
+    // === Game Over ===
+    if (phase === "gameover" && gameOverData) {
+      ctx.fillStyle = "rgba(0,0,0,0.85)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      drawNeonText("GAME OVER", canvas.width/2, 100, "#f44", 36, "center");
+      drawNeonText(`REACHED WAVE ${gameOverData.wave}`, canvas.width/2, 150, "#ff0", 18, "center");
+
+      if (gameOverData.scores) {
+        const startY = 220;
+        for (let i = 0; i < gameOverData.scores.length; i++) {
+          const s = gameOverData.scores[i];
+          const color = PLAYER_COLORS[s.slot]?.main || "#fff";
+          const y = startY + i * 40;
+          
+          ctx.font = "bold 18px 'Courier New', monospace";
+          ctx.textAlign = "center";
+          ctx.fillStyle = color;
+          ctx.shadowColor = color;
+          ctx.shadowBlur = 10;
+          ctx.fillText(`${i + 1}. ${s.name}: ${s.score}`, canvas.width/2, y);
+        }
+        ctx.shadowBlur = 0;
+      }
+
+      drawNeonText("RETURNING TO LOBBY...", canvas.width/2, canvas.height - 80, "#0ff", 14, "center");
+    }
   }
 
-  // Start render loop
+  // ===== Event Handlers =====
+  connectBtn.onclick = connect;
+  
+  nameInput.onkeydown = (e) => {
+    if (e.key === "Enter" && connected) {
+      const name = nameInput.value.trim();
+      if (name) send({ t: "setName", name });
+    }
+  };
+
+  nameInput.onblur = () => {
+    if (connected) {
+      const name = nameInput.value.trim();
+      if (name) send({ t: "setName", name });
+    }
+  };
+
+  readyBtn.onclick = () => {
+    send({ t: "ready" });
+  };
+
+  launchBtn.onclick = () => {
+    if (allReady) send({ t: "start" });
+  };
+
+  // ===== Init =====
+  serverInput.value = DEFAULT_SERVER;
   draw();
-
-  // Auto-connect on page load
-  connect(initial);
-
 })();
