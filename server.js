@@ -368,14 +368,18 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0) 
 
 function fireWithMultishot(owner, originX, originY, targetX, targetY) {
   const shots = owner.upgrades?.multishot ?? 1;
-  if (shots === 1) {
-    fireBullet(owner, originX, originY, targetX, targetY);
-  } else {
-    const spread = 0.12;
-    const startOffset = -((shots - 1) / 2) * spread;
-    for (let i = 0; i < shots; i++) {
-      fireBullet(owner, originX, originY, targetX, targetY, startOffset + i * spread);
-    }
+  const spread = 0.10; // angle offset between bullets
+  
+  // Always fire center bullet first
+  fireBullet(owner, originX, originY, targetX, targetY, 0);
+  
+  // Add alternating left/right bullets
+  for (let i = 1; i < shots; i++) {
+    // Odd = left, Even = right
+    const side = (i % 2 === 1) ? -1 : 1;
+    const layer = Math.ceil(i / 2);
+    const offset = side * layer * spread;
+    fireBullet(owner, originX, originY, targetX, targetY, offset);
   }
 }
 
