@@ -41,7 +41,7 @@
     if (q) return normalizeWsUrl(q);
     if (saved) return normalizeWsUrl(saved);
 
-    // Works for localhost where client is served by the same Node server
+    // Local dev fallback (works if you open http://localhost:3000 served by Node)
     const proto = location.protocol === "https:" ? "wss://" : "ws://";
     return normalizeWsUrl(`${proto}${location.host}`);
   }
@@ -60,7 +60,7 @@
   let lastSnap = null;
 
   // Input
-  let mouseX = 0;
+  let mouseXWorld = 0;
   let shooting = false;
   let lastInputSend = 0;
 
@@ -84,15 +84,12 @@
     }
 
     setStatus("Connecting…");
-
     ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
       setStatus("Connected");
       const nm = (localStorage.getItem("playerName") || "").trim();
-      if (nm) {
-        ws.send(JSON.stringify({ t: "hello", name: nm }));
-      }
+      if (nm) ws.send(JSON.stringify({ t: "hello", name: nm }));
     };
 
     ws.onclose = () => {
@@ -102,9 +99,7 @@
       startBtn.style.display = "none";
     };
 
-    ws.onerror = () => {
-      setStatus("Connection error");
-    };
+    ws.onerror = () => setStatus("Connection error");
 
     ws.onmessage = (ev) => {
       let msg;
@@ -154,7 +149,6 @@
       }
 
       if (msg.t === "picked") {
-        // could show a toast; keeping it simple
         upgradePanel.style.display = "none";
         return;
       }
@@ -172,13 +166,12 @@
         phase = "gameover";
         setStatus(`Game Over (reached wave ${msg.wave})`);
         upgradePanel.style.display = "none";
-        return;
       }
     };
   }
 
   function renderLobby(players, hostId) {
-    lobbyInfo.textContent = `Players: ${players.length}/4 — Host: ${hostId === myId ? "you" : "P"}`;
+    lobbyInfo.textContent = `Players: ${players.length}/4 — Host: ${hostId === myId ? "you" : "someone else"}`;
     playerList.innerHTML = "";
 
     for (const p of players) {
@@ -213,7 +206,6 @@
 
   // --- UI events ---
   serverEl.value = defaultServerUrl();
-
   connectBtn.onclick = () => connect(serverEl.value);
 
   saveNameBtn.onclick = () => {
@@ -226,7 +218,6 @@
     if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: "start" }));
   };
 
-  // Preload name
   nameEl.value = localStorage.getItem("playerName") || "";
 
   // --- Canvas sizing ---
@@ -241,7 +232,7 @@
   window.addEventListener("resize", fitCanvas);
   fitCanvas();
 
-  // --- Input handling (inside your segment only) ---
+  // --- Input handling ---
   function canvasToWorldX(clientX) {
     const rect = canvas.getBoundingClientRect();
     const nx = (clientX - rect.left) / rect.width;
@@ -249,7 +240,7 @@
   }
 
   canvas.addEventListener("mousemove", (e) => {
-    mouseX = canvasToWorldX(e.clientX);
+    mouseXWorld = canvasToWorldX(e.clientX);
   });
 
   canvas.addEventListener("mousedown", (e) => {
@@ -263,10 +254,8 @@
   function draw() {
     requestAnimationFrame(draw);
 
-    // Clear
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // If we don't have state yet, draw placeholder
     if (!lastSnap) {
       ctx.fillStyle = "rgba(255,255,255,0.08)";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -276,14 +265,12 @@
       return;
     }
 
-    // Scale to world
     const sx = canvas.width / world.width;
     const sy = canvas.height / world.height;
 
-    function wx(x) { return x * sx; }
-    function wy(y) { return y * sy; }
+    const wx = (x) => x * sx;
+    const wy = (y) => y * sy;
 
-    // Background gradient
     const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
     g.addColorStop(0, "rgba(255,255,255,0.06)");
     g.addColorStop(1, "rgba(0,0,0,0.18)");
@@ -293,7 +280,8 @@
     // Segment separators
     ctx.strokeStyle = "rgba(255,255,255,0.12)";
     ctx.lineWidth = 2;
-    for (let i = 1; i < world.width / world.segmentWidth; i++) {
+    const segCount = Math.max(1, Math.round(world.width / world.segmentWidth));
+    for (let i = 1; i < segCount; i++) {
       const x = wx(i * world.segmentWidth);
       ctx.beginPath();
       ctx.moveTo(x, 0);
@@ -321,9 +309,9 @@
       ctx.arc(wx(m.x), wy(m.y), m.r * sx, 0, Math.PI * 2);
       ctx.fill();
 
-      // tiny HP pips
       ctx.fillStyle = "rgba(0,0,0,0.35)";
       ctx.fillRect(wx(m.x - m.r), wy(m.y - m.r - 10), (m.r * 2) * sx, 6);
+
       ctx.fillStyle = "rgba(255,255,255,0.75)";
       const frac = Math.max(0, Math.min(1, m.hp / 6));
       ctx.fillRect(wx(m.x - m.r), wy(m.y - m.r - 10), (m.r * 2) * sx * frac, 6);
@@ -340,6 +328,7 @@
     // Turrets
     for (const p of lastSnap.players) {
       if (p.slot < 0) continue;
+
       const segX0 = p.slot * world.segmentWidth;
       const cx = segX0 + world.segmentWidth / 2;
       const offset = world.segmentWidth * 0.22;
@@ -349,27 +338,23 @@
         { x: cx - offset, y: 560, kind: p.upgrades?.miniLeft ? "mini" : "slot" },
         { x: cx, y: 560, kind: "main" },
         { x: cx + offset, y: 560, kind: p.upgrades?.miniRight ? "mini" : "slot" },
-        { x: cx + offset * 2, y: 560, kind: "slot" }
+        { x: cx + offset * 2, y: 560, kind: "slot" },
       ];
 
-      // Draw bases
       for (const t of positions) {
-        const x = wx(t.x);
-        const y = wy(t.y);
-
         if (t.kind === "main") ctx.fillStyle = "rgba(124,92,255,0.9)";
         else if (t.kind === "mini") ctx.fillStyle = "rgba(124,92,255,0.55)";
         else ctx.fillStyle = "rgba(255,255,255,0.18)";
 
         ctx.beginPath();
-        ctx.arc(x, y, 12, 0, Math.PI * 2);
+        ctx.arc(wx(t.x), wy(t.y), 12, 0, Math.PI * 2);
         ctx.fill();
       }
 
-      // Main turret barrel
       const angle = p.turretAngle ?? -Math.PI / 2;
       const ox = wx(cx);
       const oy = wy(560);
+
       ctx.strokeStyle = "rgba(220,210,255,0.9)";
       ctx.lineWidth = 4;
       ctx.beginPath();
@@ -377,7 +362,6 @@
       ctx.lineTo(ox + Math.cos(angle) * 26, oy + Math.sin(angle) * 26);
       ctx.stroke();
 
-      // Name label
       ctx.fillStyle = "rgba(255,255,255,0.75)";
       ctx.font = "12px system-ui";
       ctx.fillText(p.name || "Player", wx(segX0 + 10), wy(560) + 18);
@@ -397,24 +381,25 @@
   // --- Input sending ---
   function sendInput(ts) {
     requestAnimationFrame(sendInput);
+
     if (!ws || ws.readyState !== 1) return;
     if (phase !== "playing") return;
 
     if (ts - lastInputSend < 50) return; // 20Hz
     lastInputSend = ts;
 
-    // Convert mouseX world to aimX within MY segment => 0..1
     const segX0 = mySlot * world.segmentWidth;
-    const aimNorm = (mouseX - segX0) / world.segmentWidth;
+    const aimNorm = (mouseXWorld - segX0) / world.segmentWidth;
 
     ws.send(JSON.stringify({
       t: "input",
       aimXNorm: Math.max(0, Math.min(1, aimNorm)),
-      shooting
+      shooting,
     }));
   }
 
-  // Start everything
+  // Start
   connect(serverEl.value);
   requestAnimationFrame(draw);
   requestAnimationFrame(sendInput);
+})();
