@@ -205,7 +205,10 @@
   }
 
   // --- UI events ---
-  serverEl.value = defaultServerUrl();
+  // Respect the prefilled value in index.html; only fallback if it's empty
+  const preset = (serverEl.value || "").trim();
+  serverEl.value = preset ? normalizeWsUrl(preset) : defaultServerUrl();
+
   connectBtn.onclick = () => connect(serverEl.value);
 
   saveNameBtn.onclick = () => {
