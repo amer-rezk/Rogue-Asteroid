@@ -3,66 +3,69 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Rogue Asteroid (Multiplayer)</title>
+  <title>ROGUE ASTEROID</title>
   <link rel="stylesheet" href="./style.css" />
-
-  <!-- Prevent favicon 404 noise -->
-  <link rel="icon" href="data:,">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>☄️</text></svg>">
 </head>
 <body>
   <div id="ui">
     <div class="row">
-      <div class="title">Rogue Asteroid (1–4p)</div>
-      <div class="status" id="status">Connecting…</div>
+      <div class="title">☄️ ROGUE ASTEROID</div>
+      <div class="status" id="status">INITIALIZING...</div>
     </div>
 
     <div class="panel">
-      <div class="row" style="gap:10px; flex-wrap:wrap;">
-        <label class="label">Server:</label>
-
-        <!-- Prefilled with your Render WebSocket endpoint -->
+      <div class="row" style="flex-wrap:wrap;">
+        <label class="label">SERVER</label>
         <input
           id="serverUrl"
           class="input"
           value="wss://rogue-asteroid.onrender.com/ws"
-          placeholder="wss://rogue-asteroid.onrender.com/ws"
+          placeholder="wss://your-server.com/ws"
         />
-
-        <button id="connectBtn" class="btn">Connect</button>
+        <button id="connectBtn" class="btn">CONNECT</button>
       </div>
-
       <div class="hint">
-        If this page is hosted on GitHub Pages (HTTPS), the server must use <code>wss://</code>.
+        Hosting on HTTPS? Server must use <code>wss://</code> protocol.
       </div>
     </div>
 
     <div class="panel">
-      <div class="row" style="gap:10px; flex-wrap:wrap;">
-        <label class="label">Name:</label>
-        <input id="name" class="input" maxlength="16" placeholder="Player name" />
-        <button id="saveName" class="btn">Save</button>
-        <button id="startBtn" class="btn primary" style="margin-left:auto; display:none;">Start</button>
+      <div class="row" style="flex-wrap:wrap;">
+        <label class="label">CALLSIGN</label>
+        <input id="name" class="input" maxlength="16" placeholder="Enter your name" />
+        <button id="saveName" class="btn">SAVE</button>
+        <button id="startBtn" class="btn primary" style="margin-left:auto; display:none;">▶ LAUNCH</button>
       </div>
 
-      <div class="sub" id="lobbyInfo">Lobby…</div>
+      <div class="sub" id="lobbyInfo">AWAITING PLAYERS...</div>
       <div id="playerList" class="list"></div>
     </div>
 
     <div class="panel" id="upgradePanel" style="display:none;">
-      <div class="sub">Pick an upgrade:</div>
+      <div class="sub" style="color: #ff0; font-size: 14px; text-transform: uppercase; letter-spacing: 2px;">
+        ⚡ CHOOSE YOUR UPGRADE ⚡
+      </div>
       <div id="upgradeOptions" class="upgrades"></div>
     </div>
 
     <div class="panel">
-      <div class="sub">Controls</div>
-      <div class="hint">
-        Aim with mouse. Hold left-click to shoot.
+      <div class="sub" style="color: #0ff;">BATTLE CONTROLS</div>
+      <div class="hint" style="display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin-top: 10px;">
+        <span style="color: #0f8;">AUTO-FIRE</span>
+        <span>Turrets automatically target the most dangerous asteroids</span>
+        <span style="color: #ff0;">MANUAL AIM</span>
+        <span>Click and hold to override auto-fire and aim manually</span>
+        <span style="color: #f0f;">FIRE ARC</span>
+        <span>160° shooting range — help defend your neighbors!</span>
+        <span style="color: #f80;">UPGRADES</span>
+        <span>After each wave, choose a roguelike upgrade to power up</span>
       </div>
     </div>
   </div>
 
   <canvas id="game" width="900" height="600"></canvas>
 
-  <script src="./client.js?v=4"></script>
+  <script src="./client.js?v=5"></script>
 </body>
 </html>
