@@ -1,71 +1,56 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>ROGUE ASTEROID</title>
-  <link rel="stylesheet" href="./style.css" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>☄️</text></svg>">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div id="ui">
-    <div class="row">
-      <div class="title">☄️ ROGUE ASTEROID</div>
-      <div class="status" id="status">INITIALIZING...</div>
-    </div>
+  <!-- Menu Screen -->
+  <div id="menuScreen">
+    <div class="menu-container">
+      <h1 class="title">☄️ ROGUE ASTEROID</h1>
+      <p class="subtitle">COOPERATIVE ASTEROID DEFENSE</p>
 
-    <div class="panel">
-      <div class="row" style="flex-wrap:wrap;">
-        <label class="label">SERVER</label>
-        <input
-          id="serverUrl"
-          class="input"
-          value="wss://rogue-asteroid.onrender.com/ws"
-          placeholder="wss://your-server.com/ws"
-        />
-        <button id="connectBtn" class="btn">CONNECT</button>
-      </div>
-      <div class="hint">
-        Hosting on HTTPS? Server must use <code>wss://</code> protocol.
-      </div>
-    </div>
-
-    <div class="panel">
-      <div class="row" style="flex-wrap:wrap;">
-        <label class="label">CALLSIGN</label>
-        <input id="name" class="input" maxlength="16" placeholder="Enter your name" />
-        <button id="saveName" class="btn">SAVE</button>
-        <button id="startBtn" class="btn primary" style="margin-left:auto; display:none;">▶ LAUNCH</button>
+      <div class="section">
+        <label>SERVER</label>
+        <div class="input-row">
+          <input type="text" id="serverUrl" placeholder="wss://server-address/ws">
+          <button id="connectBtn" class="btn">CONNECT</button>
+        </div>
+        <div id="status" class="status">NOT CONNECTED</div>
       </div>
 
-      <div class="sub" id="lobbyInfo">AWAITING PLAYERS...</div>
-      <div id="playerList" class="list"></div>
-    </div>
-
-    <div class="panel" id="upgradePanel" style="display:none;">
-      <div class="sub" style="color: #ff0; font-size: 14px; text-transform: uppercase; letter-spacing: 2px;">
-        ⚡ CHOOSE YOUR UPGRADE ⚡
+      <div class="section">
+        <label>CALLSIGN</label>
+        <input type="text" id="nameInput" maxlength="16" placeholder="Enter your name">
       </div>
-      <div id="upgradeOptions" class="upgrades"></div>
-    </div>
 
-    <div class="panel">
-      <div class="sub" style="color: #0ff;">BATTLE CONTROLS</div>
-      <div class="hint" style="display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin-top: 10px;">
-        <span style="color: #0f8;">AUTO-FIRE</span>
-        <span>Turrets automatically target the most dangerous asteroids</span>
-        <span style="color: #ff0;">MANUAL AIM</span>
-        <span>Click and hold to override auto-fire and aim manually</span>
-        <span style="color: #f0f;">FIRE ARC</span>
-        <span>160° shooting range — help defend your neighbors!</span>
-        <span style="color: #f80;">UPGRADES</span>
-        <span>After each wave, choose a roguelike upgrade to power up</span>
+      <div id="lobby" class="section" style="display:none;">
+        <label>CREW</label>
+        <div id="players" class="players"></div>
+        <div class="button-row">
+          <button id="readyBtn" class="btn">READY UP</button>
+          <button id="launchBtn" class="btn launch" style="display:none;">▶ LAUNCH</button>
+        </div>
+      </div>
+
+      <div class="controls-info">
+        <div class="control"><span class="key">AUTO</span> Turrets auto-target threats</div>
+        <div class="control"><span class="key">CLICK</span> Manual aim override</div>
+        <div class="control"><span class="key">160°</span> Wide firing arc</div>
       </div>
     </div>
   </div>
 
-  <canvas id="game" width="900" height="600"></canvas>
+  <!-- Game Screen -->
+  <div id="gameScreen" style="display:none;">
+    <canvas id="game"></canvas>
+  </div>
 
-  <script src="./client.js?v=5"></script>
+  <script src="client.js"></script>
 </body>
 </html>
