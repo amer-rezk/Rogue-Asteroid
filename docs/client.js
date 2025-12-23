@@ -160,10 +160,8 @@
         lobbyPlayers = msg.players;
         allReady = msg.allReady;
         isHost = msg.hostId === myId;
-        updateLobbyUI();
         // Return to menu if we were in game
         if (phase === "playing" || phase === "upgrades" || phase === "gameover") {
-          showMenu();
           // Reset game state
           lastSnap = null;
           upgradeOptions = [];
@@ -171,8 +169,12 @@
           waitingFor = [];
           gameOverData = null;
           wave = 0;
+          showMenu();
         }
         phase = "lobby";
+        // Make sure lobby is visible
+        lobbyEl.style.display = "block";
+        updateLobbyUI();
         break;
 
       case "started":
@@ -607,6 +609,60 @@
       const segX0 = p.slot * world.segmentWidth;
       const cx = segX0 + world.segmentWidth / 2;
       const offset = world.segmentWidth * 0.20;
+
+      // Draw aim guide for local player when manually shooting
+      if (p.id === myId && mouseDown) {
+        const turretX = cx * sx;
+        const turretY = (560 - 14) * sy; // Top of turret base
+        
+        // Calculate aim point in world coords
+        const worldMouseX = (mouseX - offsetX) / sx;
+        const aimX = segX0 + Math.max(0, Math.min(1, (worldMouseX - segX0) / world.segmentWidth)) * world.segmentWidth;
+        const aimY = 50;
+        
+        // Clamp to 160 degree arc
+        const dx = aimX - cx;
+        const dy = aimY - 560;
+        let angle = Math.atan2(dy, dx);
+        const maxAngle = (80 * Math.PI) / 180;
+        const fromVertical = angle - (-Math.PI / 2);
+        const clampedFromVertical = Math.max(-maxAngle, Math.min(maxAngle, fromVertical));
+        const clampedAngle = -Math.PI / 2 + clampedFromVertical;
+        
+        // Draw the guide line
+        const lineLen = 500;
+        const endX = cx + Math.cos(clampedAngle) * lineLen;
+        const endY = 560 + Math.sin(clampedAngle) * lineLen;
+        
+        ctx.save();
+        ctx.strokeStyle = hexToRgba(color.main, 0.4);
+        ctx.lineWidth = 2;
+        ctx.setLineDash([8, 8]);
+        ctx.shadowColor = color.main;
+        ctx.shadowBlur = 5;
+        ctx.beginPath();
+        ctx.moveTo(turretX, turretY);
+        ctx.lineTo(endX * sx, endY * sy);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        
+        // Draw crosshair at aim point
+        const crossX = endX * sx;
+        const crossY = Math.max(30, endY * sy);
+        ctx.strokeStyle = color.main;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(crossX - 8, crossY);
+        ctx.lineTo(crossX + 8, crossY);
+        ctx.moveTo(crossX, crossY - 8);
+        ctx.lineTo(crossX, crossY + 8);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(crossX, crossY, 12, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+        ctx.shadowBlur = 0;
+      }
 
       const turrets = [
         { x: cx, y: 560, kind: "main", angle: p.turretAngle },
