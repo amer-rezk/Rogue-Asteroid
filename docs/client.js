@@ -131,7 +131,6 @@
 
       if (msg.t === "reject") {
         setStatus(`Rejected: ${msg.reason}`);
-        // server will close after reject; keep the message visible
         return;
       }
 
@@ -277,6 +276,43 @@
     if (e.button === 0) shooting = false;
   });
 
+  // Touch support for mobile
+  canvas.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    shooting = true;
+    if (e.touches.length > 0) {
+      mouseXWorld = canvasToWorldX(e.touches[0].clientX);
+    }
+  });
+  canvas.addEventListener("touchmove", (e) => {
+    e.preventDefault();
+    if (e.touches.length > 0) {
+      mouseXWorld = canvasToWorldX(e.touches[0].clientX);
+    }
+  });
+  canvas.addEventListener("touchend", (e) => {
+    e.preventDefault();
+    shooting = false;
+  });
+
+  // --- Input sending loop ---
+  function sendInput() {
+    if (ws && ws.readyState === 1 && phase === "playing" && mySlot >= 0) {
+      // Convert world X to normalized X within player's segment
+      const segX0 = mySlot * world.segmentWidth;
+      const aimXNorm = Math.max(0, Math.min(1, (mouseXWorld - segX0) / world.segmentWidth));
+      
+      ws.send(JSON.stringify({
+        t: "input",
+        aimXNorm: aimXNorm,
+        shooting: shooting
+      }));
+    }
+  }
+
+  // Send input at ~30fps
+  setInterval(sendInput, 33);
+
   // --- Rendering ---
   function draw() {
     requestAnimationFrame(draw);
@@ -335,9 +371,11 @@
       ctx.arc(wx(m.x), wy(m.y), m.r * sx, 0, Math.PI * 2);
       ctx.fill();
 
+      // HP bar background
       ctx.fillStyle = "rgba(0,0,0,0.35)";
       ctx.fillRect(wx(m.x - m.r), wy(m.y - m.r - 10), (m.r * 2) * sx, 6);
 
+      // HP bar fill
       ctx.fillStyle = "rgba(255,255,255,0.75)";
       const frac = Math.max(0, Math.min(1, m.hp / 6));
       ctx.fillRect(wx(m.x - m.r), wy(m.y - m.r - 10), (m.r * 2) * sx * frac, 6);
@@ -368,5 +406,62 @@
       ];
 
       for (const t of positions) {
-        if (t.kind === "main") ctx.fillStyle = "rgba(124,92,255,0.9)";
-        else if (t.kind === "mini") ctx.fillStyle = "rgba(124,9
+        if (t.kind === "main") {
+          ctx.fillStyle = "rgba(124,92,255,0.9)";
+        } else if (t.kind === "mini") {
+          ctx.fillStyle = "rgba(124,92,255,0.7)";
+        } else {
+          ctx.fillStyle = "rgba(60,60,80,0.5)";
+        }
+
+        // Turret base
+        const baseW = t.kind === "main" ? 28 : 18;
+        const baseH = t.kind === "main" ? 18 : 12;
+        ctx.fillRect(wx(t.x) - baseW * sx / 2, wy(t.y) - baseH * sy, baseW * sx, baseH * sy);
+
+        // Turret barrel (only for main and mini)
+        if (t.kind !== "slot") {
+          const barrelLen = t.kind === "main" ? 30 : 20;
+          const barrelW = t.kind === "main" ? 6 : 4;
+          const angle = t.kind === "main" ? (p.turretAngle || -Math.PI / 2) : -Math.PI / 2;
+
+          ctx.save();
+          ctx.translate(wx(t.x), wy(t.y) - baseH * sy / 2);
+          ctx.rotate(angle + Math.PI / 2);
+          ctx.fillStyle = t.kind === "main" ? "rgba(180,160,255,0.95)" : "rgba(140,120,200,0.85)";
+          ctx.fillRect(-barrelW * sx / 2, 0, barrelW * sx, -barrelLen * sy);
+          ctx.restore();
+        }
+      }
+
+      // Player name label
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.font = "12px system-ui";
+      ctx.textAlign = "center";
+      ctx.fillText(p.name || `P${p.slot + 1}`, wx(cx), wy(560) + 16);
+      ctx.textAlign = "left";
+    }
+
+    // Draw aim line for local player
+    if (phase === "playing" && mySlot >= 0) {
+      const segX0 = mySlot * world.segmentWidth;
+      const cx = segX0 + world.segmentWidth / 2;
+      
+      ctx.strokeStyle = "rgba(124,92,255,0.3)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath();
+      ctx.moveTo(wx(cx), wy(560 - 18));
+      ctx.lineTo(wx(mouseXWorld), wy(120));
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
+  // Start render loop
+  draw();
+
+  // Auto-connect on page load
+  connect(initial);
+
+})();
