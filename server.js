@@ -1,5 +1,5 @@
-// server.js (Node + Express + ws)
-// Authoritative simulation: server owns missiles/bullets/waves/upgrades.
+// server.js - Rogue Asteroid
+// Authoritative game server with ready system
 
 const express = require("express");
 const http = require("http");
@@ -17,19 +17,18 @@ const SEGMENT_W = 360;
 
 const BASE_HP_PER_PLAYER = 5;
 
-const BULLET_R = 4;
-const BULLET_SPEED = 650;
-const BULLET_COOLDOWN = 0.20;
+const BULLET_R = 2.5;
+const BULLET_SPEED = 700;
+const BULLET_COOLDOWN = 0.18;
 const BULLET_DAMAGE = 1;
 
-const MISSILE_R_MIN = 12;
-const MISSILE_R_MAX = 22;
+const ASTEROID_R_MIN = 8;
+const ASTEROID_R_MAX = 16;
 
-const WAVE_BASE_COUNT = 6;
+const WAVE_BASE_COUNT = 5;
 const WAVE_COUNT_SCALE = 3;
 
-// Shooting angle limits (160 degrees = ±80 from vertical)
-const MAX_AIM_ANGLE = (80 * Math.PI) / 180; // radians from vertical
+const MAX_AIM_ANGLE = (80 * Math.PI) / 180;
 
 // ===== Server state =====
 const app = express();
@@ -47,11 +46,13 @@ let phase = "lobby";
 let lockedSlots = null;
 let worldW = SEGMENT_W;
 let baseHp = BASE_HP_PER_PLAYER;
+let maxBaseHp = BASE_HP_PER_PLAYER;
 let wave = 0;
 
 let missiles = [];
 let bullets = [];
-let particles = []; // For explosion effects
+let particles = [];
+let damageNumbers = [];
 
 let upgradePicks = new Map();
 
@@ -83,6 +84,7 @@ function recomputeWorld() {
   const count = Math.max(1, Math.min(MAX_PLAYERS, ids.length));
   worldW = SEGMENT_W * count;
   baseHp = BASE_HP_PER_PLAYER * count;
+  maxBaseHp = baseHp;
 }
 
 function slotForPlayer(id) {
@@ -99,54 +101,49 @@ function segmentBounds(slot) {
 function turretPositions(slot) {
   const { x0 } = segmentBounds(slot);
   const cx = x0 + SEGMENT_W / 2;
-  const offset = SEGMENT_W * 0.22;
+  const offset = SEGMENT_W * 0.20;
   return {
     main: { x: cx, y: GROUND_Y },
     miniL1: { x: cx - offset, y: GROUND_Y },
-    miniL2: { x: cx - offset * 2, y: GROUND_Y },
     miniR1: { x: cx + offset, y: GROUND_Y },
-    miniR2: { x: cx + offset * 2, y: GROUND_Y },
   };
 }
 
 function lobbySnapshot() {
   const list = Array.from(players.values())
     .sort((a, b) => a.slot - b.slot)
-    .map((p) => ({ id: p.id, slot: p.slot, name: p.name || `P${p.slot + 1}` }));
-  return { players: list, hostId };
+    .map((p) => ({ 
+      id: p.id, 
+      slot: p.slot, 
+      name: p.name || `Player ${p.slot + 1}`,
+      ready: !!p.ready
+    }));
+  const allReady = list.length > 0 && list.every(p => p.ready);
+  return { players: list, hostId, allReady };
 }
 
-// ===== Expanded Roguelike Upgrade System =====
+// ===== Roguelike Upgrades =====
 const UPGRADE_POOL = [
-  // Offensive upgrades
-  { key: "firerate", title: "Rapid Fire", desc: "Fire 20% faster", category: "offensive", icon: "⚡" },
-  { key: "bulletspeed", title: "Velocity Rounds", desc: "Bullets travel 15% faster", category: "offensive", icon: "💨" },
-  { key: "damage", title: "Piercing Shots", desc: "Bullets deal +1 damage", category: "offensive", icon: "💥" },
-  { key: "multishot", title: "Split Shot", desc: "Fire 2 bullets in a spread", category: "offensive", icon: "🔱" },
-  { key: "explosive", title: "Explosive Rounds", desc: "Bullets explode on impact (small AoE)", category: "offensive", icon: "💣" },
-  { key: "critchance", title: "Critical Strike", desc: "15% chance to deal 3x damage", category: "offensive", icon: "🎯" },
-  
-  // Turret upgrades
-  { key: "mini_left", title: "Left Drone", desc: "Deploy auto-turret on left", category: "turret", icon: "🤖" },
-  { key: "mini_right", title: "Right Drone", desc: "Deploy auto-turret on right", category: "turret", icon: "🤖" },
-  { key: "range", title: "Extended Range", desc: "Can shoot into neighboring zones", category: "turret", icon: "📡" },
-  
-  // Defensive upgrades
-  { key: "shield", title: "Energy Shield", desc: "Block 1 asteroid per wave", category: "defensive", icon: "🛡️" },
-  { key: "slowfield", title: "Gravity Well", desc: "Asteroids in your zone move 20% slower", category: "defensive", icon: "🌀" },
-  
-  // Utility upgrades
-  { key: "magnet", title: "Bullet Magnet", desc: "Bullets slightly curve toward asteroids", category: "utility", icon: "🧲" },
-  { key: "chain", title: "Chain Lightning", desc: "Hits can arc to nearby asteroids", category: "utility", icon: "⚡" },
+  { key: "firerate", title: "Rapid Fire", desc: "Fire 25% faster", category: "offense", icon: "⚡" },
+  { key: "bulletspeed", title: "Hypervelocity", desc: "Bullets 20% faster", category: "offense", icon: "💨" },
+  { key: "damage", title: "Armor Piercing", desc: "+1 bullet damage", category: "offense", icon: "💥" },
+  { key: "multishot", title: "Twin Cannons", desc: "Fire 2 bullets", category: "offense", icon: "⚔️" },
+  { key: "explosive", title: "Blast Radius", desc: "Bullets explode", category: "offense", icon: "💣" },
+  { key: "critchance", title: "Lucky Shot", desc: "20% crit chance", category: "offense", icon: "🎯" },
+  { key: "mini_left", title: "Left Turret", desc: "Auto-turret left", category: "turret", icon: "🔧" },
+  { key: "mini_right", title: "Right Turret", desc: "Auto-turret right", category: "turret", icon: "🔧" },
+  { key: "range", title: "Long Range", desc: "Shoot neighbors", category: "turret", icon: "📡" },
+  { key: "shield", title: "Shield", desc: "Block 1 hit/wave", category: "defense", icon: "🛡️" },
+  { key: "slowfield", title: "Gravity Field", desc: "Slow asteroids 25%", category: "defense", icon: "🌀" },
+  { key: "magnet", title: "Homing Bullets", desc: "Bullets track", category: "utility", icon: "🧲" },
+  { key: "chain", title: "Chain Damage", desc: "Hits spread", category: "utility", icon: "⛓️" },
 ];
 
 function makeUpgradeOptions(player) {
-  // Filter out upgrades player already has (for one-time upgrades)
   const owned = player.upgrades || {};
   const pool = UPGRADE_POOL.filter(u => {
     if (u.key === "mini_left" && owned.miniLeft) return false;
     if (u.key === "mini_right" && owned.miniRight) return false;
-    if (u.key === "shield" && owned.shield) return false;
     if (u.key === "range" && owned.range) return false;
     if (u.key === "slowfield" && owned.slowfield) return false;
     if (u.key === "magnet" && owned.magnet) return false;
@@ -168,46 +165,19 @@ function applyUpgrade(player, key) {
   const u = player.upgrades;
   
   switch (key) {
-    case "firerate":
-      u.fireRateMult = (u.fireRateMult ?? 1) * 1.20;
-      break;
-    case "bulletspeed":
-      u.bulletSpeedMult = (u.bulletSpeedMult ?? 1) * 1.15;
-      break;
-    case "damage":
-      u.damageAdd = (u.damageAdd ?? 0) + 1;
-      break;
-    case "multishot":
-      u.multishot = (u.multishot ?? 1) + 1;
-      break;
-    case "explosive":
-      u.explosive = (u.explosive ?? 0) + 1;
-      break;
-    case "critchance":
-      u.critChance = Math.min(0.6, (u.critChance ?? 0) + 0.15);
-      break;
-    case "mini_left":
-      u.miniLeft = true;
-      break;
-    case "mini_right":
-      u.miniRight = true;
-      break;
-    case "range":
-      u.range = true;
-      break;
-    case "shield":
-      u.shield = (u.shield ?? 0) + 1;
-      u.shieldActive = (u.shieldActive ?? 0) + 1;
-      break;
-    case "slowfield":
-      u.slowfield = true;
-      break;
-    case "magnet":
-      u.magnet = true;
-      break;
-    case "chain":
-      u.chain = true;
-      break;
+    case "firerate": u.fireRateMult = (u.fireRateMult ?? 1) * 1.25; break;
+    case "bulletspeed": u.bulletSpeedMult = (u.bulletSpeedMult ?? 1) * 1.20; break;
+    case "damage": u.damageAdd = (u.damageAdd ?? 0) + 1; break;
+    case "multishot": u.multishot = (u.multishot ?? 1) + 1; break;
+    case "explosive": u.explosive = (u.explosive ?? 0) + 1; break;
+    case "critchance": u.critChance = Math.min(0.6, (u.critChance ?? 0) + 0.20); break;
+    case "mini_left": u.miniLeft = true; break;
+    case "mini_right": u.miniRight = true; break;
+    case "range": u.range = true; break;
+    case "shield": u.shield = (u.shield ?? 0) + 1; u.shieldActive = (u.shieldActive ?? 0) + 1; break;
+    case "slowfield": u.slowfield = true; break;
+    case "magnet": u.magnet = true; break;
+    case "chain": u.chain = true; break;
   }
 }
 
@@ -216,8 +186,8 @@ function spawnWave() {
   missiles = [];
   bullets = [];
   particles = [];
+  damageNumbers = [];
 
-  // Reset shields for the wave
   for (const id of lockedSlots) {
     const p = players.get(id);
     if (p && p.upgrades?.shield) {
@@ -227,34 +197,40 @@ function spawnWave() {
 
   const count = WAVE_BASE_COUNT + wave * WAVE_COUNT_SCALE;
   for (let i = 0; i < count; i++) {
-    const r = rand(MISSILE_R_MIN, MISSILE_R_MAX);
-    const x = rand(r, worldW - r);
-    const y = rand(-WORLD_H * 0.9, -r);
+    const r = rand(ASTEROID_R_MIN, ASTEROID_R_MAX);
+    const x = rand(r + 20, worldW - r - 20);
+    const y = rand(-WORLD_H * 0.8, -r - 50);
 
-    const vx = rand(-25 - wave * 2, 25 + wave * 2);
-    const vy = rand(60 + wave * 6, 100 + wave * 8);
+    const vx = rand(-20 - wave * 1.5, 20 + wave * 1.5);
+    const vy = rand(50 + wave * 5, 90 + wave * 7);
 
-    // Asteroid types based on size
-    const type = r > 18 ? "large" : r > 14 ? "medium" : "small";
-    const baseHp = type === "large" ? 4 : type === "medium" ? 2 : 1;
+    const type = r > 14 ? "large" : r > 10 ? "medium" : "small";
+    const baseHpVal = type === "large" ? 4 : type === "medium" ? 2 : 1;
 
     missiles.push({
       id: uid(),
-      x,
-      y,
-      vx,
-      vy,
-      r,
-      type,
-      hp: baseHp + Math.floor(wave / 2),
-      maxHp: baseHp + Math.floor(wave / 2),
+      x, y, vx, vy, r, type,
+      hp: baseHpVal + Math.floor(wave / 3),
+      maxHp: baseHpVal + Math.floor(wave / 3),
       rotation: rand(0, Math.PI * 2),
-      rotSpeed: rand(-2, 2),
+      rotSpeed: rand(-3, 3),
+      vertices: generateAsteroidShape(r),
     });
   }
 }
 
-// ===== Game phase controls =====
+function generateAsteroidShape(baseRadius) {
+  const points = [];
+  const numPoints = 10 + Math.floor(Math.random() * 4);
+  for (let i = 0; i < numPoints; i++) {
+    const angle = (i / numPoints) * Math.PI * 2;
+    const variance = 0.6 + Math.random() * 0.4;
+    points.push({ angle, dist: variance });
+  }
+  return points;
+}
+
+// ===== Game phases =====
 function startGame() {
   if (phase !== "lobby") return;
 
@@ -267,6 +243,7 @@ function startGame() {
   phase = "playing";
   wave = 1;
   baseHp = BASE_HP_PER_PLAYER * lockedSlots.length;
+  maxBaseHp = baseHp;
 
   upgradePicks = new Map();
   for (const id of lockedSlots) {
@@ -280,6 +257,7 @@ function startGame() {
       p.miniCooldownL = 0;
       p.miniCooldownR = 0;
       p.score = 0;
+      p.ready = false;
     }
   }
 
@@ -298,6 +276,8 @@ function beginUpgradePhase() {
     upgradePicks.set(id, { options, pickedKey: null });
     safeSend(p.ws, { t: "upgrade", options });
   }
+  
+  broadcast({ t: "upgradePhase" });
 }
 
 function maybeEndUpgradePhase() {
@@ -318,11 +298,15 @@ function resetToLobby() {
   missiles = [];
   bullets = [];
   particles = [];
+  damageNumbers = [];
   upgradePicks = new Map();
   wave = 0;
 
   const arr = Array.from(players.values()).sort((a, b) => a.slot - b.slot);
-  arr.forEach((p, i) => (p.slot = i));
+  arr.forEach((p, i) => {
+    p.slot = i;
+    p.ready = false;
+  });
 
   hostId = players.size ? Array.from(players.keys())[0] : null;
   recomputeWorld();
@@ -332,17 +316,16 @@ function resetToLobby() {
 function endGame() {
   phase = "gameover";
   
-  // Calculate scores
   const scores = lockedSlots.map(id => {
     const p = players.get(id);
-    return { id, name: p?.name || "???", score: p?.score || 0 };
+    return { id, name: p?.name || "???", score: p?.score || 0, slot: p?.slot || 0 };
   }).sort((a, b) => b.score - a.score);
   
   broadcast({ t: "gameOver", wave, scores });
 
   setTimeout(() => {
     if (phase === "gameover") resetToLobby();
-  }, 5000);
+  }, 6000);
 }
 
 // ===== Simulation =====
@@ -356,7 +339,6 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0) 
   let dy = targetY - originY;
   let len = Math.hypot(dx, dy) || 1;
   
-  // Apply angle offset for multishot
   if (angleOffset !== 0) {
     const angle = Math.atan2(dy, dx) + angleOffset;
     dx = Math.cos(angle) * len;
@@ -369,17 +351,16 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0) 
   bullets.push({
     id: uid(),
     ownerId: owner.id,
+    ownerSlot: owner.slot,
     x: originX,
-    y: originY - 8,
-    vx,
-    vy,
+    y: originY - 6,
+    vx, vy,
     r: BULLET_R,
     dmg: finalDmg,
     isCrit,
     explosive: owner.upgrades?.explosive ?? 0,
     magnet: !!owner.upgrades?.magnet,
     chain: !!owner.upgrades?.chain,
-    color: isCrit ? "#ff0" : "#0ff",
   });
 }
 
@@ -388,7 +369,7 @@ function fireWithMultishot(owner, originX, originY, targetX, targetY) {
   if (shots === 1) {
     fireBullet(owner, originX, originY, targetX, targetY);
   } else {
-    const spread = 0.15; // radians between shots
+    const spread = 0.12;
     const startOffset = -((shots - 1) / 2) * spread;
     for (let i = 0; i < shots; i++) {
       fireBullet(owner, originX, originY, targetX, targetY, startOffset + i * spread);
@@ -405,9 +386,8 @@ function findBestTarget(x0, x1, turretX, turretY, canExtend) {
   
   for (const m of missiles) {
     if (m.x < searchX0 || m.x > searchX1) continue;
-    if (m.y < 0) continue; // Skip missiles not yet on screen
+    if (m.y < 0) continue;
     
-    // Prioritize by: closeness to ground (danger), then distance to turret
     const danger = m.y / GROUND_Y;
     const dist = Math.hypot(m.x - turretX, m.y - turretY);
     const score = danger * 1000 - dist * 0.1;
@@ -425,12 +405,10 @@ function clampAimAngle(turretX, turretY, targetX, targetY) {
   const dy = targetY - turretY;
   let angle = Math.atan2(dy, dx);
   
-  // Vertical is -PI/2, so we measure from that
   const fromVertical = angle - (-Math.PI / 2);
   const clampedFromVertical = clamp(fromVertical, -MAX_AIM_ANGLE, MAX_AIM_ANGLE);
   const clampedAngle = -Math.PI / 2 + clampedFromVertical;
   
-  // Return clamped target position
   const dist = Math.hypot(dx, dy);
   return {
     x: turretX + Math.cos(clampedAngle) * dist,
@@ -439,28 +417,29 @@ function clampAimAngle(turretX, turretY, targetX, targetY) {
   };
 }
 
-function createExplosion(x, y, radius) {
-  for (let i = 0; i < 8; i++) {
-    const angle = (i / 8) * Math.PI * 2;
+function createExplosion(x, y, radius, color) {
+  for (let i = 0; i < 6; i++) {
+    const angle = (i / 6) * Math.PI * 2 + Math.random() * 0.5;
     particles.push({
-      x,
-      y,
-      vx: Math.cos(angle) * 100,
-      vy: Math.sin(angle) * 100,
-      life: 0.5,
-      color: "#f80",
+      x, y,
+      vx: Math.cos(angle) * rand(60, 120),
+      vy: Math.sin(angle) * rand(60, 120),
+      life: rand(0.3, 0.5),
+      maxLife: 0.5,
+      color: color || "#f80",
+      size: rand(2, 4),
     });
   }
-  
-  // Damage nearby missiles
-  for (const m of missiles) {
-    if (m.dead) continue;
-    const dist = Math.hypot(m.x - x, m.y - y);
-    if (dist < radius + m.r) {
-      m.hp -= 1;
-      if (m.hp <= 0) m.dead = true;
-    }
-  }
+}
+
+function addDamageNumber(x, y, amount, isCrit) {
+  damageNumbers.push({
+    x, y,
+    amount,
+    isCrit,
+    life: 1.0,
+    vy: -60,
+  });
 }
 
 function tick() {
@@ -471,7 +450,16 @@ function tick() {
     p.x += p.vx * DT;
     p.y += p.vy * DT;
     p.life -= DT;
+    p.vx *= 0.95;
+    p.vy *= 0.95;
     return p.life > 0;
+  });
+
+  // Update damage numbers
+  damageNumbers = damageNumbers.filter(d => {
+    d.y += d.vy * DT;
+    d.life -= DT * 1.5;
+    return d.life > 0;
   });
 
   // Players & shooting
@@ -490,15 +478,12 @@ function tick() {
 
     const baseCooldown = BULLET_COOLDOWN / (p.upgrades?.fireRateMult ?? 1);
 
-    // Determine target - manual aim or auto-target
     let targetX, targetY;
     
     if (p.manualShooting) {
-      // Manual aiming - use player's aim position
       targetX = x0 + clamp(p.aimX ?? 0.5, 0, 1) * SEGMENT_W;
-      targetY = 50; // Aim toward top
+      targetY = 50;
     } else {
-      // Auto-targeting - find best target
       const target = findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend);
       if (target) {
         targetX = target.x;
@@ -509,11 +494,9 @@ function tick() {
       }
     }
 
-    // Clamp aim angle to 160 degrees
     const clamped = clampAimAngle(pos.main.x, pos.main.y, targetX, targetY);
     p.turretAngle = clamped.angle;
 
-    // Fire main turret (auto-fire always, or manual when clicking)
     const shouldFire = p.manualShooting || findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend);
     
     if (shouldFire && p.cooldown <= 0) {
@@ -521,16 +504,15 @@ function tick() {
       fireWithMultishot(p, pos.main.x, pos.main.y, clamped.x, clamped.y);
     }
 
-    // Mini turrets auto-fire at nearest target in segment
     const autoTarget = findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend);
     if (autoTarget) {
       if (p.upgrades?.miniLeft && p.miniCooldownL <= 0) {
-        p.miniCooldownL = baseCooldown * 0.9;
+        p.miniCooldownL = baseCooldown * 0.85;
         const miniClamped = clampAimAngle(pos.miniL1.x, pos.miniL1.y, autoTarget.x, autoTarget.y);
         fireBullet(p, pos.miniL1.x, pos.miniL1.y, miniClamped.x, miniClamped.y);
       }
       if (p.upgrades?.miniRight && p.miniCooldownR <= 0) {
-        p.miniCooldownR = baseCooldown * 0.9;
+        p.miniCooldownR = baseCooldown * 0.85;
         const miniClamped = clampAimAngle(pos.miniR1.x, pos.miniR1.y, autoTarget.x, autoTarget.y);
         fireBullet(p, pos.miniR1.x, pos.miniR1.y, miniClamped.x, miniClamped.y);
       }
@@ -539,14 +521,13 @@ function tick() {
 
   // Missiles
   for (const m of missiles) {
-    // Check for slow field effect
     let speedMult = 1;
     for (const id of lockedSlots) {
       const p = players.get(id);
       if (!p?.upgrades?.slowfield) continue;
       const { x0, x1 } = segmentBounds(p.slot);
       if (m.x >= x0 && m.x <= x1) {
-        speedMult = 0.8;
+        speedMult = 0.75;
         break;
       }
     }
@@ -555,17 +536,10 @@ function tick() {
     m.y += m.vy * DT * speedMult;
     m.rotation += m.rotSpeed * DT;
 
-    if (m.x - m.r < 0) {
-      m.x = m.r;
-      m.vx = Math.abs(m.vx);
-    }
-    if (m.x + m.r > worldW) {
-      m.x = worldW - m.r;
-      m.vx = -Math.abs(m.vx);
-    }
+    if (m.x - m.r < 0) { m.x = m.r; m.vx = Math.abs(m.vx); }
+    if (m.x + m.r > worldW) { m.x = worldW - m.r; m.vx = -Math.abs(m.vx); }
 
     if (m.y + m.r >= GROUND_Y) {
-      // Check for shield
       let blocked = false;
       for (const id of lockedSlots) {
         const p = players.get(id);
@@ -574,17 +548,7 @@ function tick() {
         if (m.x >= x0 && m.x <= x1 && p.upgrades.shieldActive > 0) {
           p.upgrades.shieldActive--;
           blocked = true;
-          // Create shield effect
-          for (let i = 0; i < 12; i++) {
-            particles.push({
-              x: m.x,
-              y: GROUND_Y,
-              vx: rand(-80, 80),
-              vy: rand(-150, -50),
-              life: 0.6,
-              color: "#0ff",
-            });
-          }
+          createExplosion(m.x, GROUND_Y - 5, 30, "#0ff");
           break;
         }
       }
@@ -592,27 +556,16 @@ function tick() {
       m.dead = true;
       if (!blocked) {
         baseHp -= 1;
-        // Impact particles
-        for (let i = 0; i < 6; i++) {
-          particles.push({
-            x: m.x,
-            y: GROUND_Y,
-            vx: rand(-60, 60),
-            vy: rand(-100, -30),
-            life: 0.4,
-            color: "#f55",
-          });
-        }
+        createExplosion(m.x, GROUND_Y - 5, 40, "#f44");
       }
     }
   }
 
-  // Bullets with magnet effect
+  // Bullets with magnet
   for (const b of bullets) {
     if (b.magnet) {
-      // Find nearest missile and curve toward it slightly
       let nearest = null;
-      let nearestDist = 200;
+      let nearestDist = 150;
       for (const m of missiles) {
         if (m.dead) continue;
         const d = Math.hypot(m.x - b.x, m.y - b.y);
@@ -625,9 +578,8 @@ function tick() {
         const dx = nearest.x - b.x;
         const dy = nearest.y - b.y;
         const len = Math.hypot(dx, dy) || 1;
-        b.vx += (dx / len) * 400 * DT;
-        b.vy += (dy / len) * 400 * DT;
-        // Renormalize speed
+        b.vx += (dx / len) * 500 * DT;
+        b.vy += (dy / len) * 500 * DT;
         const speed = Math.hypot(b.vx, b.vy);
         const targetSpeed = BULLET_SPEED * 1.1;
         b.vx = (b.vx / speed) * targetSpeed;
@@ -653,65 +605,51 @@ function tick() {
         m.hp -= b.dmg;
         b.dead = true;
         
-        // Score for owner
+        addDamageNumber(m.x, m.y - m.r, b.dmg, b.isCrit);
+        
         const owner = players.get(b.ownerId);
         if (owner) {
           owner.score = (owner.score || 0) + b.dmg * 10;
-          if (m.hp <= 0) owner.score += 50; // Kill bonus
+          if (m.hp <= 0) owner.score += 50;
         }
         
-        // Explosion effect
         if (b.explosive > 0) {
-          createExplosion(b.x, b.y, 40 + b.explosive * 15);
-        }
-        
-        // Chain lightning
-        if (b.chain && m.hp <= 0) {
+          createExplosion(b.x, b.y, 35, "#fa0");
           for (const m2 of missiles) {
             if (m2.dead || m2 === m) continue;
-            const d = Math.hypot(m2.x - m.x, m2.y - m.y);
-            if (d < 80) {
+            const d = Math.hypot(m2.x - b.x, m2.y - b.y);
+            if (d < 35 + m2.r) {
               m2.hp -= 1;
               if (m2.hp <= 0) m2.dead = true;
-              // Chain visual
-              particles.push({
-                x: m.x,
-                y: m.y,
-                vx: (m2.x - m.x) * 2,
-                vy: (m2.y - m.y) * 2,
-                life: 0.15,
-                color: "#ff0",
-              });
-              break; // Only chain once
             }
           }
         }
         
-        // Hit particles
-        for (let i = 0; i < 4; i++) {
-          particles.push({
-            x: b.x,
-            y: b.y,
-            vx: rand(-50, 50),
-            vy: rand(-50, 50),
-            life: 0.3,
-            color: b.isCrit ? "#ff0" : "#0ff",
-          });
+        if (b.chain && m.hp <= 0) {
+          for (const m2 of missiles) {
+            if (m2.dead || m2 === m) continue;
+            const d = Math.hypot(m2.x - m.x, m2.y - m.y);
+            if (d < 70) {
+              m2.hp -= 1;
+              addDamageNumber(m2.x, m2.y - m2.r, 1, false);
+              if (m2.hp <= 0) m2.dead = true;
+              particles.push({
+                x: m.x, y: m.y,
+                vx: (m2.x - m.x) * 3,
+                vy: (m2.y - m.y) * 3,
+                life: 0.12, maxLife: 0.12,
+                color: "#ff0", size: 2,
+              });
+              break;
+            }
+          }
         }
+        
+        createExplosion(b.x, b.y, 15, b.isCrit ? "#ff0" : "#0ff");
         
         if (m.hp <= 0) {
           m.dead = true;
-          // Death explosion
-          for (let i = 0; i < 8; i++) {
-            particles.push({
-              x: m.x,
-              y: m.y,
-              vx: rand(-80, 80),
-              vy: rand(-80, 80),
-              life: 0.5,
-              color: "#fa0",
-            });
-          }
+          createExplosion(m.x, m.y, 25, "#fa0");
         }
         break;
       }
@@ -737,38 +675,30 @@ function tick() {
     wave,
     world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
     baseHp,
-    maxBaseHp: BASE_HP_PER_PLAYER * lockedSlots.length,
+    maxBaseHp,
     missiles: missiles.map((m) => ({
-      id: m.id,
-      x: m.x,
-      y: m.y,
-      r: m.r,
-      hp: m.hp,
-      maxHp: m.maxHp,
-      type: m.type,
-      rotation: m.rotation,
+      id: m.id, x: m.x, y: m.y, r: m.r,
+      hp: m.hp, maxHp: m.maxHp, type: m.type,
+      rotation: m.rotation, vertices: m.vertices,
     })),
     bullets: bullets.map((b) => ({
-      id: b.id,
-      x: b.x,
-      y: b.y,
-      r: b.r,
-      color: b.color,
-      isCrit: b.isCrit,
+      id: b.id, x: b.x, y: b.y, r: b.r,
+      vx: b.vx, vy: b.vy,
+      slot: b.ownerSlot, isCrit: b.isCrit,
     })),
     particles: particles.map((p) => ({
-      x: p.x,
-      y: p.y,
-      life: p.life,
-      color: p.color,
+      x: p.x, y: p.y, life: p.life, maxLife: p.maxLife,
+      color: p.color, size: p.size,
+    })),
+    damageNumbers: damageNumbers.map((d) => ({
+      x: d.x, y: d.y, amount: d.amount, isCrit: d.isCrit, life: d.life,
     })),
     players: lockedSlots.map((id) => {
       const p = players.get(id);
       if (!p) return { id, slot: -1 };
       return {
-        id: p.id,
-        slot: p.slot,
-        name: p.name || `P${p.slot + 1}`,
+        id: p.id, slot: p.slot,
+        name: p.name || `Player ${p.slot + 1}`,
         score: p.score || 0,
         turretAngle: p.turretAngle || -Math.PI / 2,
         isManual: !!p.manualShooting,
@@ -792,33 +722,31 @@ function assignSlot() {
 }
 
 wss.on("connection", (ws) => {
-  if (phase === "gameover") {
-    resetToLobby();
-  }
+  if (phase === "gameover") resetToLobby();
+  
   if (phase !== "lobby") {
-    safeSend(ws, { t: "reject", reason: "Game already running." });
+    safeSend(ws, { t: "reject", reason: "Game in progress" });
     ws.close();
     return;
   }
 
   const slot = assignSlot();
   if (slot < 0) {
-    safeSend(ws, { t: "reject", reason: "Lobby is full (max 4)." });
+    safeSend(ws, { t: "reject", reason: "Game full (max 4)" });
     ws.close();
     return;
   }
 
   const id = uid();
   const player = {
-    id,
-    ws,
-    slot,
-    name: `P${slot + 1}`,
+    id, ws, slot,
+    name: `Player ${slot + 1}`,
     aimX: 0.5,
     manualShooting: false,
     upgrades: {},
     cooldown: 0,
     score: 0,
+    ready: false,
   };
 
   players.set(id, player);
@@ -828,8 +756,7 @@ wss.on("connection", (ws) => {
 
   safeSend(ws, {
     t: "welcome",
-    id,
-    slot,
+    id, slot,
     isHost: id === hostId,
     world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
     phase,
@@ -839,24 +766,29 @@ wss.on("connection", (ws) => {
 
   ws.on("message", (data) => {
     let msg;
-    try {
-      msg = JSON.parse(data.toString());
-    } catch {
-      return;
-    }
+    try { msg = JSON.parse(data.toString()); } catch { return; }
 
     const p = players.get(id);
     if (!p) return;
 
-    if (msg.t === "hello") {
+    if (msg.t === "setName") {
       const nm = (msg.name || "").toString().slice(0, 16).trim();
       if (nm) p.name = nm;
       broadcast({ t: "lobby", ...lobbySnapshot() });
       return;
     }
 
+    if (msg.t === "ready" && phase === "lobby") {
+      p.ready = !p.ready;
+      broadcast({ t: "lobby", ...lobbySnapshot() });
+      return;
+    }
+
     if (msg.t === "start") {
-      if (id === hostId && phase === "lobby") startGame();
+      if (id === hostId && phase === "lobby") {
+        const snap = lobbySnapshot();
+        if (snap.allReady) startGame();
+      }
       return;
     }
 
@@ -876,6 +808,17 @@ wss.on("connection", (ws) => {
       pickObj.pickedKey = pickKey;
       applyUpgrade(p, pickKey);
       safeSend(p.ws, { t: "picked", key: pickKey });
+      
+      const waiting = [];
+      for (const pid of lockedSlots) {
+        const po = upgradePicks.get(pid);
+        if (!po || !po.pickedKey) {
+          const pl = players.get(pid);
+          if (pl) waiting.push(pl.name);
+        }
+      }
+      broadcast({ t: "upgradeWaiting", waiting });
+      
       maybeEndUpgradePhase();
       return;
     }
@@ -896,6 +839,5 @@ setInterval(() => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`WebSocket on ws://localhost:${PORT}/ws`);
+  console.log(`Rogue Asteroid server: http://localhost:${PORT}`);
 });
