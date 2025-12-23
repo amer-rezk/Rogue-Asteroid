@@ -3,32 +3,47 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Missile Turrets (Multiplayer)</title>
+  <title>Rogue Asteroid (Multiplayer)</title>
   <link rel="stylesheet" href="./style.css" />
+
+  <!-- Prevent favicon 404 noise -->
+  <link rel="icon" href="data:,">
 </head>
 <body>
   <div id="ui">
     <div class="row">
-      <div class="title">Missile Turrets (1–4p)</div>
+      <div class="title">Rogue Asteroid (1–4p)</div>
       <div class="status" id="status">Connecting…</div>
     </div>
 
     <div class="panel">
       <div class="row" style="gap:10px; flex-wrap:wrap;">
         <label class="label">Server:</label>
-        <input id="serverUrl" class="input" placeholder="ws(s)://your-server.com/ws" />
+
+        <!-- Prefilled with your Render WebSocket endpoint -->
+        <input
+          id="serverUrl"
+          class="input"
+          value="wss://rogue-asteroid.onrender.com/ws"
+          placeholder="wss://rogue-asteroid.onrender.com/ws"
+        />
+
         <button id="connectBtn" class="btn">Connect</button>
       </div>
-      <div class="hint">Tip: On GitHub Pages you must set this to your deployed server, e.g. <code>wss://YOUR-SERVER/ws</code>.</div>
+
+      <div class="hint">
+        If this page is hosted on GitHub Pages (HTTPS), the server must use <code>wss://</code>.
+      </div>
     </div>
 
     <div class="panel">
       <div class="row" style="gap:10px; flex-wrap:wrap;">
         <label class="label">Name:</label>
-        <input id="name" class="input" maxlength="16" />
+        <input id="name" class="input" maxlength="16" placeholder="Player name" />
         <button id="saveName" class="btn">Save</button>
         <button id="startBtn" class="btn primary" style="margin-left:auto; display:none;">Start</button>
       </div>
+
       <div class="sub" id="lobbyInfo">Lobby…</div>
       <div id="playerList" class="list"></div>
     </div>
@@ -41,7 +56,7 @@
     <div class="panel">
       <div class="sub">Controls</div>
       <div class="hint">
-        Aim with mouse. Hold left-click to shoot. (Your turret can only aim inside your own segment.)
+        Aim with mouse. Hold left-click to shoot.
       </div>
     </div>
   </div>
