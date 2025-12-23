@@ -1,4 +1,6 @@
 (() => {
+  const HARD_DEFAULT_SERVER = "wss://rogue-asteroid.onrender.com/ws";
+
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
 
@@ -15,6 +17,10 @@
 
   const upgradePanel = document.getElementById("upgradePanel");
   const upgradeOptionsEl = document.getElementById("upgradeOptions");
+
+  function setStatus(txt) {
+    statusEl.textContent = txt;
+  }
 
   // --- URL helpers ---
   function normalizeWsUrl(input) {
@@ -34,16 +40,32 @@
     return url;
   }
 
-  function defaultServerUrl() {
+  function isGithubWs(url) {
+    try {
+      const u = new URL(url);
+      return u.hostname.endsWith("github.io");
+    } catch {
+      return false;
+    }
+  }
+
+  function chooseInitialServer() {
+    // 1) URL param wins (shareable link)
     const qs = new URLSearchParams(location.search);
     const q = qs.get("server");
-    const saved = localStorage.getItem("serverUrl");
     if (q) return normalizeWsUrl(q);
-    if (saved) return normalizeWsUrl(saved);
 
-    // Local dev fallback (works if you open http://localhost:3000 served by Node)
-    const proto = location.protocol === "https:" ? "wss://" : "ws://";
-    return normalizeWsUrl(`${proto}${location.host}`);
+    // 2) HTML prefill wins (index.html value="")
+    const fromHtml = (serverEl.value || "").trim();
+    if (fromHtml) return normalizeWsUrl(fromHtml);
+
+    // 3) localStorage (but never allow github.io)
+    const stored = (localStorage.getItem("serverUrl") || "").trim();
+    const storedNorm = stored ? normalizeWsUrl(stored) : null;
+    if (storedNorm && !isGithubWs(storedNorm)) return storedNorm;
+
+    // 4) hard default (your Render)
+    return normalizeWsUrl(HARD_DEFAULT_SERVER);
   }
 
   // --- Multiplayer state ---
@@ -64,10 +86,6 @@
   let shooting = false;
   let lastInputSend = 0;
 
-  function setStatus(txt) {
-    statusEl.textContent = txt;
-  }
-
   function connect(url) {
     const wsUrl = normalizeWsUrl(url);
     if (!wsUrl) {
@@ -75,7 +93,9 @@
       return;
     }
 
-    localStorage.setItem("serverUrl", wsUrl);
+    // Never store a github.io websocket (it will always fail)
+    if (!isGithubWs(wsUrl)) localStorage.setItem("serverUrl", wsUrl);
+
     serverEl.value = wsUrl;
 
     if (ws) {
@@ -84,6 +104,8 @@
     }
 
     setStatus("Connecting…");
+    console.log("Connecting to WS:", wsUrl);
+
     ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
@@ -92,14 +114,16 @@
       if (nm) ws.send(JSON.stringify({ t: "hello", name: nm }));
     };
 
-    ws.onclose = () => {
-      setStatus("Disconnected");
+    ws.onclose = (e) => {
+      setStatus(`Disconnected (code ${e.code})`);
       myId = null;
       isHost = false;
       startBtn.style.display = "none";
     };
 
-    ws.onerror = () => setStatus("Connection error");
+    ws.onerror = () => {
+      setStatus("Connection error (see console)");
+    };
 
     ws.onmessage = (ev) => {
       let msg;
@@ -107,6 +131,7 @@
 
       if (msg.t === "reject") {
         setStatus(`Rejected: ${msg.reason}`);
+        // server will close after reject; keep the message visible
         return;
       }
 
@@ -205,9 +230,8 @@
   }
 
   // --- UI events ---
-  // Respect the prefilled value in index.html; only fallback if it's empty
-  const preset = (serverEl.value || "").trim();
-  serverEl.value = preset ? normalizeWsUrl(preset) : defaultServerUrl();
+  const initial = chooseInitialServer();
+  serverEl.value = initial;
 
   connectBtn.onclick = () => connect(serverEl.value);
 
@@ -270,7 +294,6 @@
 
     const sx = canvas.width / world.width;
     const sy = canvas.height / world.height;
-
     const wx = (x) => x * sx;
     const wy = (y) => y * sy;
 
@@ -346,63 +369,4 @@
 
       for (const t of positions) {
         if (t.kind === "main") ctx.fillStyle = "rgba(124,92,255,0.9)";
-        else if (t.kind === "mini") ctx.fillStyle = "rgba(124,92,255,0.55)";
-        else ctx.fillStyle = "rgba(255,255,255,0.18)";
-
-        ctx.beginPath();
-        ctx.arc(wx(t.x), wy(t.y), 12, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      const angle = p.turretAngle ?? -Math.PI / 2;
-      const ox = wx(cx);
-      const oy = wy(560);
-
-      ctx.strokeStyle = "rgba(220,210,255,0.9)";
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.moveTo(ox, oy);
-      ctx.lineTo(ox + Math.cos(angle) * 26, oy + Math.sin(angle) * 26);
-      ctx.stroke();
-
-      ctx.fillStyle = "rgba(255,255,255,0.75)";
-      ctx.font = "12px system-ui";
-      ctx.fillText(p.name || "Player", wx(segX0 + 10), wy(560) + 18);
-    }
-
-    if (phase === "gameover") {
-      ctx.fillStyle = "rgba(0,0,0,0.55)";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "rgba(255,255,255,0.92)";
-      ctx.font = "22px system-ui";
-      ctx.fillText("Game Over", 20, 48);
-      ctx.font = "14px system-ui";
-      ctx.fillText("Refresh to rejoin lobby (baseline).", 20, 70);
-    }
-  }
-
-  // --- Input sending ---
-  function sendInput(ts) {
-    requestAnimationFrame(sendInput);
-
-    if (!ws || ws.readyState !== 1) return;
-    if (phase !== "playing") return;
-
-    if (ts - lastInputSend < 50) return; // 20Hz
-    lastInputSend = ts;
-
-    const segX0 = mySlot * world.segmentWidth;
-    const aimNorm = (mouseXWorld - segX0) / world.segmentWidth;
-
-    ws.send(JSON.stringify({
-      t: "input",
-      aimXNorm: Math.max(0, Math.min(1, aimNorm)),
-      shooting,
-    }));
-  }
-
-  // Start
-  connect(serverEl.value);
-  requestAnimationFrame(draw);
-  requestAnimationFrame(sendInput);
-})();
+        else if (t.kind === "mini") ctx.fillStyle = "rgba(124,9
