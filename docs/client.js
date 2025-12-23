@@ -161,6 +161,18 @@
         allReady = msg.allReady;
         isHost = msg.hostId === myId;
         updateLobbyUI();
+        // Return to menu if we were in game
+        if (phase === "playing" || phase === "upgrades" || phase === "gameover") {
+          showMenu();
+          // Reset game state
+          lastSnap = null;
+          upgradeOptions = [];
+          upgradePicked = false;
+          waitingFor = [];
+          gameOverData = null;
+          wave = 0;
+        }
+        phase = "lobby";
         break;
 
       case "started":
