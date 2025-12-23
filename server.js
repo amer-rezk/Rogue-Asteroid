@@ -19,7 +19,7 @@ const BASE_HP_PER_PLAYER = 5;
 
 const BULLET_R = 2.5;
 const BULLET_SPEED = 700;
-const BULLET_COOLDOWN = 0.18;
+const BULLET_COOLDOWN = 0.72; // 4x slower baseline
 const BULLET_DAMAGE = 1;
 
 const ASTEROID_R_MIN = 8;
@@ -201,8 +201,10 @@ function spawnWave() {
     const x = rand(r + 20, worldW - r - 20);
     const y = rand(-WORLD_H * 0.8, -r - 50);
 
-    const vx = rand(-20 - wave * 1.5, 20 + wave * 1.5);
-    const vy = rand(50 + wave * 5, 90 + wave * 7);
+    const vx = rand(-10 - wave * 0.5, 10 + wave * 0.5);
+    // Base speed reduced 50%, increases 1% per wave
+    const baseVy = rand(25, 45);
+    const vy = baseVy * (1 + wave * 0.01);
 
     const type = r > 14 ? "large" : r > 10 ? "medium" : "small";
     const baseHpVal = type === "large" ? 4 : type === "medium" ? 2 : 1;
