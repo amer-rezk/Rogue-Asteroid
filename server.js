@@ -240,9 +240,31 @@ function maybeEndUpgradePhase() {
   broadcast({ t: "wave", wave });
 }
 
+function resetToLobby() {
+  phase = "lobby";
+  lockedSlots = null;
+  missiles = [];
+  bullets = [];
+  upgradePicks = new Map();
+  wave = 0;
+
+  // reassign slots 0..n-1 for connected players
+  const arr = Array.from(players.values()).sort((a,b) => a.slot - b.slot);
+  arr.forEach((p, i) => p.slot = i);
+
+  hostId = players.size ? Array.from(players.keys())[0] : null;
+  recomputeWorld();
+  broadcast({ t: "lobby", ...lobbySnapshot() });
+}
+
 function endGame() {
   phase = "gameover";
   broadcast({ t: "gameOver", wave });
+
+  // auto-return to lobby so refresh works
+  setTimeout(() => {
+    if (phase === "gameover") resetToLobby();
+  }, 3000);
 }
 
 // ===== Simulation =====
@@ -410,11 +432,15 @@ function assignSlot() {
 }
 
 wss.on("connection", (ws) => {
-  if (phase !== "lobby") {
-    safeSend(ws, { t: "reject", reason: "Game already running. (Baseline: join only in lobby)" });
-    ws.close();
-    return;
-  }
+	if (phase === "gameover") {
+	  // treat gameover as lobby for new joins
+	  resetToLobby();
+	}
+	if (phase !== "lobby") {
+	  safeSend(ws, { t: "reject", reason: "Game already running." });
+	  ws.close();
+	  return;
+	}
 
   const slot = assignSlot();
   if (slot < 0) {
