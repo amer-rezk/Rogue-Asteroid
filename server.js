@@ -766,6 +766,27 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     players.delete(id);
     if (hostId === id) hostId = players.size ? Array.from(players.keys())[0] : null;
+    
+    // If we're in a game and all players have disconnected, reset to lobby
+    if (phase !== "lobby" && players.size === 0) {
+      console.log("All players disconnected during game, resetting to lobby");
+      resetToLobby();
+      return;
+    }
+    
+    // If we're in a game and a player from lockedSlots disconnected, check if any remain
+    if (phase !== "lobby" && lockedSlots) {
+      const remainingPlayers = lockedSlots.filter(pid => players.has(pid));
+      if (remainingPlayers.length === 0) {
+        console.log("All game players disconnected, resetting to lobby");
+        resetToLobby();
+        return;
+      }
+      // Don't broadcast lobby updates during a game - game continues
+      return;
+    }
+    
+    // Only update lobby state when actually in lobby
     recomputeWorld();
     broadcast({ t: "lobby", ...lobbySnapshot() });
   });
