@@ -295,24 +295,29 @@ function maybeEndUpgradePhase() {
 }
 
 function resetToLobby() {
-  phase = "lobby";
-  lockedSlots = null;
-  missiles = [];
-  bullets = [];
-  particles = [];
-  damageNumbers = [];
-  upgradePicks = new Map();
-  wave = 0;
+  try {
+    console.log("Resetting to lobby...");
+    phase = "lobby";
+    lockedSlots = null;
+    missiles = [];
+    bullets = [];
+    particles = [];
+    damageNumbers = [];
+    upgradePicks = new Map();
+    wave = 0;
 
-  const arr = Array.from(players.values()).sort((a, b) => a.slot - b.slot);
-  arr.forEach((p, i) => {
-    p.slot = i;
-    p.ready = false;
-  });
+    const arr = Array.from(players.values()).sort((a, b) => a.slot - b.slot);
+    arr.forEach((p, i) => {
+      p.slot = i;
+      p.ready = false;
+    });
 
-  hostId = players.size ? Array.from(players.keys())[0] : null;
-  recomputeWorld();
-  broadcast({ t: "lobby", ...lobbySnapshot() });
+    hostId = players.size ? Array.from(players.keys())[0] : null;
+    recomputeWorld();
+    broadcast({ t: "lobby", ...lobbySnapshot() });
+  } catch (err) {
+    console.error("Error in resetToLobby:", err);
+  }
 }
 
 function endGame() {
@@ -814,7 +819,7 @@ wss.on("connection", (ws) => {
     }
 
     if (msg.t === "input" && phase === "playing") {
-      // UPDATED: Receive raw X/Y coordinates
+      // Receive raw X/Y coordinates
       p.targetX = Number(msg.x) || 0;
       p.targetY = Number(msg.y) || 0;
       p.manualShooting = !!msg.shooting;
@@ -856,7 +861,7 @@ wss.on("connection", (ws) => {
 
 setInterval(() => {
   tick();
-  if (phase === "lobby") broadcast({ t: "lobby", ...lobbySnapshot() });
+  // FIXED: Removed the lobby broadcast here to prevent network spam and freezing.
 }, 1000 / TICK_RATE);
 
 const PORT = process.env.PORT || 3000;
