@@ -21,12 +21,11 @@ html, body {
   height: 100%;
   overflow: hidden;
   background: var(--dark);
-  font-family: 'Rajdhani', sans-serif; /* Tech-looking but readable */
+  font-family: 'Rajdhani', sans-serif;
   color: #fff;
   user-select: none;
 }
 
-/* Background Animation Placeholder */
 #menuScreen {
   position: fixed;
   inset: 0;
@@ -92,11 +91,10 @@ label {
   text-transform: uppercase;
 }
 
-/* Server Status Indicator */
 .server-status-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   background: rgba(0,0,0,0.3);
   padding: 12px;
   border-radius: 8px;
@@ -136,7 +134,6 @@ label {
 
 .status-text.connected { color: #fff; text-shadow: 0 0 5px #0f0; }
 
-/* Inputs */
 input[type="text"] {
   width: 100%;
   background: rgba(0,0,0,0.4);
@@ -156,7 +153,6 @@ input[type="text"]:focus {
   box-shadow: 0 0 10px var(--cyan-dim);
 }
 
-/* Player List */
 .players {
   display: flex;
   flex-direction: column;
@@ -187,7 +183,11 @@ input[type="text"]:focus {
 .player-name { font-weight: bold; font-size: 16px; }
 .player-status { font-size: 12px; opacity: 0.6; }
 
-/* Buttons */
+.button-row {
+  display: flex;
+  gap: 10px;
+}
+
 .btn {
   width: 100%;
   padding: 14px;
@@ -209,16 +209,17 @@ input[type="text"]:focus {
   box-shadow: 0 0 20px var(--cyan);
 }
 
+/* Updated Ready State for High Visibility */
 .btn.ready {
-  background: rgba(0,255,136,0.2);
-  border-color: var(--green);
-  color: var(--green);
+  background: #00ff88;
+  border-color: #00ff88;
+  color: #000;
+  box-shadow: 0 0 15px rgba(0, 255, 136, 0.5);
 }
 
 .btn.ready:hover {
-  background: var(--green);
-  color: #000;
-  box-shadow: 0 0 20px var(--green);
+  background: #00cc6a;
+  box-shadow: 0 0 25px rgba(0, 255, 136, 0.8);
 }
 
 .btn.launch {
@@ -238,7 +239,6 @@ input[type="text"]:focus {
   filter: grayscale(1);
 }
 
-/* Controls Info */
 .controls-info {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -248,21 +248,15 @@ input[type="text"]:focus {
   border-top: 1px solid rgba(255,255,255,0.1);
 }
 
-.control-item {
+.control {
   font-size: 12px;
   color: rgba(255,255,255,0.6);
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
-.key-badge {
-  background: rgba(255,255,255,0.1);
-  padding: 2px 6px;
-  border-radius: 4px;
-  border: 1px solid rgba(255,255,255,0.2);
-  font-size: 10px;
+.key {
   color: var(--cyan);
+  font-weight: bold;
+  margin-right: 5px;
 }
 
 #gameScreen {
