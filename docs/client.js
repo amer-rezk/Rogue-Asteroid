@@ -10,7 +10,7 @@
     { main: "#ffaa00", dark: "#664400", name: "ORANGE" },
   ];
 
-  // Tower Config
+  // Tower Config (must match server)
   const TOWER_TYPES = {
     0: { name: "Gatling", cost: 50, color: "#ffff00", desc: "Fast Fire" },
     1: { name: "Sniper",  cost: 120, color: "#00ff00", desc: "Long Range" },
@@ -23,7 +23,6 @@
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
   
-  // Inject Status Light HTML
   const serverSection = document.querySelector('#menuScreen .section:first-of-type');
   if (serverSection) {
     serverSection.innerHTML = `
@@ -52,7 +51,7 @@
   let isHost = false;
   let connected = false;
 
-  let phase = "menu";
+  let phase = "menu"; // menu | lobby | playing | upgrades | gameover
   let world = { width: 360, height: 600, segmentWidth: 360 };
   let wave = 0;
   let baseHp = 0;
@@ -74,7 +73,7 @@
   let forcedDisconnect = false;
 
   // Build Mode State
-  let buildMenuOpen = null;
+  let buildMenuOpen = null; // { slotIndex: 0-3, x, y }
   let hoveredBuildOption = -1;
 
   // Visual
@@ -92,7 +91,6 @@
     return `rgba(${r},${g},${b},${alpha})`;
   }
 
-  // Debounce helper for name input
   function debounce(func, wait) {
     let timeout;
     return function(...args) {
@@ -135,7 +133,6 @@
       
       lobbyEl.style.display = "block";
       
-      // Send current name immediately
       const name = nameInput.value.trim() || `Player`;
       if (name) ws.send(JSON.stringify({ t: "setName", name }));
     };
@@ -192,7 +189,6 @@
         allReady = msg.allReady;
         isHost = msg.hostId === myId;
         if (phase === "playing" || phase === "upgrades" || phase === "gameover") {
-          // Reset local state if we get kicked back to lobby
           lastSnap = null;
           upgradeOptions = [];
           upgradePicked = false;
@@ -475,12 +471,15 @@
       towers.forEach((t, i) => {
         const tx = cx + offsets[i] * sx; const ty = 560 * sy;
         if (t) {
-          const typeInfo = TOWER_TYPES[t.type]; const tColor = typeInfo?.color || "#fff"; const mbW = 16*sx; const mbH = 10*sy;
-          ctx.fillStyle = hexToRgba(tColor, 0.8); ctx.strokeStyle = tColor; ctx.lineWidth = 1.5; ctx.shadowColor = tColor; ctx.shadowBlur = 8;
-          ctx.beginPath(); ctx.roundRect(tx - mbW/2, ty - mbH, mbW, mbH, 3); ctx.fill(); ctx.stroke();
-          ctx.save(); ctx.translate(tx, ty - mbH/2); 
-          let bl = 14*sy; let bw = 3*sx; if(typeInfo.name==="Sniper"){bl=22*sy;bw=2*sx;} if(typeInfo.name==="Missile"){bl=10*sy;bw=6*sx;}
-          ctx.fillStyle = tColor; ctx.fillRect(-bw/2, -bl, bw, bl); ctx.restore(); ctx.shadowBlur = 0;
+          const typeInfo = TOWER_TYPES[t.type];
+          if (typeInfo) {
+            const tColor = typeInfo.color || "#fff"; const mbW = 16*sx; const mbH = 10*sy;
+            ctx.fillStyle = hexToRgba(tColor, 0.8); ctx.strokeStyle = tColor; ctx.lineWidth = 1.5; ctx.shadowColor = tColor; ctx.shadowBlur = 8;
+            ctx.beginPath(); ctx.roundRect(tx - mbW/2, ty - mbH, mbW, mbH, 3); ctx.fill(); ctx.stroke();
+            ctx.save(); ctx.translate(tx, ty - mbH/2); 
+            let bl = 14*sy; let bw = 3*sx; if(typeInfo.name==="Sniper"){bl=22*sy;bw=2*sx;} if(typeInfo.name==="Missile"){bl=10*sy;bw=6*sx;}
+            ctx.fillStyle = tColor; ctx.fillRect(-bw/2, -bl, bw, bl); ctx.restore(); ctx.shadowBlur = 0;
+          }
         } else if (p.id === myId) {
           ctx.save(); const pulse = (Math.sin(time*8)+1)/2;
           ctx.fillStyle = `rgba(0, 255, 136, ${0.1 + pulse*0.2})`; ctx.strokeStyle = `rgba(0, 255, 136, ${0.3 + pulse*0.3})`;
@@ -557,7 +556,6 @@
   // Auto-connect
   connect();
   
-  // "On the Fly" Name Updates
   nameInput.addEventListener("input", debounce(() => {
     if (connected) {
       const name = nameInput.value.trim();
@@ -565,7 +563,6 @@
     }
   }, 300));
   
-  // Handlers
   readyBtn.onclick = () => { send({ t: "ready" }); };
   launchBtn.onclick = () => { if (allReady) send({ t: "start" }); };
 })();
