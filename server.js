@@ -21,6 +21,7 @@ const BULLET_R = 2.5;
 const BULLET_SPEED = 700;
 const BULLET_COOLDOWN = 0.72; 
 const BULLET_DAMAGE = 1;
+const BULLET_LIFESPAN = 3.0; // Base lifespan in seconds
 
 const ASTEROID_R_MIN = 8;
 const ASTEROID_R_MAX = 16;
@@ -32,10 +33,11 @@ const MAX_AIM_ANGLE = (80 * Math.PI) / 180;
 
 // ===== Tower Definitions =====
 const TOWER_TYPES = {
-  0: { name: "Gatling", cost: 50,  damage: 1,   cooldown: 0.3,  rangeMult: 0.8, color: "#ffff00" },
-  1: { name: "Sniper",  cost: 120, damage: 5,   cooldown: 1.5,  rangeMult: 1.5, color: "#00ff00" },
-  2: { name: "Missile", cost: 250, damage: 8,   cooldown: 2.0,  rangeMult: 1.0, color: "#ff0000", explosive: 1 }
+  0: { name: "Gatling", cost: 50,  damage: 1,   cooldown: 0.3,  rangeMult: 0.8, color: "#ffff00", upgradeCost: 40 },
+  1: { name: "Sniper",  cost: 120, damage: 5,   cooldown: 1.5,  rangeMult: 1.5, color: "#00ff00", upgradeCost: 80 },
+  2: { name: "Missile", cost: 250, damage: 8,   cooldown: 2.0,  rangeMult: 1.0, color: "#ff0000", explosive: 1, upgradeCost: 150 }
 };
+const MAX_TOWER_LEVEL = 5;
 
 // ===== Server state =====
 const app = express();
@@ -147,6 +149,7 @@ const UPGRADE_DEFS = [
   { id: "multi", name: "Multishot", cat: "offense", icon: "⚔️", desc: "+{val} Bullets", stat: "multishot", base: 1, type: "add" },
   { id: "crit", name: "Crit Scope", cat: "offense", icon: "🎯", desc: "+{val}% Crit Chance", stat: "critChance", base: 0.10, type: "add_cap", cap: 1.0 },
   { id: "boom", name: "Explosive", cat: "offense", icon: "💣", desc: "Explosions size +{val}", stat: "explosive", base: 1, type: "add" },
+  { id: "life", name: "Stabilizer", cat: "utility", icon: "⏱️", desc: "+{val}s Bullet Life", stat: "lifespanAdd", base: 1.5, type: "add" },
   { id: "rico", name: "Ricochet", cat: "utility", icon: "🎱", desc: "Bounces {val} times", stat: "ricochet", base: 1, type: "add" },
   { id: "pierce", name: "Railgun", cat: "utility", icon: "📌", desc: "Pierces {val} enemies", stat: "pierce", base: 1, type: "add" },
   { id: "homing", name: "Magnetism", cat: "utility", icon: "🧲", desc: "Homing Strength", stat: "magnet", base: 1, type: "bool" },
@@ -377,18 +380,27 @@ function endGame() {
 
 // ===== Simulation =====
 function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, overrideProps = null) {
-  let dmg, speed, isCrit, explosive;
+  let dmg, speed, isCrit, explosive, lifespan;
   
+  // Tower bullets (overrideProps) use ONLY tower stats, no player upgrades
   if (overrideProps) {
-    dmg = overrideProps.damage + (owner.upgrades?.damageAdd ?? 0);
+    dmg = overrideProps.damage;
     speed = BULLET_SPEED; 
-    isCrit = Math.random() < (owner.upgrades?.critChance ?? 0);
-    explosive = overrideProps.explosive || (owner.upgrades?.explosive ?? 0);
+    isCrit = false; // Towers don't crit
+    explosive = overrideProps.explosive || 0;
+    lifespan = BULLET_LIFESPAN; // Towers use base lifespan
+    
+    // Apply tower level bonuses if present
+    if (overrideProps.level) {
+      dmg = Math.round(dmg * (1 + (overrideProps.level - 1) * 0.25)); // +25% damage per level
+    }
   } else {
+    // Player main turret uses all upgrades
     dmg = BULLET_DAMAGE + (owner.upgrades?.damageAdd ?? 0);
     speed = BULLET_SPEED * (owner.upgrades?.bulletSpeedMult ?? 1);
     isCrit = Math.random() < (owner.upgrades?.critChance ?? 0);
     explosive = owner.upgrades?.explosive ?? 0;
+    lifespan = BULLET_LIFESPAN + (owner.upgrades?.lifespanAdd ?? 0);
   }
   
   const finalDmg = isCrit ? dmg * 3 : dmg;
@@ -406,6 +418,9 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
   const vx = (dx / len) * speed;
   const vy = (dy / len) * speed;
 
+  // Only apply special effects to player bullets, not tower bullets
+  const isPlayerBullet = !overrideProps;
+  
   bullets.push({
     id: uid(),
     ownerId: owner.id,
@@ -417,10 +432,12 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     dmg: finalDmg,
     isCrit,
     explosive: explosive,
-    magnet: !!owner.upgrades?.magnet,
-    chain: !!owner.upgrades?.chain,
-    ricochet: owner.upgrades?.ricochet || 0,
-    pierce: owner.upgrades?.pierce || 0,
+    lifespan: lifespan,
+    isTowerBullet: !isPlayerBullet,
+    magnet: isPlayerBullet && !!owner.upgrades?.magnet,
+    chain: isPlayerBullet && !!owner.upgrades?.chain,
+    ricochet: isPlayerBullet ? (owner.upgrades?.ricochet || 0) : 0,
+    pierce: isPlayerBullet ? (owner.upgrades?.pierce || 0) : 0,
     hitList: [], 
   });
 }
@@ -548,13 +565,17 @@ function tick() {
           const stats = TOWER_TYPES[tower.type];
           if (!stats) return; // Safety check
 
+          // Tower range extends with player's range upgrade
           const rangeMult = (stats.rangeMult || 1.0) * (canExtend ? 1.5 : 1.0);
           
           const target = findBestTarget(x0, x1, towerPos.x, towerPos.y, rangeMult);
           if (target) {
-            tower.cd = stats.cooldown / (p.upgrades?.fireRateMult ?? 1);
+            // Tower cooldown based on level, NOT player upgrades
+            const levelBonus = 1 + (tower.level - 1) * 0.15; // 15% faster per level
+            tower.cd = stats.cooldown / levelBonus;
             const aim = clampAimAngle(towerPos.x, towerPos.y, target.x, target.y);
-            fireBullet(p, towerPos.x, towerPos.y, aim.x, aim.y, 0, stats);
+            // Pass tower stats with level info
+            fireBullet(p, towerPos.x, towerPos.y, aim.x, aim.y, 0, { ...stats, level: tower.level });
           }
         });
       }
@@ -599,6 +620,11 @@ function tick() {
         }
       }
       b.x += b.vx * DT; b.y += b.vy * DT;
+      
+      // Decrease lifespan - bullets expire after their lifespan
+      b.lifespan -= DT;
+      if (b.lifespan <= 0) { b.dead = true; continue; }
+      
       let didRicochet = false;
       if (b.x < 0) { if (b.ricochet > 0) { b.x = 0; b.vx = -b.vx; b.ricochet--; didRicochet = true; } else { b.dead = true; } }
       else if (b.x > worldW) { if (b.ricochet > 0) { b.x = worldW; b.vx = -b.vx; b.ricochet--; didRicochet = true; } else { b.dead = true; } }
@@ -660,7 +686,7 @@ function tick() {
       baseHp,
       maxBaseHp,
       missiles: missiles.map((m) => ({ id: m.id, x: m.x, y: m.y, r: m.r, hp: m.hp, maxHp: m.maxHp, type: m.type, rotation: m.rotation, vertices: m.vertices })),
-      bullets: bullets.map((b) => ({ id: b.id, x: b.x, y: b.y, r: b.r, vx: b.vx, vy: b.vy, slot: b.ownerSlot, isCrit: b.isCrit })),
+      bullets: bullets.map((b) => ({ id: b.id, x: b.x, y: b.y, r: b.r, vx: b.vx, vy: b.vy, slot: b.ownerSlot, isCrit: b.isCrit, lifespan: b.lifespan, isTower: b.isTowerBullet })),
       particles: particles.map((p) => ({ x: p.x, y: p.y, life: p.life, maxLife: p.maxLife, color: p.color, size: p.size })),
       damageNumbers: damageNumbers.map((d) => ({ x: d.x, y: d.y, amount: d.amount, isCrit: d.isCrit, life: d.life })),
       players: lockedSlots.map((id) => {
@@ -759,7 +785,43 @@ wss.on("connection", (ws) => {
       if (slotIndex < 0 || slotIndex > 3) return;
       if (p.towers[slotIndex]) return; 
       const cost = TOWER_TYPES[type].cost;
-      if (p.gold >= cost) { p.gold -= cost; p.towers[slotIndex] = { type, cd: 0 }; }
+      if (p.gold >= cost) { p.gold -= cost; p.towers[slotIndex] = { type, level: 1, cd: 0 }; }
+    }
+    
+    if (msg.t === "upgradeTower" && phase === "playing") {
+      const { slotIndex } = msg;
+      if (slotIndex < 0 || slotIndex > 3) return;
+      const tower = p.towers[slotIndex];
+      if (!tower) return;
+      if (tower.level >= MAX_TOWER_LEVEL) return;
+      
+      const stats = TOWER_TYPES[tower.type];
+      if (!stats) return;
+      
+      // Upgrade cost scales with level
+      const upgradeCost = stats.upgradeCost * tower.level;
+      if (p.gold >= upgradeCost) {
+        p.gold -= upgradeCost;
+        tower.level++;
+      }
+    }
+    
+    if (msg.t === "sellTower" && phase === "playing") {
+      const { slotIndex } = msg;
+      if (slotIndex < 0 || slotIndex > 3) return;
+      const tower = p.towers[slotIndex];
+      if (!tower) return;
+      
+      const stats = TOWER_TYPES[tower.type];
+      if (!stats) return;
+      
+      // Refund 50% of tower cost + upgrades
+      let totalInvested = stats.cost;
+      for (let lvl = 1; lvl < tower.level; lvl++) {
+        totalInvested += stats.upgradeCost * lvl;
+      }
+      p.gold += Math.floor(totalInvested * 0.5);
+      p.towers[slotIndex] = null;
     }
   });
 
