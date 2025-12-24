@@ -556,6 +556,9 @@
   // Auto-connect
   connect();
   
+  // Start render loop
+  draw();
+  
   nameInput.addEventListener("input", debounce(() => {
     if (connected) {
       const name = nameInput.value.trim();
