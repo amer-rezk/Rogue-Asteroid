@@ -30,6 +30,13 @@ const WAVE_COUNT_SCALE = 3;
 
 const MAX_AIM_ANGLE = (80 * Math.PI) / 180;
 
+// ===== Tower Definitions =====
+const TOWER_TYPES = {
+  0: { name: "Gatling", cost: 50,  damage: 1,   cooldown: 0.3,  rangeMult: 0.8, color: "#ffff00" },
+  1: { name: "Sniper",  cost: 120, damage: 5,   cooldown: 1.5,  rangeMult: 1.5, color: "#00ff00" },
+  2: { name: "Missile", cost: 250, damage: 8,   cooldown: 2.0,  rangeMult: 1.0, color: "#ff0000", explosive: 1 }
+};
+
 // ===== Server state =====
 const app = express();
 app.use(express.static(path.join(__dirname, "docs")));
@@ -104,8 +111,8 @@ function turretPositions(slot) {
   const offset = SEGMENT_W * 0.20;
   return {
     main: { x: cx, y: GROUND_Y },
-    miniL1: { x: cx - offset, y: GROUND_Y },
-    miniR1: { x: cx + offset, y: GROUND_Y },
+    miniL: { x: cx - offset, y: GROUND_Y },
+    miniR: { x: cx + offset, y: GROUND_Y },
   };
 }
 
@@ -131,8 +138,7 @@ const RARITY_CONFIG = {
   legendary: { weight: 5,  color: "#ffaa00", scale: 4.0, label: "LEGENDARY" },
 };
 
-// Base definitions for upgrades. 
-// "scaleStat" defines which value gets multiplied by the rarity scale.
+// Removed mini_left/mini_right from random pool since they are now purchased
 const UPGRADE_DEFS = [
   { id: "dmg", name: "Heavy Rounds", cat: "offense", icon: "💥", desc: "+{val} Damage", stat: "damageAdd", base: 1, type: "add" },
   { id: "spd", name: "Velocity", cat: "offense", icon: "💨", desc: "+{val}% Bullet Speed", stat: "bulletSpeedMult", base: 0.15, type: "mult" },
@@ -146,8 +152,6 @@ const UPGRADE_DEFS = [
   { id: "homing", name: "Magnetism", cat: "utility", icon: "🧲", desc: "Homing Strength", stat: "magnet", base: 1, type: "bool" },
   { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "Chain Lightning", stat: "chain", base: 1, type: "bool" },
 
-  { id: "mini_l", name: "Left Turret", cat: "turret", icon: "🔧", desc: "Auto-turret Left", stat: "miniLeft", base: 1, type: "bool" },
-  { id: "mini_r", name: "Right Turret", cat: "turret", icon: "🔧", desc: "Auto-turret Right", stat: "miniRight", base: 1, type: "bool" },
   { id: "range", name: "Long Range", cat: "turret", icon: "📡", desc: "Shoot Neighbors", stat: "range", base: 1, type: "bool" },
   
   { id: "shield", name: "Shield Gen", cat: "defense", icon: "🛡️", desc: "Block {val} Hits/Wave", stat: "shield", base: 1, type: "add" },
@@ -165,39 +169,31 @@ function rollRarity() {
 
 function makeUpgradeOptions(player) {
   const opts = [];
-  // Try 3 times to get unique upgrades
   for(let i=0; i<3; i++) {
-    // 1. Pick random def
     const def = UPGRADE_DEFS[Math.floor(Math.random() * UPGRADE_DEFS.length)];
-    
-    // 2. Filter logic (don't offer maxed out or duplicates in same hand)
-    if (opts.find(o => o.defId === def.id)) { i--; continue; } // Reroll duplicate in hand
-    if (def.type === "bool" && player.upgrades[def.stat]) { i--; continue; } // Already owned bool
-    if (def.stat === "critChance" && (player.upgrades.critChance || 0) >= 1) { i--; continue; } // Crit capped
+    if (opts.find(o => o.defId === def.id)) { i--; continue; } 
+    if (def.type === "bool" && player.upgrades[def.stat]) { i--; continue; } 
+    if (def.stat === "critChance" && (player.upgrades.critChance || 0) >= 1) { i--; continue; } 
 
-    // 3. Roll Rarity
     const rarityKey = rollRarity();
     const rarity = RARITY_CONFIG[rarityKey];
 
-    // 4. Calculate Value
     let val = def.base;
     if (def.type === "add" || def.type === "mult" || def.type === "add_cap") {
       val = def.base * rarity.scale;
-      // Round nicely
       if (def.stat === "multishot" || def.stat === "shield" || def.stat === "ricochet" || def.stat === "pierce") {
-        val = Math.max(1, Math.round(val)); // Integers only
+        val = Math.max(1, Math.round(val)); 
       } else if (def.type === "mult" || def.stat === "critChance") {
-        val = Math.round(val * 100); // Display as percentage
+        val = Math.round(val * 100); 
       } else {
         val = Math.round(val * 10) / 10;
       }
     }
 
-    // 5. Build Description
     let desc = def.desc.replace("{val}", val);
     
     opts.push({
-      key: uid(), // Unique ID for this specific card
+      key: uid(), 
       defId: def.id,
       title: def.name,
       desc: desc,
@@ -220,22 +216,15 @@ function applyUpgrade(player, card) {
   if (eff.type === "add" || eff.type === "add_cap") {
     u[eff.stat] = (u[eff.stat] || 0) + eff.val;
   } else if (eff.type === "mult") {
-    // For mults, we add to a base multiplier. e.g. 1.0 + 0.15 = 1.15
-    // But currently logical implementation in tick() treats them as multipliers. 
-    // Let's standardize: fireRateMult starts at 1. We add (val) to it? Or multiply?
-    // Let's multiply for exponential growth, or add for linear. Linear is safer.
-    // Actually, "Fire Rate +25%" usually means rate * 1.25.
     u[eff.stat] = (u[eff.stat] || 1) * (1 + eff.val);
   } else if (eff.type === "bool") {
     u[eff.stat] = true;
   }
   
-  // Special case reset for shield
   if (eff.stat === "shield") {
     u.shieldActive = u.shield;
   }
 }
-
 
 // ===== Spawning =====
 function spawnWave() {
@@ -258,20 +247,20 @@ function spawnWave() {
     const y = rand(-WORLD_H * 0.8, -r - 50);
 
     const vx = rand(-10 - wave * 0.5, 10 + wave * 0.5);
-    // MODIFIED: Slower start, steeper scaling
-    // Old: 25-45 base. New: 20-36 base (~20% slower).
     const baseVy = rand(20, 36);
-    // Old scale: 1% (0.01). New scale: 2% (0.02).
     const vy = baseVy * (1 + wave * 0.02);
 
     const type = r > 14 ? "large" : r > 10 ? "medium" : "small";
     const baseHpVal = type === "large" ? 4 : type === "medium" ? 2 : 1;
+    
+    // UPDATED: Health scaling is steeper (0.8 per wave instead of /3)
+    const waveHpBonus = Math.floor(wave * 0.8);
 
     missiles.push({
       id: uid(),
       x, y, vx, vy, r, type,
-      hp: baseHpVal + Math.floor(wave / 3),
-      maxHp: baseHpVal + Math.floor(wave / 3),
+      hp: baseHpVal + waveHpBonus,
+      maxHp: baseHpVal + waveHpBonus,
       rotation: rand(0, Math.PI * 2),
       rotSpeed: rand(-3, 3),
       vertices: generateAsteroidShape(r),
@@ -310,13 +299,14 @@ function startGame() {
     const p = players.get(id);
     if (p) {
       p.upgrades = {};
+      // Initialize tower slots
+      p.towers = { left: null, right: null };
+      p.gold = 0;
       p.cooldown = 0;
       p.targetX = null;
       p.targetY = null;
       p.manualShooting = false;
       p.turretAngle = -Math.PI / 2;
-      p.miniCooldownL = 0;
-      p.miniCooldownR = 0;
       p.score = 0;
       p.ready = false;
     }
@@ -369,6 +359,8 @@ function resetToLobby() {
     arr.forEach((p, i) => {
       p.slot = i;
       p.ready = false;
+      p.towers = { left: null, right: null };
+      p.gold = 0;
     });
 
     hostId = players.size ? Array.from(players.keys())[0] : null;
@@ -395,10 +387,23 @@ function endGame() {
 }
 
 // ===== Simulation =====
-function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0) {
-  const dmg = BULLET_DAMAGE + (owner.upgrades?.damageAdd ?? 0);
-  const speed = BULLET_SPEED * (owner.upgrades?.bulletSpeedMult ?? 1);
-  const isCrit = Math.random() < (owner.upgrades?.critChance ?? 0);
+function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, overrideProps = null) {
+  let dmg, speed, isCrit, explosive;
+  
+  if (overrideProps) {
+    // Tower stats
+    dmg = overrideProps.damage + (owner.upgrades?.damageAdd ?? 0);
+    speed = BULLET_SPEED; // Standard speed for towers for now
+    isCrit = Math.random() < (owner.upgrades?.critChance ?? 0);
+    explosive = overrideProps.explosive || (owner.upgrades?.explosive ?? 0);
+  } else {
+    // Main gun stats
+    dmg = BULLET_DAMAGE + (owner.upgrades?.damageAdd ?? 0);
+    speed = BULLET_SPEED * (owner.upgrades?.bulletSpeedMult ?? 1);
+    isCrit = Math.random() < (owner.upgrades?.critChance ?? 0);
+    explosive = owner.upgrades?.explosive ?? 0;
+  }
+  
   const finalDmg = isCrit ? dmg * 3 : dmg;
 
   let dx = targetX - originX;
@@ -424,27 +429,20 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0) 
     r: BULLET_R,
     dmg: finalDmg,
     isCrit,
-    explosive: owner.upgrades?.explosive ?? 0,
+    explosive: explosive,
     magnet: !!owner.upgrades?.magnet,
     chain: !!owner.upgrades?.chain,
-    
-    // NEW MECHANICS
     ricochet: owner.upgrades?.ricochet || 0,
     pierce: owner.upgrades?.pierce || 0,
-    hitList: [], // Track entities hit to prevent immediate re-hit in same frame
+    hitList: [], 
   });
 }
 
 function fireWithMultishot(owner, originX, originY, targetX, targetY) {
   const shots = owner.upgrades?.multishot ?? 1;
-  const spread = 0.10; // angle offset between bullets
-  
-  // Always fire center bullet first
+  const spread = 0.10; 
   fireBullet(owner, originX, originY, targetX, targetY, 0);
-  
-  // Add alternating left/right bullets
   for (let i = 1; i < shots; i++) {
-    // Odd = left, Even = right
     const side = (i % 2 === 1) ? -1 : 1;
     const layer = Math.ceil(i / 2);
     const offset = side * layer * spread;
@@ -452,12 +450,15 @@ function fireWithMultishot(owner, originX, originY, targetX, targetY) {
   }
 }
 
-function findBestTarget(x0, x1, turretX, turretY, canExtend) {
+function findBestTarget(x0, x1, turretX, turretY, rangeMult = 1.0) {
   let best = null;
   let bestScore = -Infinity;
   
-  const searchX0 = canExtend ? Math.max(0, x0 - SEGMENT_W) : x0;
-  const searchX1 = canExtend ? Math.min(worldW, x1 + SEGMENT_W) : x1;
+  // Normal range checks segment width. Range upgrades/towers can extend this.
+  const extend = (rangeMult > 1.2); 
+  
+  const searchX0 = extend ? Math.max(0, x0 - SEGMENT_W) : x0;
+  const searchX1 = extend ? Math.min(worldW, x1 + SEGMENT_W) : x1;
   
   for (const m of missiles) {
     if (m.x < searchX0 || m.x > searchX1) continue;
@@ -479,11 +480,9 @@ function clampAimAngle(turretX, turretY, targetX, targetY) {
   const dx = targetX - turretX;
   const dy = targetY - turretY;
   let angle = Math.atan2(dy, dx);
-  
   const fromVertical = angle - (-Math.PI / 2);
   const clampedFromVertical = clamp(fromVertical, -MAX_AIM_ANGLE, MAX_AIM_ANGLE);
   const clampedAngle = -Math.PI / 2 + clampedFromVertical;
-  
   const dist = Math.hypot(dx, dy);
   return {
     x: turretX + Math.cos(clampedAngle) * dist,
@@ -520,31 +519,23 @@ function addDamageNumber(x, y, amount, isCrit) {
 function tick() {
   if (phase !== "playing") return;
 
-  // Update particles
+  // Update particles/numbers
   particles = particles.filter(p => {
-    p.x += p.vx * DT;
-    p.y += p.vy * DT;
-    p.life -= DT;
-    p.vx *= 0.95;
-    p.vy *= 0.95;
-    return p.life > 0;
+    p.x += p.vx * DT; p.y += p.vy * DT; p.life -= DT; p.vx *= 0.95; p.vy *= 0.95; return p.life > 0;
   });
-
-  // Update damage numbers
   damageNumbers = damageNumbers.filter(d => {
-    d.y += d.vy * DT;
-    d.life -= DT * 1.5;
-    return d.life > 0;
+    d.y += d.vy * DT; d.life -= DT * 1.5; return d.life > 0;
   });
 
-  // Players & shooting
+  // Players logic
   for (const id of lockedSlots) {
     const p = players.get(id);
     if (!p) continue;
 
     p.cooldown = Math.max(0, (p.cooldown ?? 0) - DT);
-    p.miniCooldownL = Math.max(0, (p.miniCooldownL ?? 0) - DT);
-    p.miniCooldownR = Math.max(0, (p.miniCooldownR ?? 0) - DT);
+    // Tower cooldowns
+    if (p.towers.left) p.towers.left.cd = Math.max(0, (p.towers.left.cd || 0) - DT);
+    if (p.towers.right) p.towers.right.cd = Math.max(0, (p.towers.right.cd || 0) - DT);
 
     const slot = p.slot;
     const { x0, x1 } = segmentBounds(slot);
@@ -553,61 +544,56 @@ function tick() {
 
     const baseCooldown = BULLET_COOLDOWN / (p.upgrades?.fireRateMult ?? 1);
 
-    let targetX, targetY;
-    let clamped;
-    
+    // --- MAIN GUN ---
+    let targetX, targetY, clamped;
     if (p.manualShooting && p.targetX != null && p.targetY != null) {
       clamped = clampAimAngle(pos.main.x, pos.main.y, p.targetX, p.targetY);
-      targetX = clamped.x;
-      targetY = clamped.y;
+      targetX = clamped.x; targetY = clamped.y;
     } else {
-      const target = findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend);
+      const target = findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend ? 1.5 : 1.0);
       if (target) {
         clamped = clampAimAngle(pos.main.x, pos.main.y, target.x, target.y);
       } else {
         clamped = clampAimAngle(pos.main.x, pos.main.y, pos.main.x, 50);
       }
-      targetX = clamped.x;
-      targetY = clamped.y;
+      targetX = clamped.x; targetY = clamped.y;
     }
-
     p.turretAngle = clamped.angle;
-
-    // Fire logic
-    const shouldFire = p.manualShooting || findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend);
-    
+    const shouldFire = p.manualShooting || findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend ? 1.5 : 1.0);
     if (shouldFire && p.cooldown <= 0) {
       p.cooldown = baseCooldown;
       fireWithMultishot(p, pos.main.x, pos.main.y, clamped.x, clamped.y);
     }
 
-    // Mini turrets
-    const autoTarget = findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend);
-    if (autoTarget) {
-      if (p.upgrades?.miniLeft && p.miniCooldownL <= 0) {
-        p.miniCooldownL = baseCooldown * 0.85;
-        const miniClamped = clampAimAngle(pos.miniL1.x, pos.miniL1.y, autoTarget.x, autoTarget.y);
-        fireBullet(p, pos.miniL1.x, pos.miniL1.y, miniClamped.x, miniClamped.y);
+    // --- MINI TOWERS (PURCHASED) ---
+    const checkAndFireTower = (tower, pos) => {
+      if (!tower) return;
+      if (tower.cd > 0) return;
+      
+      const stats = TOWER_TYPES[tower.type];
+      const rangeMult = (stats.rangeMult || 1.0) * (canExtend ? 1.5 : 1.0);
+      
+      const target = findBestTarget(x0, x1, pos.x, pos.y, rangeMult);
+      if (target) {
+        tower.cd = stats.cooldown / (p.upgrades?.fireRateMult ?? 1); // Towers benefit from fire rate
+        const aim = clampAimAngle(pos.x, pos.y, target.x, target.y);
+        // Towers fire single shots, but with their specific stats
+        fireBullet(p, pos.x, pos.y, aim.x, aim.y, 0, stats);
       }
-      if (p.upgrades?.miniRight && p.miniCooldownR <= 0) {
-        p.miniCooldownR = baseCooldown * 0.85;
-        const miniClamped = clampAimAngle(pos.miniR1.x, pos.miniR1.y, autoTarget.x, autoTarget.y);
-        fireBullet(p, pos.miniR1.x, pos.miniR1.y, miniClamped.x, miniClamped.y);
-      }
-    }
+    };
+
+    checkAndFireTower(p.towers.left, pos.miniL);
+    checkAndFireTower(p.towers.right, pos.miniR);
   }
 
-  // Missiles logic
+  // Missiles
   for (const m of missiles) {
     let speedMult = 1;
     for (const id of lockedSlots) {
       const p = players.get(id);
       if (!p?.upgrades?.slowfield) continue;
       const { x0, x1 } = segmentBounds(p.slot);
-      if (m.x >= x0 && m.x <= x1) {
-        speedMult = 0.75;
-        break;
-      }
+      if (m.x >= x0 && m.x <= x1) { speedMult = 0.75; break; }
     }
 
     m.x += m.vx * DT * speedMult;
@@ -638,68 +624,40 @@ function tick() {
     }
   }
 
-  // Bullets logic with RICOCHET
+  // Bullets
   for (const b of bullets) {
-    // Magnet
     if (b.magnet) {
-      let nearest = null;
-      let nearestDist = 150;
+      let nearest = null; let nearestDist = 150;
       for (const m of missiles) {
         if (m.dead) continue;
         const d = Math.hypot(m.x - b.x, m.y - b.y);
-        if (d < nearestDist) {
-          nearestDist = d;
-          nearest = m;
-        }
+        if (d < nearestDist) { nearestDist = d; nearest = m; }
       }
       if (nearest) {
-        const dx = nearest.x - b.x;
-        const dy = nearest.y - b.y;
-        const len = Math.hypot(dx, dy) || 1;
-        b.vx += (dx / len) * 500 * DT;
-        b.vy += (dy / len) * 500 * DT;
+        const dx = nearest.x - b.x; const dy = nearest.y - b.y; const len = Math.hypot(dx, dy) || 1;
+        b.vx += (dx / len) * 500 * DT; b.vy += (dy / len) * 500 * DT;
         const speed = Math.hypot(b.vx, b.vy);
         const targetSpeed = BULLET_SPEED * 1.1;
-        b.vx = (b.vx / speed) * targetSpeed;
-        b.vy = (b.vy / speed) * targetSpeed;
+        b.vx = (b.vx / speed) * targetSpeed; b.vy = (b.vy / speed) * targetSpeed;
       }
     }
 
     b.x += b.vx * DT;
     b.y += b.vy * DT;
     
-    // Bounds check with Ricochet
     let didRicochet = false;
-    
-    // Walls
     if (b.x < 0) {
-      if (b.ricochet > 0) {
-        b.x = 0; b.vx = -b.vx; b.ricochet--; didRicochet = true;
-      } else { b.dead = true; }
+      if (b.ricochet > 0) { b.x = 0; b.vx = -b.vx; b.ricochet--; didRicochet = true; } else { b.dead = true; }
     } else if (b.x > worldW) {
-      if (b.ricochet > 0) {
-        b.x = worldW; b.vx = -b.vx; b.ricochet--; didRicochet = true;
-      } else { b.dead = true; }
+      if (b.ricochet > 0) { b.x = worldW; b.vx = -b.vx; b.ricochet--; didRicochet = true; } else { b.dead = true; }
     }
-    
-    // Ceiling
-    if (b.y < -50) { // Slight buffer
-      if (b.ricochet > 0 && b.y < -50) { // Only bounce if really high
-        b.y = -50; b.vy = -b.vy; b.ricochet--; didRicochet = true;
-      } else { b.dead = true; }
+    if (b.y < -50) { 
+      if (b.ricochet > 0 && b.y < -50) { b.y = -50; b.vy = -b.vy; b.ricochet--; didRicochet = true; } else { b.dead = true; }
     }
-    
-    // Floor
     if (b.y > GROUND_Y) {
-      if (b.ricochet > 0) {
-        b.y = GROUND_Y; b.vy = -b.vy; b.ricochet--; didRicochet = true;
-      } else { b.dead = true; }
+      if (b.ricochet > 0) { b.y = GROUND_Y; b.vy = -b.vy; b.ricochet--; didRicochet = true; } else { b.dead = true; }
     }
-    
-    // Reset hitlist on bounce so we can hit same enemies again from new angle
-    if (didRicochet) {
-      b.hitList = [];
-    }
+    if (didRicochet) b.hitList = [];
   }
 
   // Collisions
@@ -707,42 +665,38 @@ function tick() {
     if (b.dead) continue;
     for (const m of missiles) {
       if (m.dead) continue;
-      // Piercing check: don't hit same target twice
       if (b.hitList && b.hitList.includes(m.id)) continue;
       
-      const dx = m.x - b.x;
-      const dy = m.y - b.y;
-      const rr = m.r + b.r;
+      const dx = m.x - b.x; const dy = m.y - b.y; const rr = m.r + b.r;
       if (dx * dx + dy * dy <= rr * rr) {
         m.hp -= b.dmg;
-        
-        // Add to hit list
         if (!b.hitList) b.hitList = [];
         b.hitList.push(m.id);
         
-        // Pierce logic
-        if (b.pierce > 0) {
-          b.pierce--;
-          // Don't die
-        } else {
-          b.dead = true;
-        }
+        if (b.pierce > 0) { b.pierce--; } else { b.dead = true; }
         
         addDamageNumber(m.x, m.y - m.r, b.dmg, b.isCrit);
         const owner = players.get(b.ownerId);
-        if (owner) {
-          owner.score = (owner.score || 0) + b.dmg * 10;
-          if (m.hp <= 0) owner.score += 50;
+        
+        if (m.hp <= 0) {
+          m.dead = true;
+          createExplosion(m.x, m.y, 25, "#fa0");
+          // UPDATED: Gold Reward
+          if (owner) {
+            owner.score = (owner.score || 0) + 50;
+            const goldReward = m.type === "large" ? 3 : m.type === "medium" ? 2 : 1;
+            owner.gold = (owner.gold || 0) + goldReward;
+          }
+        } else {
+          if (owner) owner.score = (owner.score || 0) + b.dmg * 10;
         }
+
         if (b.explosive > 0) {
           createExplosion(b.x, b.y, 35, "#fa0");
           for (const m2 of missiles) {
             if (m2.dead || m2 === m) continue;
             const d = Math.hypot(m2.x - b.x, m2.y - b.y);
-            if (d < 35 + m2.r) {
-              m2.hp -= 1;
-              if (m2.hp <= 0) m2.dead = true;
-            }
+            if (d < 35 + m2.r) { m2.hp -= 1; if (m2.hp <= 0) m2.dead = true; }
           }
         }
         if (b.chain && m.hp <= 0) {
@@ -750,26 +704,15 @@ function tick() {
             if (m2.dead || m2 === m) continue;
             const d = Math.hypot(m2.x - m.x, m2.y - m.y);
             if (d < 70) {
-              m2.hp -= 1;
-              addDamageNumber(m2.x, m2.y - m2.r, 1, false);
+              m2.hp -= 1; addDamageNumber(m2.x, m2.y - m2.r, 1, false);
               if (m2.hp <= 0) m2.dead = true;
-              particles.push({
-                x: m.x, y: m.y,
-                vx: (m2.x - m.x) * 3,
-                vy: (m2.y - m.y) * 3,
-                life: 0.12, maxLife: 0.12,
-                color: "#ff0", size: 2,
-              });
+              particles.push({ x: m.x, y: m.y, vx: (m2.x - m.x)*3, vy: (m2.y - m.y)*3, life: 0.12, maxLife: 0.12, color: "#ff0", size: 2 });
               break;
             }
           }
         }
         createExplosion(b.x, b.y, 15, b.isCrit ? "#ff0" : "#0ff");
-        if (m.hp <= 0) {
-          m.dead = true;
-          createExplosion(m.x, m.y, 25, "#fa0");
-        }
-        if (b.dead) break; // Bullet died, stop checking collisions
+        if (b.dead) break;
       }
     }
   }
@@ -818,11 +761,11 @@ function tick() {
         id: p.id, slot: p.slot,
         name: p.name || `Player ${p.slot + 1}`,
         score: p.score || 0,
+        gold: p.gold || 0,
         turretAngle: p.turretAngle || -Math.PI / 2,
         isManual: !!p.manualShooting,
+        towers: p.towers,
         upgrades: {
-          miniLeft: !!p.upgrades?.miniLeft,
-          miniRight: !!p.upgrades?.miniRight,
           shieldActive: p.upgrades?.shieldActive ?? 0,
           range: !!p.upgrades?.range,
           slowfield: !!p.upgrades?.slowfield,
@@ -878,6 +821,8 @@ wss.on("connection", (ws) => {
     targetY: 0,
     manualShooting: false,
     upgrades: {},
+    towers: { left: null, right: null },
+    gold: 0,
     cooldown: 0,
     score: 0,
     ready: false,
@@ -911,13 +856,11 @@ wss.on("connection", (ws) => {
       broadcast({ t: "lobby", ...lobbySnapshot() });
       return;
     }
-
     if (msg.t === "ready" && phase === "lobby") {
       p.ready = !p.ready;
       broadcast({ t: "lobby", ...lobbySnapshot() });
       return;
     }
-
     if (msg.t === "start") {
       if (id === hostId && phase === "lobby") {
         const snap = lobbySnapshot();
@@ -925,14 +868,12 @@ wss.on("connection", (ws) => {
       }
       return;
     }
-
     if (msg.t === "input" && phase === "playing") {
       p.targetX = Number(msg.x) || 0;
       p.targetY = Number(msg.y) || 0;
       p.manualShooting = !!msg.shooting;
       return;
     }
-
     if (msg.t === "pickUpgrade" && phase === "upgrades") {
       const pickKey = (msg.key || "").toString();
       const pickObj = upgradePicks.get(id);
@@ -942,7 +883,7 @@ wss.on("connection", (ws) => {
       if (!opt) return;
 
       pickObj.pickedKey = pickKey;
-      applyUpgrade(p, opt); // Apply specific card
+      applyUpgrade(p, opt); 
       safeSend(p.ws, { t: "picked", key: pickKey });
       
       const waiting = [];
@@ -954,9 +895,22 @@ wss.on("connection", (ws) => {
         }
       }
       broadcast({ t: "upgradeWaiting", waiting });
-      
       maybeEndUpgradePhase();
       return;
+    }
+
+    // UPDATED: Handle tower purchase
+    if (msg.t === "buyTower" && phase === "playing") {
+      const { slot, type } = msg;
+      if ((slot !== "left" && slot !== "right") || !TOWER_TYPES[type]) return;
+      if (p.towers[slot]) return; // Already occupied
+      
+      const cost = TOWER_TYPES[type].cost;
+      if (p.gold >= cost) {
+        p.gold -= cost;
+        p.towers[slot] = { type, cd: 0 };
+        // No broadcast needed strictly here, state tick will update client next frame
+      }
     }
   });
 
