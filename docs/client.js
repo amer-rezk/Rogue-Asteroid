@@ -27,10 +27,11 @@
 
   // Tower Config (must match server)
   const TOWER_TYPES = {
-    0: { name: "Gatling", cost: 50, color: "#ffff00", desc: "Fast Fire" },
-    1: { name: "Sniper",  cost: 120, color: "#00ff00", desc: "Long Range" },
-    2: { name: "Missile", cost: 250, color: "#ff0000", desc: "Splash Dmg" }
+    0: { name: "Gatling", cost: 50, color: "#ffff00", desc: "Fast Fire", upgradeCost: 40, icon: "⚡" },
+    1: { name: "Sniper",  cost: 120, color: "#00ff00", desc: "Long Range", upgradeCost: 80, icon: "🎯" },
+    2: { name: "Missile", cost: 250, color: "#ff0000", desc: "Splash Dmg", upgradeCost: 150, icon: "🚀" }
   };
+  const MAX_TOWER_LEVEL = 5;
 
   // ===== DOM Elements =====
   const menuScreen = document.getElementById("menuScreen");
@@ -353,14 +354,24 @@
       return;
     }
 
-    if (buildMenuOpen && hoveredBuildOption >= 0) {
-      const type = hoveredBuildOption;
-      send({ t: "buyTower", slotIndex: buildMenuOpen.slotIndex, type });
-      buildMenuOpen = null;
-      return;
-    } else if (buildMenuOpen) {
-      buildMenuOpen = null;
-      return;
+    // Handle build/upgrade menu clicks
+    if (buildMenuOpen) {
+      if (hoveredBuildOption === "upgrade") {
+        send({ t: "upgradeTower", slotIndex: buildMenuOpen.slotIndex });
+        buildMenuOpen = null;
+        return;
+      } else if (hoveredBuildOption === "sell") {
+        send({ t: "sellTower", slotIndex: buildMenuOpen.slotIndex });
+        buildMenuOpen = null;
+        return;
+      } else if (typeof hoveredBuildOption === "number" && hoveredBuildOption >= 0) {
+        send({ t: "buyTower", slotIndex: buildMenuOpen.slotIndex, type: hoveredBuildOption });
+        buildMenuOpen = null;
+        return;
+      } else {
+        buildMenuOpen = null;
+        return;
+      }
     }
 
     if (phase === "playing" && lastSnap) {
@@ -373,12 +384,17 @@
         const offsets = [-110, -50, 50, 110];
         
         for (let i = 0; i < 4; i++) {
-          if (!me.towers[i]) {
-            const tx = cx + offsets[i] * sx;
-            if (Math.hypot(mouseX - tx, mouseY - cy) < 20 * sx) {
-              buildMenuOpen = { slotIndex: i, x: tx, y: cy };
-              return;
-            }
+          const tx = cx + offsets[i] * sx;
+          const clickRadius = me.towers[i] ? 25 * sx : 20 * sx;
+          if (Math.hypot(mouseX - tx, mouseY - (cy - 15*sy)) < clickRadius) {
+            buildMenuOpen = { 
+              slotIndex: i, 
+              x: tx, 
+              y: cy,
+              hasTower: !!me.towers[i],
+              tower: me.towers[i]
+            };
+            return;
           }
         }
       }
@@ -473,10 +489,35 @@
     }
 
     for (const b of lastSnap.bullets) {
-      const x = b.x*sx; const y = b.y*sy; const r = b.r*sx; const color = PLAYER_COLORS[b.slot]?.main || "#0ff";
-      const angle = Math.atan2(b.vy, b.vx); const trail = 12*sx;
-      ctx.strokeStyle = hexToRgba(color, 0.4); ctx.lineWidth = r*1.5; ctx.lineCap = "round"; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x-Math.cos(angle)*trail, y-Math.sin(angle)*trail); ctx.stroke();
-      ctx.fillStyle = b.isCrit ? "#fff" : color; ctx.shadowColor = b.isCrit ? "#ff0" : color; ctx.shadowBlur = b.isCrit ? 15 : 8; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0;
+      const x = b.x*sx; const y = b.y*sy; const r = b.r*sx; 
+      const baseColor = PLAYER_COLORS[b.slot]?.main || "#0ff";
+      
+      // Fade bullets as lifespan gets low (last 0.5 seconds)
+      const fadeStart = 0.5;
+      const alpha = b.lifespan < fadeStart ? Math.max(0.2, b.lifespan / fadeStart) : 1.0;
+      const color = b.isTower ? hexToRgba(baseColor, 0.7 * alpha) : hexToRgba(baseColor, alpha);
+      
+      const angle = Math.atan2(b.vy, b.vx); 
+      const trail = (b.isTower ? 8 : 12) * sx;
+      
+      // Trail
+      ctx.strokeStyle = hexToRgba(baseColor, 0.4 * alpha); 
+      ctx.lineWidth = r * (b.isTower ? 1 : 1.5); 
+      ctx.lineCap = "round"; 
+      ctx.beginPath(); 
+      ctx.moveTo(x, y); 
+      ctx.lineTo(x - Math.cos(angle) * trail, y - Math.sin(angle) * trail); 
+      ctx.stroke();
+      
+      // Bullet body - tower bullets are slightly smaller and dimmer
+      const bulletR = b.isTower ? r * 0.8 : r;
+      ctx.fillStyle = b.isCrit ? "#fff" : color; 
+      ctx.shadowColor = b.isCrit ? "#ff0" : baseColor; 
+      ctx.shadowBlur = (b.isCrit ? 15 : 8) * alpha; 
+      ctx.beginPath(); 
+      ctx.arc(x, y, bulletR, 0, Math.PI * 2); 
+      ctx.fill(); 
+      ctx.shadowBlur = 0;
     }
 
     if (lastSnap.damageNumbers) for (const d of lastSnap.damageNumbers) { ctx.font = `bold ${d.isCrit?16:12}px 'Courier New', monospace`; ctx.textAlign = "center"; ctx.fillStyle = d.isCrit ? `rgba(255,255,0,${d.life})` : `rgba(255,255,255,${d.life})`; ctx.fillText(d.amount.toString(), d.x*sx, d.y*sy); }
@@ -512,18 +553,137 @@
         if (t) {
           const typeInfo = TOWER_TYPES[t.type];
           if (typeInfo) {
-            const tColor = typeInfo.color || "#fff"; const mbW = 16*sx; const mbH = 10*sy;
-            ctx.fillStyle = hexToRgba(tColor, 0.8); ctx.strokeStyle = tColor; ctx.lineWidth = 1.5; ctx.shadowColor = tColor; ctx.shadowBlur = 8;
-            ctx.beginPath(); ctx.roundRect(tx - mbW/2, ty - mbH, mbW, mbH, 3); ctx.fill(); ctx.stroke();
-            ctx.save(); ctx.translate(tx, ty - mbH/2); 
-            let bl = 14*sy; let bw = 3*sx; if(typeInfo.name==="Sniper"){bl=22*sy;bw=2*sx;} if(typeInfo.name==="Missile"){bl=10*sy;bw=6*sx;}
-            ctx.fillStyle = tColor; ctx.fillRect(-bw/2, -bl, bw, bl); ctx.restore(); ctx.shadowBlur = 0;
+            const tColor = typeInfo.color || "#fff";
+            const level = t.level || 1;
+            
+            // Tower base platform
+            const platformW = 28 * sx;
+            const platformH = 8 * sy;
+            ctx.fillStyle = hexToRgba("#333", 0.9);
+            ctx.strokeStyle = hexToRgba(tColor, 0.6);
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.roundRect(tx - platformW/2, ty - platformH, platformW, platformH, 3);
+            ctx.fill();
+            ctx.stroke();
+            
+            // Tower body - different styles per type
+            ctx.shadowColor = tColor;
+            ctx.shadowBlur = 10 + level * 2;
+            
+            if (typeInfo.name === "Gatling") {
+              // Gatling: Multi-barrel turret
+              const bodyW = 18 * sx;
+              const bodyH = 16 * sy;
+              ctx.fillStyle = hexToRgba(tColor, 0.85);
+              ctx.strokeStyle = tColor;
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.roundRect(tx - bodyW/2, ty - platformH - bodyH, bodyW, bodyH, 4);
+              ctx.fill();
+              ctx.stroke();
+              // Barrels
+              for (let b = -1; b <= 1; b++) {
+                ctx.fillStyle = tColor;
+                ctx.fillRect(tx + b * 4 * sx - 1.5*sx, ty - platformH - bodyH - 12*sy, 3*sx, 14*sy);
+              }
+            } else if (typeInfo.name === "Sniper") {
+              // Sniper: Tall thin turret with scope
+              const bodyW = 12 * sx;
+              const bodyH = 20 * sy;
+              ctx.fillStyle = hexToRgba(tColor, 0.85);
+              ctx.strokeStyle = tColor;
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.roundRect(tx - bodyW/2, ty - platformH - bodyH, bodyW, bodyH, 3);
+              ctx.fill();
+              ctx.stroke();
+              // Long barrel
+              ctx.fillStyle = tColor;
+              ctx.fillRect(tx - 2*sx, ty - platformH - bodyH - 18*sy, 4*sx, 20*sy);
+              // Scope
+              ctx.fillStyle = "#00ffaa";
+              ctx.beginPath();
+              ctx.arc(tx + 6*sx, ty - platformH - bodyH + 6*sy, 3*sx, 0, Math.PI*2);
+              ctx.fill();
+            } else if (typeInfo.name === "Missile") {
+              // Missile: Box launcher with missiles
+              const bodyW = 22 * sx;
+              const bodyH = 18 * sy;
+              ctx.fillStyle = hexToRgba(tColor, 0.85);
+              ctx.strokeStyle = tColor;
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.roundRect(tx - bodyW/2, ty - platformH - bodyH, bodyW, bodyH, 4);
+              ctx.fill();
+              ctx.stroke();
+              // Missile tubes
+              ctx.fillStyle = "#222";
+              for (let m = -1; m <= 1; m += 2) {
+                ctx.beginPath();
+                ctx.arc(tx + m * 5 * sx, ty - platformH - bodyH/2, 4*sx, 0, Math.PI*2);
+                ctx.fill();
+              }
+              // Missile tips
+              ctx.fillStyle = "#ff6600";
+              for (let m = -1; m <= 1; m += 2) {
+                ctx.beginPath();
+                ctx.arc(tx + m * 5 * sx, ty - platformH - bodyH - 3*sy, 3*sx, 0, Math.PI*2);
+                ctx.fill();
+              }
+            }
+            
+            ctx.shadowBlur = 0;
+            
+            // Level indicator (stars or pips)
+            if (level > 1) {
+              ctx.fillStyle = "#ffd700";
+              ctx.font = `bold ${8*sx}px sans-serif`;
+              ctx.textAlign = "center";
+              ctx.textBaseline = "middle";
+              const levelText = "★".repeat(Math.min(level - 1, 4));
+              ctx.fillText(levelText, tx, ty + 8*sy);
+            }
+            
+            // Show upgrade indicator for own towers
+            if (p.id === myId && level < MAX_TOWER_LEVEL) {
+              const pulse = (Math.sin(time*4)+1)/2 * 0.3;
+              ctx.strokeStyle = `rgba(255, 215, 0, ${0.3 + pulse})`;
+              ctx.lineWidth = 2;
+              ctx.setLineDash([3, 3]);
+              ctx.beginPath();
+              ctx.arc(tx, ty - 20*sy, 18*sx, 0, Math.PI*2);
+              ctx.stroke();
+              ctx.setLineDash([]);
+            }
           }
         } else if (p.id === myId) {
-          ctx.save(); const pulse = (Math.sin(time*8)+1)/2;
-          ctx.fillStyle = `rgba(0, 255, 136, ${0.1 + pulse*0.2})`; ctx.strokeStyle = `rgba(0, 255, 136, ${0.3 + pulse*0.3})`;
-          ctx.beginPath(); ctx.arc(tx, ty-5*sy, 10*sx, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-          ctx.fillStyle = "#fff"; ctx.font = `bold ${14*sx}px sans-serif`; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText("+", tx, ty-5*sy);
+          // Empty slot - pulsing add button
+          ctx.save(); 
+          const pulse = (Math.sin(time*8)+1)/2;
+          
+          // Platform outline
+          ctx.strokeStyle = `rgba(0, 255, 136, ${0.2 + pulse*0.3})`;
+          ctx.lineWidth = 2;
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath();
+          ctx.roundRect(tx - 14*sx, ty - 8*sy, 28*sx, 8*sy, 3);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          
+          // Plus button
+          ctx.fillStyle = `rgba(0, 255, 136, ${0.15 + pulse*0.25})`;
+          ctx.strokeStyle = `rgba(0, 255, 136, ${0.4 + pulse*0.4})`;
+          ctx.lineWidth = 2;
+          ctx.beginPath(); 
+          ctx.arc(tx, ty - 18*sy, 12*sx, 0, Math.PI*2); 
+          ctx.fill(); 
+          ctx.stroke();
+          ctx.fillStyle = "#fff"; 
+          ctx.font = `bold ${16*sx}px sans-serif`; 
+          ctx.textAlign = "center"; 
+          ctx.textBaseline = "middle"; 
+          ctx.fillText("+", tx, ty - 18*sy);
           ctx.restore();
         }
       });
@@ -546,21 +706,193 @@
     for (let i = lastSnap.players.length - 1; i >= 0; i--) { const p = lastSnap.players[i]; const color = PLAYER_COLORS[p.slot]?.main || "#fff"; ctx.fillStyle = color; const text = `${p.name}: ${p.score}`; ctx.fillText(text, scoreX, 30); scoreX -= ctx.measureText(text).width + 20; } ctx.textAlign = "left";
 
     if (buildMenuOpen) {
-      hoveredBuildOption = -1; const { x, y } = buildMenuOpen;
-      const menuW = 160; const menuH = 130; const mx = x - menuW/2; const my = y - menuH - 20;
-      ctx.fillStyle = "rgba(10,10,30,0.95)"; ctx.strokeStyle = "#0f8"; ctx.lineWidth = 2; ctx.beginPath(); ctx.roundRect(mx, my, menuW, menuH, 8); ctx.fill(); ctx.stroke();
-      ctx.font = "bold 12px 'Courier New', monospace"; ctx.fillStyle = "#0f8"; ctx.textAlign = "center"; ctx.fillText("BUILD TOWER", mx + menuW/2, my + 20);
-      const opts = [ { id: 0, label: "GATLING", cost: 50, col: "#ff0" }, { id: 1, label: "SNIPER",  cost: 120, col: "#0f0" }, { id: 2, label: "MISSILE", cost: 250, col: "#f00" } ];
-      for (let i=0; i<opts.length; i++) {
-        const o = opts[i]; const by = my + 35 + i * 30; const bx = mx + 10;
-        const isHovered = mouseX >= bx && mouseX <= bx+140 && mouseY >= by && mouseY <= by+24;
-        if (isHovered) hoveredBuildOption = o.id;
-        const canAfford = (myPlayer?.gold || 0) >= o.cost;
-        ctx.fillStyle = isHovered ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.5)"; if (!canAfford) ctx.fillStyle = "rgba(50,0,0,0.5)";
-        ctx.fillRect(bx, by, 140, 24);
-        ctx.fillStyle = canAfford ? o.col : "#555"; ctx.textAlign = "left"; ctx.fillText(o.label, bx + 5, by + 16);
-        ctx.textAlign = "right"; ctx.fillStyle = canAfford ? "#fd0" : "#555"; ctx.fillText(o.cost + " G", bx + 135, by + 16);
+      hoveredBuildOption = null; 
+      const { x, y, hasTower, tower } = buildMenuOpen;
+      const myGold = myPlayer?.gold || 0;
+      
+      if (hasTower && tower) {
+        // UPGRADE/SELL MENU for existing tower
+        const typeInfo = TOWER_TYPES[tower.type];
+        const level = tower.level || 1;
+        const upgradeCost = typeInfo.upgradeCost * level;
+        const canUpgrade = level < MAX_TOWER_LEVEL && myGold >= upgradeCost;
+        
+        // Calculate sell value
+        let totalInvested = typeInfo.cost;
+        for (let lvl = 1; lvl < level; lvl++) {
+          totalInvested += typeInfo.upgradeCost * lvl;
+        }
+        const sellValue = Math.floor(totalInvested * 0.5);
+        
+        const menuW = 180;
+        const menuH = 140;
+        const mx = x - menuW/2;
+        const my = y - menuH - 50;
+        
+        // Menu background with tower color accent
+        ctx.fillStyle = "rgba(10,10,30,0.95)";
+        ctx.strokeStyle = typeInfo.color;
+        ctx.lineWidth = 2;
+        ctx.shadowColor = typeInfo.color;
+        ctx.shadowBlur = 15;
+        ctx.beginPath();
+        ctx.roundRect(mx, my, menuW, menuH, 10);
+        ctx.fill();
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        
+        // Header with icon and name
+        ctx.font = "24px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#fff";
+        ctx.fillText(typeInfo.icon, mx + menuW/2, my + 28);
+        
+        ctx.font = "bold 14px 'Courier New', monospace";
+        ctx.fillStyle = typeInfo.color;
+        ctx.fillText(typeInfo.name.toUpperCase(), mx + menuW/2, my + 48);
+        
+        // Level display
+        ctx.font = "bold 11px 'Courier New', monospace";
+        ctx.fillStyle = "#ffd700";
+        const stars = "★".repeat(level) + "☆".repeat(MAX_TOWER_LEVEL - level);
+        ctx.fillText(stars, mx + menuW/2, my + 65);
+        
+        // Upgrade button
+        const upY = my + 78;
+        const upH = 28;
+        const isUpgradeHovered = mouseX >= mx + 10 && mouseX <= mx + menuW - 10 && mouseY >= upY && mouseY <= upY + upH;
+        if (isUpgradeHovered && canUpgrade) hoveredBuildOption = "upgrade";
+        
+        if (level >= MAX_TOWER_LEVEL) {
+          ctx.fillStyle = "rgba(100,100,100,0.3)";
+          ctx.fillRect(mx + 10, upY, menuW - 20, upH);
+          ctx.font = "bold 12px 'Courier New', monospace";
+          ctx.fillStyle = "#666";
+          ctx.textAlign = "center";
+          ctx.fillText("MAX LEVEL", mx + menuW/2, upY + 18);
+        } else {
+          ctx.fillStyle = isUpgradeHovered ? "rgba(0,255,136,0.3)" : "rgba(0,255,136,0.1)";
+          if (!canUpgrade) ctx.fillStyle = "rgba(50,0,0,0.3)";
+          ctx.strokeStyle = canUpgrade ? "#0f8" : "#500";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(mx + 10, upY, menuW - 20, upH, 5);
+          ctx.fill();
+          ctx.stroke();
+          
+          ctx.font = "bold 12px 'Courier New', monospace";
+          ctx.textAlign = "left";
+          ctx.fillStyle = canUpgrade ? "#0f8" : "#555";
+          ctx.fillText("⬆ UPGRADE", mx + 18, upY + 18);
+          ctx.textAlign = "right";
+          ctx.fillStyle = canUpgrade ? "#fd0" : "#555";
+          ctx.fillText(upgradeCost + " G", mx + menuW - 18, upY + 18);
+        }
+        
+        // Sell button
+        const sellY = my + 110;
+        const isSellHovered = mouseX >= mx + 10 && mouseX <= mx + menuW - 10 && mouseY >= sellY && mouseY <= sellY + upH;
+        if (isSellHovered) hoveredBuildOption = "sell";
+        
+        ctx.fillStyle = isSellHovered ? "rgba(255,68,68,0.3)" : "rgba(255,68,68,0.1)";
+        ctx.strokeStyle = "#f44";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(mx + 10, sellY, menuW - 20, upH, 5);
+        ctx.fill();
+        ctx.stroke();
+        
+        ctx.font = "bold 12px 'Courier New', monospace";
+        ctx.textAlign = "left";
+        ctx.fillStyle = "#f44";
+        ctx.fillText("✕ SELL", mx + 18, sellY + 18);
+        ctx.textAlign = "right";
+        ctx.fillStyle = "#0f8";
+        ctx.fillText("+" + sellValue + " G", mx + menuW - 18, sellY + 18);
+        
+      } else {
+        // BUILD NEW TOWER MENU
+        const menuW = 200;
+        const menuH = 160;
+        const mx = x - menuW/2;
+        const my = y - menuH - 30;
+        
+        // Menu background
+        ctx.fillStyle = "rgba(10,10,30,0.95)";
+        ctx.strokeStyle = "#0f8";
+        ctx.lineWidth = 2;
+        ctx.shadowColor = "#0f8";
+        ctx.shadowBlur = 15;
+        ctx.beginPath();
+        ctx.roundRect(mx, my, menuW, menuH, 10);
+        ctx.fill();
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        
+        // Header
+        ctx.font = "bold 14px 'Courier New', monospace";
+        ctx.fillStyle = "#0f8";
+        ctx.textAlign = "center";
+        ctx.fillText("⚙ BUILD TOWER", mx + menuW/2, my + 22);
+        
+        // Divider
+        ctx.strokeStyle = "rgba(0,255,136,0.3)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(mx + 15, my + 32);
+        ctx.lineTo(mx + menuW - 15, my + 32);
+        ctx.stroke();
+        
+        const opts = [
+          { id: 0, icon: "⚡", label: "GATLING", desc: "Fast Fire", cost: 50, col: "#ffff00" },
+          { id: 1, icon: "🎯", label: "SNIPER", desc: "High Damage", cost: 120, col: "#00ff00" },
+          { id: 2, icon: "🚀", label: "MISSILE", desc: "Splash", cost: 250, col: "#ff4444" }
+        ];
+        
+        for (let i = 0; i < opts.length; i++) {
+          const o = opts[i];
+          const by = my + 40 + i * 40;
+          const bx = mx + 10;
+          const bw = menuW - 20;
+          const bh = 36;
+          
+          const isHovered = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
+          if (isHovered) hoveredBuildOption = o.id;
+          const canAfford = myGold >= o.cost;
+          
+          // Button background
+          ctx.fillStyle = isHovered ? hexToRgba(o.col, 0.25) : "rgba(0,0,0,0.4)";
+          if (!canAfford) ctx.fillStyle = "rgba(30,0,0,0.4)";
+          ctx.strokeStyle = isHovered ? o.col : hexToRgba(o.col, 0.4);
+          if (!canAfford) ctx.strokeStyle = "#400";
+          ctx.lineWidth = isHovered ? 2 : 1;
+          ctx.beginPath();
+          ctx.roundRect(bx, by, bw, bh, 6);
+          ctx.fill();
+          ctx.stroke();
+          
+          // Icon
+          ctx.font = "18px sans-serif";
+          ctx.textAlign = "left";
+          ctx.fillText(o.icon, bx + 8, by + 24);
+          
+          // Name and description
+          ctx.font = "bold 12px 'Courier New', monospace";
+          ctx.fillStyle = canAfford ? o.col : "#555";
+          ctx.fillText(o.label, bx + 35, by + 16);
+          
+          ctx.font = "9px 'Courier New', monospace";
+          ctx.fillStyle = canAfford ? "rgba(255,255,255,0.6)" : "#444";
+          ctx.fillText(o.desc, bx + 35, by + 28);
+          
+          // Cost
+          ctx.font = "bold 12px 'Courier New', monospace";
+          ctx.textAlign = "right";
+          ctx.fillStyle = canAfford ? "#fd0" : "#555";
+          ctx.fillText(o.cost + " G", bx + bw - 8, by + 22);
+        }
       }
+      ctx.textAlign = "left";
     }
     
     if (phase === "upgrades" && upgradeOptions.length > 0) {
