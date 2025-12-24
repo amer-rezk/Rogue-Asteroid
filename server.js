@@ -13,7 +13,7 @@ const DT = 1 / TICK_RATE;
 
 const WORLD_H = 600;
 const GROUND_Y = 560;
-const SEGMENT_W = 360; // Player segment width
+const SEGMENT_W = 360;
 
 const BASE_HP_PER_PLAYER = 5;
 
@@ -105,21 +105,16 @@ function segmentBounds(slot) {
   return { x0, x1 };
 }
 
-// Calculate 4 slots + Main Center
 function turretPositions(slot) {
   const { x0 } = segmentBounds(slot);
   const cx = x0 + SEGMENT_W / 2;
-  
-  // 4 Slots: Outer Left, Inner Left, Inner Right, Outer Right
-  // Spacing: 50px between inner/outer, 60px from center
   return {
     main: { x: cx, y: GROUND_Y },
-    // Array index 0, 1, 2, 3
     slots: [
-      { x: cx - 110, y: GROUND_Y }, // 0: Outer Left
-      { x: cx - 50,  y: GROUND_Y }, // 1: Inner Left
-      { x: cx + 50,  y: GROUND_Y }, // 2: Inner Right
-      { x: cx + 110, y: GROUND_Y }  // 3: Outer Right
+      { x: cx - 110, y: GROUND_Y },
+      { x: cx - 50,  y: GROUND_Y },
+      { x: cx + 50,  y: GROUND_Y },
+      { x: cx + 110, y: GROUND_Y }
     ]
   };
 }
@@ -194,7 +189,6 @@ function makeUpgradeOptions(player) {
     }
 
     let desc = def.desc.replace("{val}", val);
-    
     opts.push({
       key: uid(), 
       defId: def.id,
@@ -254,7 +248,6 @@ function spawnWave() {
 
     const type = r > 14 ? "large" : r > 10 ? "medium" : "small";
     const baseHpVal = type === "large" ? 4 : type === "medium" ? 2 : 1;
-    
     const waveHpBonus = Math.floor(wave * 0.8);
 
     missiles.push({
@@ -300,7 +293,6 @@ function startGame() {
     const p = players.get(id);
     if (p) {
       p.upgrades = {};
-      // 4 Slots: [0, 1, 2, 3]
       p.towers = [null, null, null, null];
       p.gold = 0;
       p.cooldown = 0;
@@ -328,7 +320,6 @@ function beginUpgradePhase() {
     upgradePicks.set(id, { options, pickedKey: null });
     safeSend(p.ws, { t: "upgrade", options });
   }
-  
   broadcast({ t: "upgradePhase" });
 }
 
@@ -337,7 +328,6 @@ function maybeEndUpgradePhase() {
     const pickObj = upgradePicks.get(id);
     if (!pickObj || !pickObj.pickedKey) return;
   }
-
   wave += 1;
   phase = "playing";
   spawnWave();
@@ -346,7 +336,6 @@ function maybeEndUpgradePhase() {
 
 function resetToLobby() {
   try {
-    console.log("Resetting to lobby...");
     phase = "lobby";
     lockedSlots = null;
     missiles = [];
@@ -458,11 +447,9 @@ function findBestTarget(x0, x1, turretX, turretY, rangeMult = 1.0) {
   for (const m of missiles) {
     if (m.x < searchX0 || m.x > searchX1) continue;
     if (m.y < 0) continue;
-    
     const danger = m.y / GROUND_Y;
     const dist = Math.hypot(m.x - turretX, m.y - turretY);
     const score = danger * 1000 - dist * 0.1;
-    
     if (score > bestScore) {
       bestScore = score;
       best = m;
@@ -508,218 +495,196 @@ function addDamageNumber(x, y, amount, isCrit) {
 function tick() {
   if (phase !== "playing") return;
 
-  particles = particles.filter(p => {
-    p.x += p.vx * DT; p.y += p.vy * DT; p.life -= DT; p.vx *= 0.95; p.vy *= 0.95; return p.life > 0;
-  });
-  damageNumbers = damageNumbers.filter(d => {
-    d.y += d.vy * DT; d.life -= DT * 1.5; return d.life > 0;
-  });
+  try {
+    particles = particles.filter(p => {
+      p.x += p.vx * DT; p.y += p.vy * DT; p.life -= DT; p.vx *= 0.95; p.vy *= 0.95; return p.life > 0;
+    });
+    damageNumbers = damageNumbers.filter(d => {
+      d.y += d.vy * DT; d.life -= DT * 1.5; return d.life > 0;
+    });
 
-  for (const id of lockedSlots) {
-    const p = players.get(id);
-    if (!p) continue;
-
-    p.cooldown = Math.max(0, (p.cooldown ?? 0) - DT);
-    
-    // Tower Cooldowns (Loop through array of 4)
-    if (p.towers) {
-      p.towers.forEach(t => {
-        if (t) t.cd = Math.max(0, (t.cd || 0) - DT);
-      });
-    }
-
-    const slot = p.slot;
-    const { x0, x1 } = segmentBounds(slot);
-    const pos = turretPositions(slot);
-    const canExtend = !!p.upgrades?.range;
-    const baseCooldown = BULLET_COOLDOWN / (p.upgrades?.fireRateMult ?? 1);
-
-    // Main Gun
-    let targetX, targetY, clamped;
-    if (p.manualShooting && p.targetX != null && p.targetY != null) {
-      clamped = clampAimAngle(pos.main.x, pos.main.y, p.targetX, p.targetY);
-      targetX = clamped.x; targetY = clamped.y;
-    } else {
-      const target = findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend ? 1.5 : 1.0);
-      if (target) {
-        clamped = clampAimAngle(pos.main.x, pos.main.y, target.x, target.y);
-      } else {
-        clamped = clampAimAngle(pos.main.x, pos.main.y, pos.main.x, 50);
-      }
-      targetX = clamped.x; targetY = clamped.y;
-    }
-    p.turretAngle = clamped.angle;
-    const shouldFire = p.manualShooting || findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend ? 1.5 : 1.0);
-    if (shouldFire && p.cooldown <= 0) {
-      p.cooldown = baseCooldown;
-      fireWithMultishot(p, pos.main.x, pos.main.y, clamped.x, clamped.y);
-    }
-
-    // Mini Towers Logic (4 Slots)
-    if (p.towers) {
-      p.towers.forEach((tower, idx) => {
-        if (!tower) return;
-        if (tower.cd > 0) return;
-        
-        // Get physical position of this slot
-        const towerPos = pos.slots[idx];
-        if (!towerPos) return;
-
-        const stats = TOWER_TYPES[tower.type];
-        const rangeMult = (stats.rangeMult || 1.0) * (canExtend ? 1.5 : 1.0);
-        
-        const target = findBestTarget(x0, x1, towerPos.x, towerPos.y, rangeMult);
-        if (target) {
-          tower.cd = stats.cooldown / (p.upgrades?.fireRateMult ?? 1);
-          const aim = clampAimAngle(towerPos.x, towerPos.y, target.x, target.y);
-          fireBullet(p, towerPos.x, towerPos.y, aim.x, aim.y, 0, stats);
-        }
-      });
-    }
-  }
-
-  // Missiles
-  for (const m of missiles) {
-    let speedMult = 1;
     for (const id of lockedSlots) {
       const p = players.get(id);
-      if (!p?.upgrades?.slowfield) continue;
-      const { x0, x1 } = segmentBounds(p.slot);
-      if (m.x >= x0 && m.x <= x1) { speedMult = 0.75; break; }
+      if (!p) continue;
+
+      p.cooldown = Math.max(0, (p.cooldown ?? 0) - DT);
+      
+      if (p.towers) {
+        p.towers.forEach(t => { if (t) t.cd = Math.max(0, (t.cd || 0) - DT); });
+      }
+
+      const slot = p.slot;
+      const { x0, x1 } = segmentBounds(slot);
+      const pos = turretPositions(slot);
+      const canExtend = !!p.upgrades?.range;
+      const baseCooldown = BULLET_COOLDOWN / (p.upgrades?.fireRateMult ?? 1);
+
+      let targetX, targetY, clamped;
+      if (p.manualShooting && p.targetX != null && p.targetY != null) {
+        clamped = clampAimAngle(pos.main.x, pos.main.y, p.targetX, p.targetY);
+        targetX = clamped.x; targetY = clamped.y;
+      } else {
+        const target = findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend ? 1.5 : 1.0);
+        if (target) {
+          clamped = clampAimAngle(pos.main.x, pos.main.y, target.x, target.y);
+        } else {
+          clamped = clampAimAngle(pos.main.x, pos.main.y, pos.main.x, 50);
+        }
+        targetX = clamped.x; targetY = clamped.y;
+      }
+      p.turretAngle = clamped.angle;
+      const shouldFire = p.manualShooting || findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend ? 1.5 : 1.0);
+      if (shouldFire && p.cooldown <= 0) {
+        p.cooldown = baseCooldown;
+        fireWithMultishot(p, pos.main.x, pos.main.y, clamped.x, clamped.y);
+      }
+
+      if (p.towers) {
+        p.towers.forEach((tower, idx) => {
+          if (!tower || tower.cd > 0) return;
+          const towerPos = pos.slots[idx];
+          if (!towerPos) return;
+
+          const stats = TOWER_TYPES[tower.type];
+          if (!stats) return; // Safety check
+
+          const rangeMult = (stats.rangeMult || 1.0) * (canExtend ? 1.5 : 1.0);
+          
+          const target = findBestTarget(x0, x1, towerPos.x, towerPos.y, rangeMult);
+          if (target) {
+            tower.cd = stats.cooldown / (p.upgrades?.fireRateMult ?? 1);
+            const aim = clampAimAngle(towerPos.x, towerPos.y, target.x, target.y);
+            fireBullet(p, towerPos.x, towerPos.y, aim.x, aim.y, 0, stats);
+          }
+        });
+      }
     }
 
-    m.x += m.vx * DT * speedMult; m.y += m.vy * DT * speedMult; m.rotation += m.rotSpeed * DT;
-    if (m.x - m.r < 0) { m.x = m.r; m.vx = Math.abs(m.vx); }
-    if (m.x + m.r > worldW) { m.x = worldW - m.r; m.vx = -Math.abs(m.vx); }
-
-    if (m.y + m.r >= GROUND_Y) {
-      let blocked = false;
+    // Missiles & Bullets & Collisions logic
+    for (const m of missiles) {
+      let speedMult = 1;
       for (const id of lockedSlots) {
         const p = players.get(id);
-        if (!p?.upgrades?.shieldActive) continue;
+        if (!p?.upgrades?.slowfield) continue;
         const { x0, x1 } = segmentBounds(p.slot);
-        if (m.x >= x0 && m.x <= x1 && p.upgrades.shieldActive > 0) {
-          p.upgrades.shieldActive--; blocked = true; createExplosion(m.x, GROUND_Y - 5, 30, "#0ff"); break;
+        if (m.x >= x0 && m.x <= x1) { speedMult = 0.75; break; }
+      }
+      m.x += m.vx * DT * speedMult; m.y += m.vy * DT * speedMult; m.rotation += m.rotSpeed * DT;
+      if (m.x - m.r < 0) { m.x = m.r; m.vx = Math.abs(m.vx); }
+      if (m.x + m.r > worldW) { m.x = worldW - m.r; m.vx = -Math.abs(m.vx); }
+      if (m.y + m.r >= GROUND_Y) {
+        let blocked = false;
+        for (const id of lockedSlots) {
+          const p = players.get(id);
+          if (!p?.upgrades?.shieldActive) continue;
+          const { x0, x1 } = segmentBounds(p.slot);
+          if (m.x >= x0 && m.x <= x1 && p.upgrades.shieldActive > 0) {
+            p.upgrades.shieldActive--; blocked = true; createExplosion(m.x, GROUND_Y - 5, 30, "#0ff"); break;
+          }
+        }
+        m.dead = true;
+        if (!blocked) { baseHp -= 1; createExplosion(m.x, GROUND_Y - 5, 40, "#f44"); }
+      }
+    }
+
+    for (const b of bullets) {
+      if (b.magnet) {
+        let nearest = null; let nearestDist = 150;
+        for (const m of missiles) { if (m.dead) continue; const d = Math.hypot(m.x - b.x, m.y - b.y); if (d < nearestDist) { nearestDist = d; nearest = m; } }
+        if (nearest) {
+          const dx = nearest.x - b.x; const dy = nearest.y - b.y; const len = Math.hypot(dx, dy) || 1;
+          b.vx += (dx / len) * 500 * DT; b.vy += (dy / len) * 500 * DT;
+          const speed = Math.hypot(b.vx, b.vy); const targetSpeed = BULLET_SPEED * 1.1;
+          b.vx = (b.vx / speed) * targetSpeed; b.vy = (b.vy / speed) * targetSpeed;
         }
       }
-      m.dead = true;
-      if (!blocked) { baseHp -= 1; createExplosion(m.x, GROUND_Y - 5, 40, "#f44"); }
+      b.x += b.vx * DT; b.y += b.vy * DT;
+      let didRicochet = false;
+      if (b.x < 0) { if (b.ricochet > 0) { b.x = 0; b.vx = -b.vx; b.ricochet--; didRicochet = true; } else { b.dead = true; } }
+      else if (b.x > worldW) { if (b.ricochet > 0) { b.x = worldW; b.vx = -b.vx; b.ricochet--; didRicochet = true; } else { b.dead = true; } }
+      if (b.y < -50) { if (b.ricochet > 0 && b.y < -50) { b.y = -50; b.vy = -b.vy; b.ricochet--; didRicochet = true; } else { b.dead = true; } }
+      if (b.y > GROUND_Y) { if (b.ricochet > 0) { b.y = GROUND_Y; b.vy = -b.vy; b.ricochet--; didRicochet = true; } else { b.dead = true; } }
+      if (didRicochet) b.hitList = [];
     }
-  }
 
-  // Bullets
-  for (const b of bullets) {
-    if (b.magnet) {
-      let nearest = null; let nearestDist = 150;
+    for (const b of bullets) {
+      if (b.dead) continue;
       for (const m of missiles) {
-        if (m.dead) continue; const d = Math.hypot(m.x - b.x, m.y - b.y);
-        if (d < nearestDist) { nearestDist = d; nearest = m; }
-      }
-      if (nearest) {
-        const dx = nearest.x - b.x; const dy = nearest.y - b.y; const len = Math.hypot(dx, dy) || 1;
-        b.vx += (dx / len) * 500 * DT; b.vy += (dy / len) * 500 * DT;
-        const speed = Math.hypot(b.vx, b.vy); const targetSpeed = BULLET_SPEED * 1.1;
-        b.vx = (b.vx / speed) * targetSpeed; b.vy = (b.vy / speed) * targetSpeed;
-      }
-    }
-    b.x += b.vx * DT; b.y += b.vy * DT;
-    
-    let didRicochet = false;
-    if (b.x < 0) { if (b.ricochet > 0) { b.x = 0; b.vx = -b.vx; b.ricochet--; didRicochet = true; } else { b.dead = true; } }
-    else if (b.x > worldW) { if (b.ricochet > 0) { b.x = worldW; b.vx = -b.vx; b.ricochet--; didRicochet = true; } else { b.dead = true; } }
-    if (b.y < -50) { if (b.ricochet > 0 && b.y < -50) { b.y = -50; b.vy = -b.vy; b.ricochet--; didRicochet = true; } else { b.dead = true; } }
-    if (b.y > GROUND_Y) { if (b.ricochet > 0) { b.y = GROUND_Y; b.vy = -b.vy; b.ricochet--; didRicochet = true; } else { b.dead = true; } }
-    if (didRicochet) b.hitList = [];
-  }
-
-  // Collisions
-  for (const b of bullets) {
-    if (b.dead) continue;
-    for (const m of missiles) {
-      if (m.dead) continue; if (b.hitList && b.hitList.includes(m.id)) continue;
-      const dx = m.x - b.x; const dy = m.y - b.y; const rr = m.r + b.r;
-      if (dx * dx + dy * dy <= rr * rr) {
-        m.hp -= b.dmg;
-        if (!b.hitList) b.hitList = []; b.hitList.push(m.id);
-        if (b.pierce > 0) { b.pierce--; } else { b.dead = true; }
-        addDamageNumber(m.x, m.y - m.r, b.dmg, b.isCrit);
-        const owner = players.get(b.ownerId);
-        if (m.hp <= 0) {
-          m.dead = true; createExplosion(m.x, m.y, 25, "#fa0");
-          if (owner) {
-            owner.score = (owner.score || 0) + 50;
-            const goldReward = m.type === "large" ? 3 : m.type === "medium" ? 2 : 1;
-            owner.gold = (owner.gold || 0) + goldReward;
+        if (m.dead) continue; if (b.hitList && b.hitList.includes(m.id)) continue;
+        const dx = m.x - b.x; const dy = m.y - b.y; const rr = m.r + b.r;
+        if (dx * dx + dy * dy <= rr * rr) {
+          m.hp -= b.dmg;
+          if (!b.hitList) b.hitList = []; b.hitList.push(m.id);
+          if (b.pierce > 0) { b.pierce--; } else { b.dead = true; }
+          addDamageNumber(m.x, m.y - m.r, b.dmg, b.isCrit);
+          const owner = players.get(b.ownerId);
+          if (m.hp <= 0) {
+            m.dead = true; createExplosion(m.x, m.y, 25, "#fa0");
+            if (owner) {
+              owner.score = (owner.score || 0) + 50;
+              const goldReward = m.type === "large" ? 3 : m.type === "medium" ? 2 : 1;
+              owner.gold = (owner.gold || 0) + goldReward;
+            }
+          } else { if (owner) owner.score = (owner.score || 0) + b.dmg * 10; }
+          if (b.explosive > 0) {
+            createExplosion(b.x, b.y, 35, "#fa0");
+            for (const m2 of missiles) { if (m2.dead || m2 === m) continue; const d = Math.hypot(m2.x - b.x, m2.y - b.y); if (d < 35 + m2.r) { m2.hp -= 1; if (m2.hp <= 0) m2.dead = true; } }
           }
-        } else { if (owner) owner.score = (owner.score || 0) + b.dmg * 10; }
-
-        if (b.explosive > 0) {
-          createExplosion(b.x, b.y, 35, "#fa0");
-          for (const m2 of missiles) {
-            if (m2.dead || m2 === m) continue; const d = Math.hypot(m2.x - b.x, m2.y - b.y);
-            if (d < 35 + m2.r) { m2.hp -= 1; if (m2.hp <= 0) m2.dead = true; }
-          }
-        }
-        if (b.chain && m.hp <= 0) {
-          for (const m2 of missiles) {
-            if (m2.dead || m2 === m) continue; const d = Math.hypot(m2.x - m.x, m2.y - m.y);
-            if (d < 70) {
-              m2.hp -= 1; addDamageNumber(m2.x, m2.y - m2.r, 1, false); if (m2.hp <= 0) m2.dead = true;
-              particles.push({ x: m.x, y: m.y, vx: (m2.x - m.x)*3, vy: (m2.y - m.y)*3, life: 0.12, maxLife: 0.12, color: "#ff0", size: 2 });
-              break;
+          if (b.chain && m.hp <= 0) {
+            for (const m2 of missiles) {
+              if (m2.dead || m2 === m) continue; const d = Math.hypot(m2.x - m.x, m2.y - m.y);
+              if (d < 70) {
+                m2.hp -= 1; addDamageNumber(m2.x, m2.y - m2.r, 1, false); if (m2.hp <= 0) m2.dead = true;
+                particles.push({ x: m.x, y: m.y, vx: (m2.x - m.x)*3, vy: (m2.y - m.y)*3, life: 0.12, maxLife: 0.12, color: "#ff0", size: 2 });
+                break;
+              }
             }
           }
+          createExplosion(b.x, b.y, 15, b.isCrit ? "#ff0" : "#0ff"); if (b.dead) break;
         }
-        createExplosion(b.x, b.y, 15, b.isCrit ? "#ff0" : "#0ff"); if (b.dead) break;
       }
     }
+
+    missiles = missiles.filter((m) => !m.dead);
+    bullets = bullets.filter((b) => !b.dead);
+
+    if (baseHp <= 0) { endGame(); return; }
+    if (missiles.length === 0) { beginUpgradePhase(); return; }
+
+    broadcast({
+      t: "state",
+      ts: Date.now(),
+      phase,
+      wave,
+      world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
+      baseHp,
+      maxBaseHp,
+      missiles: missiles.map((m) => ({ id: m.id, x: m.x, y: m.y, r: m.r, hp: m.hp, maxHp: m.maxHp, type: m.type, rotation: m.rotation, vertices: m.vertices })),
+      bullets: bullets.map((b) => ({ id: b.id, x: b.x, y: b.y, r: b.r, vx: b.vx, vy: b.vy, slot: b.ownerSlot, isCrit: b.isCrit })),
+      particles: particles.map((p) => ({ x: p.x, y: p.y, life: p.life, maxLife: p.maxLife, color: p.color, size: p.size })),
+      damageNumbers: damageNumbers.map((d) => ({ x: d.x, y: d.y, amount: d.amount, isCrit: d.isCrit, life: d.life })),
+      players: lockedSlots.map((id) => {
+        const p = players.get(id);
+        if (!p) return { id, slot: -1 };
+        return {
+          id: p.id, slot: p.slot,
+          name: p.name || `Player ${p.slot + 1}`,
+          score: p.score || 0,
+          gold: p.gold || 0,
+          turretAngle: p.turretAngle || -Math.PI / 2,
+          isManual: !!p.manualShooting,
+          towers: p.towers,
+          upgrades: {
+            shieldActive: p.upgrades?.shieldActive ?? 0,
+            range: !!p.upgrades?.range,
+            slowfield: !!p.upgrades?.slowfield,
+          },
+        };
+      }),
+    });
+  } catch (err) {
+    console.error("Game loop error:", err);
   }
-
-  missiles = missiles.filter((m) => !m.dead);
-  bullets = bullets.filter((b) => !b.dead);
-
-  if (baseHp <= 0) { endGame(); return; }
-  if (missiles.length === 0) { beginUpgradePhase(); return; }
-
-  broadcast({
-    t: "state",
-    ts: Date.now(),
-    phase,
-    wave,
-    world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
-    baseHp,
-    maxBaseHp,
-    missiles: missiles.map((m) => ({
-      id: m.id, x: m.x, y: m.y, r: m.r, hp: m.hp, maxHp: m.maxHp, type: m.type, rotation: m.rotation, vertices: m.vertices,
-    })),
-    bullets: bullets.map((b) => ({
-      id: b.id, x: b.x, y: b.y, r: b.r, vx: b.vx, vy: b.vy, slot: b.ownerSlot, isCrit: b.isCrit,
-    })),
-    particles: particles.map((p) => ({
-      x: p.x, y: p.y, life: p.life, maxLife: p.maxLife, color: p.color, size: p.size,
-    })),
-    damageNumbers: damageNumbers.map((d) => ({
-      x: d.x, y: d.y, amount: d.amount, isCrit: d.isCrit, life: d.life,
-    })),
-    players: lockedSlots.map((id) => {
-      const p = players.get(id);
-      if (!p) return { id, slot: -1 };
-      return {
-        id: p.id, slot: p.slot,
-        name: p.name || `Player ${p.slot + 1}`,
-        score: p.score || 0,
-        gold: p.gold || 0,
-        turretAngle: p.turretAngle || -Math.PI / 2,
-        isManual: !!p.manualShooting,
-        towers: p.towers, // Array of 4
-        upgrades: {
-          shieldActive: p.upgrades?.shieldActive ?? 0,
-          range: !!p.upgrades?.range,
-          slowfield: !!p.upgrades?.slowfield,
-        },
-      };
-    }),
-  });
 }
 
 // ===== Networking =====
@@ -730,22 +695,15 @@ function assignSlot() {
 }
 
 const interval = setInterval(() => {
-  wss.clients.forEach((ws) => {
-    if (ws.isAlive === false) return ws.terminate();
-    ws.isAlive = false;
-    ws.ping();
-  });
+  wss.clients.forEach((ws) => { if (ws.isAlive === false) return ws.terminate(); ws.isAlive = false; ws.ping(); });
 }, 30000);
 
 wss.on("close", () => { clearInterval(interval); });
 
 wss.on("connection", (ws) => {
   if (phase === "gameover") resetToLobby();
-  ws.isAlive = true;
-  ws.on('pong', () => { ws.isAlive = true; });
-  
+  ws.isAlive = true; ws.on('pong', () => { ws.isAlive = true; });
   if (phase !== "lobby") { safeSend(ws, { t: "reject", reason: "Game in progress" }); ws.close(); return; }
-
   const slot = assignSlot();
   if (slot < 0) { safeSend(ws, { t: "reject", reason: "Game full (max 4)" }); ws.close(); return; }
 
@@ -756,7 +714,7 @@ wss.on("connection", (ws) => {
     targetX: 0, targetY: 0,
     manualShooting: false,
     upgrades: {},
-    towers: [null, null, null, null], // 4 slots
+    towers: [null, null, null, null],
     gold: 0, cooldown: 0, score: 0, ready: false,
   };
 
@@ -764,9 +722,7 @@ wss.on("connection", (ws) => {
   if (!hostId) hostId = id;
 
   recomputeWorld();
-
   safeSend(ws, { t: "welcome", id, slot, isHost: id === hostId, world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, phase });
-
   broadcast({ t: "lobby", ...lobbySnapshot() });
 
   ws.on("message", (data) => {
@@ -798,16 +754,12 @@ wss.on("connection", (ws) => {
     }
 
     if (msg.t === "buyTower" && phase === "playing") {
-      const { slotIndex, type } = msg; // expect 0, 1, 2, 3
+      const { slotIndex, type } = msg; 
       if (!TOWER_TYPES[type]) return;
       if (slotIndex < 0 || slotIndex > 3) return;
-      if (p.towers[slotIndex]) return; // Occupied
-      
+      if (p.towers[slotIndex]) return; 
       const cost = TOWER_TYPES[type].cost;
-      if (p.gold >= cost) {
-        p.gold -= cost;
-        p.towers[slotIndex] = { type, cd: 0 };
-      }
+      if (p.gold >= cost) { p.gold -= cost; p.towers[slotIndex] = { type, cd: 0 }; }
     }
   });
 
