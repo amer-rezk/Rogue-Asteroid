@@ -51,7 +51,7 @@
   let mouseY = 0;
   let mouseDown = false;
   let hoveredUpgrade = -1;
-  let forcedDisconnect = false; // To track if we should reconnect
+  let forcedDisconnect = false;
 
   // Visual
   let stars = [];
@@ -126,7 +126,6 @@
       lobbyEl.style.display = "none";
       
       if (!forcedDisconnect) {
-        // Auto reconnect logic
         statusEl.textContent = "RECONNECTING IN 3s...";
         setTimeout(connect, 3000);
       } else if (phase !== "menu") {
@@ -161,14 +160,13 @@
 
       case "reject":
         statusEl.textContent = msg.reason;
-        forcedDisconnect = true; // Don't auto-reconnect if rejected
+        forcedDisconnect = true;
         break;
 
       case "lobby":
         lobbyPlayers = msg.players;
         allReady = msg.allReady;
         isHost = msg.hostId === myId;
-        // Return to menu if we were in game
         if (phase === "playing" || phase === "upgrades" || phase === "gameover") {
           lastSnap = null;
           upgradeOptions = [];
@@ -337,7 +335,6 @@
     const worldX = (mouseX - scale.offsetX) / scale.sx;
     const worldY = (mouseY - scale.offsetY) / scale.sy;
 
-    // UPDATED: Send raw World coordinates instead of normalized segment position
     send({
       t: "input",
       x: worldX,
@@ -406,7 +403,6 @@
     }
 
     if (phase === "menu" || phase === "lobby") {
-      // Title on canvas
       drawNeonText("ROGUE ASTEROID", canvas.width/2, 60, "#0ff", 28, "center");
       return;
     }
@@ -553,7 +549,7 @@
       ctx.restore();
       ctx.shadowBlur = 0;
 
-      // HP bar for damaged asteroids
+      // HP bar
       if (m.hp < m.maxHp) {
         const barW = r * 2;
         const barH = 3 * sy;
@@ -617,28 +613,23 @@
       const cx = segX0 + world.segmentWidth / 2;
       const offset = world.segmentWidth * 0.20;
 
-      // Draw aim guide for local player when manually shooting
+      // Draw aim guide
       if (p.id === myId && mouseDown) {
         const turretX = cx * sx;
-        const turretY = (560 - 14) * sy; // Top of turret base
+        const turretY = (560 - 14) * sy; 
         
-        // Calculate aim point in world coords
         const worldMouseX = (mouseX - offsetX) / sx;
         const worldMouseY = (mouseY - offsetY) / sy;
         
-        // Clamp to 160 degree arc
         const dx = worldMouseX - cx;
         const dy = worldMouseY - 560;
         let angle = Math.atan2(dy, dx);
         
-        // --- MATCH SERVER MAX_AIM_ANGLE ---
         const maxAngle = (80 * Math.PI) / 180;
         const fromVertical = angle - (-Math.PI / 2);
         const clampedFromVertical = Math.max(-maxAngle, Math.min(maxAngle, fromVertical));
         const clampedAngle = -Math.PI / 2 + clampedFromVertical;
-        // --------------------------------------------------
         
-        // Draw the guide line
         const lineLen = 500;
         const endX = cx + Math.cos(clampedAngle) * lineLen;
         const endY = 560 + Math.sin(clampedAngle) * lineLen;
@@ -655,7 +646,6 @@
         ctx.stroke();
         ctx.setLineDash([]);
         
-        // Draw crosshair at aim point
         const crossX = endX * sx;
         const crossY = Math.max(30, endY * sy);
         ctx.strokeStyle = color.main;
@@ -792,19 +782,16 @@
     }
     ctx.textAlign = "left";
 
-    // === Upgrade UI ===
+    // === Upgrade UI (Updated for Rarity) ===
     if (phase === "upgrades" && upgradeOptions.length > 0) {
-      // Darken background
       ctx.fillStyle = "rgba(0,0,0,0.75)";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       if (!upgradePicked) {
-        // Title
         drawNeonText("CHOOSE UPGRADE", canvas.width/2, 80, "#ff0", 24, "center");
 
-        // Cards
         const cardW = 220;
-        const cardH = 140;
+        const cardH = 160; // Slightly taller
         const gap = 30;
         const totalW = upgradeOptions.length * cardW + (upgradeOptions.length - 1) * gap;
         const startX = canvas.width/2 - totalW/2;
@@ -820,15 +807,13 @@
                            mouseY >= cardY && mouseY <= cardY + cardH;
           if (isHovered) hoveredUpgrade = i;
 
-          const catColor = opt.category === "offense" ? "#f55" :
-                          opt.category === "turret" ? "#0ff" :
-                          opt.category === "defense" ? "#0f8" : "#a0f";
-
-          // Card bg
-          ctx.fillStyle = isHovered ? "rgba(0,255,255,0.15)" : "rgba(20,20,40,0.9)";
-          ctx.strokeStyle = isHovered ? "#0ff" : "rgba(255,255,255,0.2)";
-          ctx.lineWidth = isHovered ? 3 : 1;
-          ctx.shadowColor = isHovered ? "#0ff" : "transparent";
+          // Use rarity color
+          const rarityColor = opt.rarityColor || "#fff";
+          
+          ctx.fillStyle = isHovered ? "rgba(255,255,255,0.1)" : "rgba(20,20,40,0.9)";
+          ctx.strokeStyle = isHovered ? rarityColor : hexToRgba(rarityColor, 0.3);
+          ctx.lineWidth = isHovered ? 4 : 2;
+          ctx.shadowColor = isHovered ? rarityColor : "transparent";
           ctx.shadowBlur = isHovered ? 20 : 0;
           
           ctx.beginPath();
@@ -837,30 +822,34 @@
           ctx.stroke();
           ctx.shadowBlur = 0;
 
+          // Rarity Label (Top)
+          ctx.font = "bold 10px 'Courier New', monospace";
+          ctx.textAlign = "center";
+          ctx.fillStyle = rarityColor;
+          ctx.fillText(opt.rarityLabel, cardX + cardW/2, cardY + 20);
+
           // Icon
           ctx.font = "32px sans-serif";
-          ctx.textAlign = "center";
           ctx.fillStyle = "#fff";
-          ctx.fillText(opt.icon, cardX + cardW/2, cardY + 40);
+          ctx.fillText(opt.icon, cardX + cardW/2, cardY + 55);
 
           // Title
           ctx.font = "bold 14px 'Courier New', monospace";
-          ctx.fillStyle = catColor;
-          ctx.fillText(opt.title, cardX + cardW/2, cardY + 70);
+          ctx.fillStyle = rarityColor;
+          ctx.fillText(opt.title, cardX + cardW/2, cardY + 85);
 
           // Desc
           ctx.font = "11px 'Courier New', monospace";
-          ctx.fillStyle = "rgba(255,255,255,0.7)";
-          ctx.fillText(opt.desc, cardX + cardW/2, cardY + 95);
+          ctx.fillStyle = "rgba(255,255,255,0.8)";
+          ctx.fillText(opt.desc, cardX + cardW/2, cardY + 110);
 
           // Category
           ctx.font = "9px 'Courier New', monospace";
-          ctx.fillStyle = catColor;
-          ctx.fillText(opt.category.toUpperCase(), cardX + cardW/2, cardY + 125);
+          ctx.fillStyle = "rgba(255,255,255,0.4)";
+          ctx.fillText(opt.category.toUpperCase(), cardX + cardW/2, cardY + 140);
         }
         ctx.textAlign = "left";
       } else {
-        // Waiting screen
         drawNeonText("UPGRADE SELECTED", canvas.width/2, canvas.height/2 - 20, "#0f8", 20, "center");
         if (waitingFor.length > 0) {
           ctx.font = "14px 'Courier New', monospace";
