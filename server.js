@@ -485,24 +485,30 @@ function tick() {
     const baseCooldown = BULLET_COOLDOWN / (p.upgrades?.fireRateMult ?? 1);
 
     let targetX, targetY;
+    let clamped;
     
+    // MODIFIED: Use clampAimAngle for manual shooting too
     if (p.manualShooting) {
-      targetX = x0 + clamp(p.aimX ?? 0.5, 0, 1) * SEGMENT_W;
-      targetY = 50;
+      const rawTargetX = x0 + clamp(p.aimX ?? 0.5, 0, 1) * SEGMENT_W;
+      const rawTargetY = 50; // Aiming towards top of screen
+      clamped = clampAimAngle(pos.main.x, pos.main.y, rawTargetX, rawTargetY);
+      targetX = clamped.x;
+      targetY = clamped.y;
     } else {
       const target = findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend);
       if (target) {
-        targetX = target.x;
-        targetY = target.y;
+        clamped = clampAimAngle(pos.main.x, pos.main.y, target.x, target.y);
       } else {
-        targetX = pos.main.x;
-        targetY = 50;
+        // Default aim up if no target
+        clamped = clampAimAngle(pos.main.x, pos.main.y, pos.main.x, 50);
       }
+      targetX = clamped.x;
+      targetY = clamped.y;
     }
 
-    const clamped = clampAimAngle(pos.main.x, pos.main.y, targetX, targetY);
     p.turretAngle = clamped.angle;
 
+    // Fire logic
     const shouldFire = p.manualShooting || findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend);
     
     if (shouldFire && p.cooldown <= 0) {
@@ -510,6 +516,7 @@ function tick() {
       fireWithMultishot(p, pos.main.x, pos.main.y, clamped.x, clamped.y);
     }
 
+    // Mini turrets (always auto)
     const autoTarget = findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend);
     if (autoTarget) {
       if (p.upgrades?.miniLeft && p.miniCooldownL <= 0) {
