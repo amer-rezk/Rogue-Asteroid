@@ -19,7 +19,7 @@ const BASE_HP_PER_PLAYER = 5;
 
 const BULLET_R = 2.5;
 const BULLET_SPEED = 700;
-const BULLET_COOLDOWN = 0.72; // 4x slower baseline
+const BULLET_COOLDOWN = 0.72;
 const BULLET_DAMAGE = 1;
 
 const ASTEROID_R_MIN = 8;
@@ -202,7 +202,6 @@ function spawnWave() {
     const y = rand(-WORLD_H * 0.8, -r - 50);
 
     const vx = rand(-10 - wave * 0.5, 10 + wave * 0.5);
-    // Base speed reduced 50%, increases 1% per wave
     const baseVy = rand(25, 45);
     const vy = baseVy * (1 + wave * 0.01);
 
@@ -253,7 +252,8 @@ function startGame() {
     if (p) {
       p.upgrades = {};
       p.cooldown = 0;
-      p.aimX = 0.5;
+      p.targetX = null;
+      p.targetY = null;
       p.manualShooting = false;
       p.turretAngle = -Math.PI / 2;
       p.miniCooldownL = 0;
@@ -487,11 +487,9 @@ function tick() {
     let targetX, targetY;
     let clamped;
     
-    // MODIFIED: Use clampAimAngle for manual shooting too
-    if (p.manualShooting) {
-      const rawTargetX = x0 + clamp(p.aimX ?? 0.5, 0, 1) * SEGMENT_W;
-      const rawTargetY = 50; // Aiming towards top of screen
-      clamped = clampAimAngle(pos.main.x, pos.main.y, rawTargetX, rawTargetY);
+    // UPDATED: Manual shooting now uses exact world coordinates, not constrained to segment
+    if (p.manualShooting && p.targetX != null && p.targetY != null) {
+      clamped = clampAimAngle(pos.main.x, pos.main.y, p.targetX, p.targetY);
       targetX = clamped.x;
       targetY = clamped.y;
     } else {
@@ -499,7 +497,6 @@ function tick() {
       if (target) {
         clamped = clampAimAngle(pos.main.x, pos.main.y, target.x, target.y);
       } else {
-        // Default aim up if no target
         clamped = clampAimAngle(pos.main.x, pos.main.y, pos.main.x, 50);
       }
       targetX = clamped.x;
@@ -516,7 +513,7 @@ function tick() {
       fireWithMultishot(p, pos.main.x, pos.main.y, clamped.x, clamped.y);
     }
 
-    // Mini turrets (always auto)
+    // Mini turrets
     const autoTarget = findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend);
     if (autoTarget) {
       if (p.upgrades?.miniLeft && p.miniCooldownL <= 0) {
@@ -532,7 +529,7 @@ function tick() {
     }
   }
 
-  // Missiles
+  // Missiles logic (physics)
   for (const m of missiles) {
     let speedMult = 1;
     for (const id of lockedSlots) {
@@ -565,7 +562,6 @@ function tick() {
           break;
         }
       }
-      
       m.dead = true;
       if (!blocked) {
         baseHp -= 1;
@@ -574,7 +570,7 @@ function tick() {
     }
   }
 
-  // Bullets with magnet
+  // Bullets logic
   for (const b of bullets) {
     if (b.magnet) {
       let nearest = null;
@@ -617,15 +613,12 @@ function tick() {
       if (dx * dx + dy * dy <= rr * rr) {
         m.hp -= b.dmg;
         b.dead = true;
-        
         addDamageNumber(m.x, m.y - m.r, b.dmg, b.isCrit);
-        
         const owner = players.get(b.ownerId);
         if (owner) {
           owner.score = (owner.score || 0) + b.dmg * 10;
           if (m.hp <= 0) owner.score += 50;
         }
-        
         if (b.explosive > 0) {
           createExplosion(b.x, b.y, 35, "#fa0");
           for (const m2 of missiles) {
@@ -637,7 +630,6 @@ function tick() {
             }
           }
         }
-        
         if (b.chain && m.hp <= 0) {
           for (const m2 of missiles) {
             if (m2.dead || m2 === m) continue;
@@ -657,9 +649,7 @@ function tick() {
             }
           }
         }
-        
         createExplosion(b.x, b.y, 15, b.isCrit ? "#ff0" : "#0ff");
-        
         if (m.hp <= 0) {
           m.dead = true;
           createExplosion(m.x, m.y, 25, "#fa0");
@@ -734,8 +724,25 @@ function assignSlot() {
   return -1;
 }
 
+// Heartbeat interval to keep connections alive
+const interval = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) return ws.terminate();
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 30000);
+
+wss.on("close", () => {
+  clearInterval(interval);
+});
+
 wss.on("connection", (ws) => {
   if (phase === "gameover") resetToLobby();
+  
+  // Heartbeat setup
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
   
   if (phase !== "lobby") {
     safeSend(ws, { t: "reject", reason: "Game in progress" });
@@ -754,7 +761,8 @@ wss.on("connection", (ws) => {
   const player = {
     id, ws, slot,
     name: `Player ${slot + 1}`,
-    aimX: 0.5,
+    targetX: 0,
+    targetY: 0,
     manualShooting: false,
     upgrades: {},
     cooldown: 0,
@@ -806,8 +814,9 @@ wss.on("connection", (ws) => {
     }
 
     if (msg.t === "input" && phase === "playing") {
-      const aimXNorm = Number(msg.aimXNorm);
-      p.aimX = Number.isFinite(aimXNorm) ? clamp(aimXNorm, 0, 1) : 0.5;
+      // UPDATED: Receive raw X/Y coordinates
+      p.targetX = Number(msg.x) || 0;
+      p.targetY = Number(msg.y) || 0;
       p.manualShooting = !!msg.shooting;
       return;
     }
