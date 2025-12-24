@@ -209,7 +209,6 @@ input[type="text"]:focus {
   box-shadow: 0 0 20px var(--cyan);
 }
 
-/* Updated Ready State for High Visibility */
 .btn.ready {
   background: #00ff88;
   border-color: #00ff88;
