@@ -154,11 +154,21 @@
 
     ws.onclose = () => {
       connected = false;
-      if (statusText) {
-        statusText.textContent = "OFFLINE - RETRYING...";
-        statusText.className = "status-text";
+      
+      // Don't overwrite status if we got a specific rejection reason
+      const currentStatus = statusText?.textContent || "";
+      const wasRejected = currentStatus.includes("PROGRESS") || currentStatus.includes("FULL");
+      
+      if (!wasRejected) {
+        if (statusText) {
+          statusText.textContent = "OFFLINE - RETRYING...";
+          statusText.className = "status-text";
+        }
+        if (statusLED) statusLED.className = "led red";
+      } else if (currentStatus.includes("PROGRESS")) {
+        // Keep yellow LED, update text to show retrying
+        if (statusText) statusText.textContent = "GAME IN PROGRESS - RETRYING...";
       }
-      if (statusLED) statusLED.className = "led red";
       
       lobbyEl.style.display = "none";
       
@@ -195,8 +205,20 @@
         break;
 
       case "reject":
-        if(statusText) statusText.textContent = msg.reason.toUpperCase();
-        forcedDisconnect = true;
+        if(statusText) {
+          statusText.textContent = msg.reason.toUpperCase();
+          statusText.className = "status-text";
+        }
+        // Only force disconnect for "full" errors, not "in progress"
+        // Game in progress will resolve when game ends, so keep retrying
+        if (msg.reason.toLowerCase().includes("full")) {
+          forcedDisconnect = true;
+          if (statusLED) statusLED.className = "led red";
+        } else {
+          // Game in progress - show yellow and keep retrying
+          forcedDisconnect = false;
+          if (statusLED) statusLED.className = "led yellow";
+        }
         break;
 
       case "lobby":
