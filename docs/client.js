@@ -51,6 +51,7 @@
   let mouseY = 0;
   let mouseDown = false;
   let hoveredUpgrade = -1;
+  let forcedDisconnect = false; // To track if we should reconnect
 
   // Visual
   let stars = [];
@@ -96,6 +97,7 @@
 
   // ===== Networking =====
   function connect() {
+    forcedDisconnect = false;
     const url = normalizeWsUrl(serverInput.value || DEFAULT_SERVER);
     if (!url) return;
 
@@ -122,7 +124,12 @@
       statusEl.textContent = "DISCONNECTED";
       statusEl.className = "status";
       lobbyEl.style.display = "none";
-      if (phase !== "menu") {
+      
+      if (!forcedDisconnect) {
+        // Auto reconnect logic
+        statusEl.textContent = "RECONNECTING IN 3s...";
+        setTimeout(connect, 3000);
+      } else if (phase !== "menu") {
         showMenu();
       }
     };
@@ -154,6 +161,7 @@
 
       case "reject":
         statusEl.textContent = msg.reason;
+        forcedDisconnect = true; // Don't auto-reconnect if rejected
         break;
 
       case "lobby":
@@ -162,7 +170,6 @@
         isHost = msg.hostId === myId;
         // Return to menu if we were in game
         if (phase === "playing" || phase === "upgrades" || phase === "gameover") {
-          // Reset game state
           lastSnap = null;
           upgradeOptions = [];
           upgradePicked = false;
@@ -172,7 +179,6 @@
           showMenu();
         }
         phase = "lobby";
-        // Make sure lobby is visible
         lobbyEl.style.display = "block";
         updateLobbyUI();
         break;
@@ -329,12 +335,13 @@
 
     const scale = getScale();
     const worldX = (mouseX - scale.offsetX) / scale.sx;
-    const segX0 = mySlot * world.segmentWidth;
-    const aimXNorm = Math.max(0, Math.min(1, (worldX - segX0) / world.segmentWidth));
+    const worldY = (mouseY - scale.offsetY) / scale.sy;
 
+    // UPDATED: Send raw World coordinates instead of normalized segment position
     send({
       t: "input",
-      aimXNorm,
+      x: worldX,
+      y: worldY,
       shooting: mouseDown
     });
   }
@@ -617,15 +624,14 @@
         
         // Calculate aim point in world coords
         const worldMouseX = (mouseX - offsetX) / sx;
-        const aimX = segX0 + Math.max(0, Math.min(1, (worldMouseX - segX0) / world.segmentWidth)) * world.segmentWidth;
-        const aimY = 50;
+        const worldMouseY = (mouseY - offsetY) / sy;
         
         // Clamp to 160 degree arc
-        const dx = aimX - cx;
-        const dy = aimY - 560;
+        const dx = worldMouseX - cx;
+        const dy = worldMouseY - 560;
         let angle = Math.atan2(dy, dx);
         
-        // --- THIS SECTION MUST MATCH SERVER MAX_AIM_ANGLE ---
+        // --- MATCH SERVER MAX_AIM_ANGLE ---
         const maxAngle = (80 * Math.PI) / 180;
         const fromVertical = angle - (-Math.PI / 2);
         const clampedFromVertical = Math.max(-maxAngle, Math.min(maxAngle, fromVertical));
