@@ -624,10 +624,13 @@
         const dx = aimX - cx;
         const dy = aimY - 560;
         let angle = Math.atan2(dy, dx);
+        
+        // --- THIS SECTION MUST MATCH SERVER MAX_AIM_ANGLE ---
         const maxAngle = (80 * Math.PI) / 180;
         const fromVertical = angle - (-Math.PI / 2);
         const clampedFromVertical = Math.max(-maxAngle, Math.min(maxAngle, fromVertical));
         const clampedAngle = -Math.PI / 2 + clampedFromVertical;
+        // --------------------------------------------------
         
         // Draw the guide line
         const lineLen = 500;
