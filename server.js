@@ -19,7 +19,7 @@ const BASE_HP_PER_PLAYER = 5;
 
 const BULLET_R = 2.5;
 const BULLET_SPEED = 700;
-const BULLET_COOLDOWN = 0.72;
+const BULLET_COOLDOWN = 0.72; 
 const BULLET_DAMAGE = 1;
 
 const ASTEROID_R_MIN = 8;
@@ -122,64 +122,120 @@ function lobbySnapshot() {
   return { players: list, hostId, allReady };
 }
 
-// ===== Roguelike Upgrades =====
-const UPGRADE_POOL = [
-  { key: "firerate", title: "Rapid Fire", desc: "Fire 25% faster", category: "offense", icon: "⚡" },
-  { key: "bulletspeed", title: "Hypervelocity", desc: "Bullets 20% faster", category: "offense", icon: "💨" },
-  { key: "damage", title: "Armor Piercing", desc: "+1 bullet damage", category: "offense", icon: "💥" },
-  { key: "multishot", title: "Twin Cannons", desc: "Fire 2 bullets", category: "offense", icon: "⚔️" },
-  { key: "explosive", title: "Blast Radius", desc: "Bullets explode", category: "offense", icon: "💣" },
-  { key: "critchance", title: "Lucky Shot", desc: "20% crit chance", category: "offense", icon: "🎯" },
-  { key: "mini_left", title: "Left Turret", desc: "Auto-turret left", category: "turret", icon: "🔧" },
-  { key: "mini_right", title: "Right Turret", desc: "Auto-turret right", category: "turret", icon: "🔧" },
-  { key: "range", title: "Long Range", desc: "Shoot neighbors", category: "turret", icon: "📡" },
-  { key: "shield", title: "Shield", desc: "Block 1 hit/wave", category: "defense", icon: "🛡️" },
-  { key: "slowfield", title: "Gravity Field", desc: "Slow asteroids 25%", category: "defense", icon: "🌀" },
-  { key: "magnet", title: "Homing Bullets", desc: "Bullets track", category: "utility", icon: "🧲" },
-  { key: "chain", title: "Chain Damage", desc: "Hits spread", category: "utility", icon: "⛓️" },
+// ===== Roguelike Upgrades System =====
+
+const RARITY_CONFIG = {
+  common:    { weight: 60, color: "#ffffff", scale: 1.0, label: "COMMON" },
+  rare:      { weight: 25, color: "#00ffff", scale: 1.5, label: "RARE" },
+  epic:      { weight: 10, color: "#bf00ff", scale: 2.5, label: "EPIC" },
+  legendary: { weight: 5,  color: "#ffaa00", scale: 4.0, label: "LEGENDARY" },
+};
+
+// Base definitions for upgrades. 
+// "scaleStat" defines which value gets multiplied by the rarity scale.
+const UPGRADE_DEFS = [
+  { id: "dmg", name: "Heavy Rounds", cat: "offense", icon: "💥", desc: "+{val} Damage", stat: "damageAdd", base: 1, type: "add" },
+  { id: "spd", name: "Velocity", cat: "offense", icon: "💨", desc: "+{val}% Bullet Speed", stat: "bulletSpeedMult", base: 0.15, type: "mult" },
+  { id: "fire", name: "Rapid Fire", cat: "offense", icon: "⚡", desc: "+{val}% Fire Rate", stat: "fireRateMult", base: 0.20, type: "mult" },
+  { id: "multi", name: "Multishot", cat: "offense", icon: "⚔️", desc: "+{val} Bullets", stat: "multishot", base: 1, type: "add" },
+  { id: "crit", name: "Crit Scope", cat: "offense", icon: "🎯", desc: "+{val}% Crit Chance", stat: "critChance", base: 0.10, type: "add_cap", cap: 1.0 },
+  { id: "boom", name: "Explosive", cat: "offense", icon: "💣", desc: "Explosions size +{val}", stat: "explosive", base: 1, type: "add" },
+  
+  { id: "rico", name: "Ricochet", cat: "utility", icon: "🎱", desc: "Bounces {val} times", stat: "ricochet", base: 1, type: "add" },
+  { id: "pierce", name: "Railgun", cat: "utility", icon: "📌", desc: "Pierces {val} enemies", stat: "pierce", base: 1, type: "add" },
+  { id: "homing", name: "Magnetism", cat: "utility", icon: "🧲", desc: "Homing Strength", stat: "magnet", base: 1, type: "bool" },
+  { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "Chain Lightning", stat: "chain", base: 1, type: "bool" },
+
+  { id: "mini_l", name: "Left Turret", cat: "turret", icon: "🔧", desc: "Auto-turret Left", stat: "miniLeft", base: 1, type: "bool" },
+  { id: "mini_r", name: "Right Turret", cat: "turret", icon: "🔧", desc: "Auto-turret Right", stat: "miniRight", base: 1, type: "bool" },
+  { id: "range", name: "Long Range", cat: "turret", icon: "📡", desc: "Shoot Neighbors", stat: "range", base: 1, type: "bool" },
+  
+  { id: "shield", name: "Shield Gen", cat: "defense", icon: "🛡️", desc: "Block {val} Hits/Wave", stat: "shield", base: 1, type: "add" },
+  { id: "slow", name: "Grav Field", cat: "defense", icon: "🌀", desc: "Slow Enemies", stat: "slowfield", base: 1, type: "bool" },
 ];
 
+function rollRarity() {
+  const rand = Math.random() * 100;
+  let accum = 0;
+  if ((accum += RARITY_CONFIG.common.weight) >= rand) return "common";
+  if ((accum += RARITY_CONFIG.rare.weight) >= rand) return "rare";
+  if ((accum += RARITY_CONFIG.epic.weight) >= rand) return "epic";
+  return "legendary";
+}
+
 function makeUpgradeOptions(player) {
-  const owned = player.upgrades || {};
-  const pool = UPGRADE_POOL.filter(u => {
-    if (u.key === "mini_left" && owned.miniLeft) return false;
-    if (u.key === "mini_right" && owned.miniRight) return false;
-    if (u.key === "range" && owned.range) return false;
-    if (u.key === "slowfield" && owned.slowfield) return false;
-    if (u.key === "magnet" && owned.magnet) return false;
-    if (u.key === "chain" && owned.chain) return false;
-    return true;
-  });
-  
   const opts = [];
-  const available = pool.slice();
-  while (opts.length < 3 && available.length) {
-    const i = Math.floor(Math.random() * available.length);
-    opts.push(available.splice(i, 1)[0]);
+  // Try 3 times to get unique upgrades
+  for(let i=0; i<3; i++) {
+    // 1. Pick random def
+    const def = UPGRADE_DEFS[Math.floor(Math.random() * UPGRADE_DEFS.length)];
+    
+    // 2. Filter logic (don't offer maxed out or duplicates in same hand)
+    if (opts.find(o => o.defId === def.id)) { i--; continue; } // Reroll duplicate in hand
+    if (def.type === "bool" && player.upgrades[def.stat]) { i--; continue; } // Already owned bool
+    if (def.stat === "critChance" && (player.upgrades.critChance || 0) >= 1) { i--; continue; } // Crit capped
+
+    // 3. Roll Rarity
+    const rarityKey = rollRarity();
+    const rarity = RARITY_CONFIG[rarityKey];
+
+    // 4. Calculate Value
+    let val = def.base;
+    if (def.type === "add" || def.type === "mult" || def.type === "add_cap") {
+      val = def.base * rarity.scale;
+      // Round nicely
+      if (def.stat === "multishot" || def.stat === "shield" || def.stat === "ricochet" || def.stat === "pierce") {
+        val = Math.max(1, Math.round(val)); // Integers only
+      } else if (def.type === "mult" || def.stat === "critChance") {
+        val = Math.round(val * 100); // Display as percentage
+      } else {
+        val = Math.round(val * 10) / 10;
+      }
+    }
+
+    // 5. Build Description
+    let desc = def.desc.replace("{val}", val);
+    
+    opts.push({
+      key: uid(), // Unique ID for this specific card
+      defId: def.id,
+      title: def.name,
+      desc: desc,
+      category: def.cat,
+      icon: def.icon,
+      rarity: rarityKey,
+      rarityLabel: rarity.label,
+      rarityColor: rarity.color,
+      effect: { stat: def.stat, val: def.type === "mult" || def.stat === "critChance" ? val/100 : val, type: def.type }
+    });
   }
   return opts;
 }
 
-function applyUpgrade(player, key) {
+function applyUpgrade(player, card) {
   if (!player.upgrades) player.upgrades = {};
   const u = player.upgrades;
+  const eff = card.effect;
+
+  if (eff.type === "add" || eff.type === "add_cap") {
+    u[eff.stat] = (u[eff.stat] || 0) + eff.val;
+  } else if (eff.type === "mult") {
+    // For mults, we add to a base multiplier. e.g. 1.0 + 0.15 = 1.15
+    // But currently logical implementation in tick() treats them as multipliers. 
+    // Let's standardize: fireRateMult starts at 1. We add (val) to it? Or multiply?
+    // Let's multiply for exponential growth, or add for linear. Linear is safer.
+    // Actually, "Fire Rate +25%" usually means rate * 1.25.
+    u[eff.stat] = (u[eff.stat] || 1) * (1 + eff.val);
+  } else if (eff.type === "bool") {
+    u[eff.stat] = true;
+  }
   
-  switch (key) {
-    case "firerate": u.fireRateMult = (u.fireRateMult ?? 1) * 1.25; break;
-    case "bulletspeed": u.bulletSpeedMult = (u.bulletSpeedMult ?? 1) * 1.20; break;
-    case "damage": u.damageAdd = (u.damageAdd ?? 0) + 1; break;
-    case "multishot": u.multishot = (u.multishot ?? 1) + 1; break;
-    case "explosive": u.explosive = (u.explosive ?? 0) + 1; break;
-    case "critchance": u.critChance = Math.min(0.6, (u.critChance ?? 0) + 0.20); break;
-    case "mini_left": u.miniLeft = true; break;
-    case "mini_right": u.miniRight = true; break;
-    case "range": u.range = true; break;
-    case "shield": u.shield = (u.shield ?? 0) + 1; u.shieldActive = (u.shieldActive ?? 0) + 1; break;
-    case "slowfield": u.slowfield = true; break;
-    case "magnet": u.magnet = true; break;
-    case "chain": u.chain = true; break;
+  // Special case reset for shield
+  if (eff.stat === "shield") {
+    u.shieldActive = u.shield;
   }
 }
+
 
 // ===== Spawning =====
 function spawnWave() {
@@ -202,8 +258,11 @@ function spawnWave() {
     const y = rand(-WORLD_H * 0.8, -r - 50);
 
     const vx = rand(-10 - wave * 0.5, 10 + wave * 0.5);
-    const baseVy = rand(25, 45);
-    const vy = baseVy * (1 + wave * 0.01);
+    // MODIFIED: Slower start, steeper scaling
+    // Old: 25-45 base. New: 20-36 base (~20% slower).
+    const baseVy = rand(20, 36);
+    // Old scale: 1% (0.01). New scale: 2% (0.02).
+    const vy = baseVy * (1 + wave * 0.02);
 
     const type = r > 14 ? "large" : r > 10 ? "medium" : "small";
     const baseHpVal = type === "large" ? 4 : type === "medium" ? 2 : 1;
@@ -368,6 +427,11 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0) 
     explosive: owner.upgrades?.explosive ?? 0,
     magnet: !!owner.upgrades?.magnet,
     chain: !!owner.upgrades?.chain,
+    
+    // NEW MECHANICS
+    ricochet: owner.upgrades?.ricochet || 0,
+    pierce: owner.upgrades?.pierce || 0,
+    hitList: [], // Track entities hit to prevent immediate re-hit in same frame
   });
 }
 
@@ -492,7 +556,6 @@ function tick() {
     let targetX, targetY;
     let clamped;
     
-    // UPDATED: Manual shooting now uses exact world coordinates, not constrained to segment
     if (p.manualShooting && p.targetX != null && p.targetY != null) {
       clamped = clampAimAngle(pos.main.x, pos.main.y, p.targetX, p.targetY);
       targetX = clamped.x;
@@ -534,7 +597,7 @@ function tick() {
     }
   }
 
-  // Missiles logic (physics)
+  // Missiles logic
   for (const m of missiles) {
     let speedMult = 1;
     for (const id of lockedSlots) {
@@ -575,8 +638,9 @@ function tick() {
     }
   }
 
-  // Bullets logic
+  // Bullets logic with RICOCHET
   for (const b of bullets) {
+    // Magnet
     if (b.magnet) {
       let nearest = null;
       let nearestDist = 150;
@@ -603,8 +667,39 @@ function tick() {
 
     b.x += b.vx * DT;
     b.y += b.vy * DT;
-
-    if (b.y < -50 || b.y > WORLD_H + 50 || b.x < -50 || b.x > worldW + 50) b.dead = true;
+    
+    // Bounds check with Ricochet
+    let didRicochet = false;
+    
+    // Walls
+    if (b.x < 0) {
+      if (b.ricochet > 0) {
+        b.x = 0; b.vx = -b.vx; b.ricochet--; didRicochet = true;
+      } else { b.dead = true; }
+    } else if (b.x > worldW) {
+      if (b.ricochet > 0) {
+        b.x = worldW; b.vx = -b.vx; b.ricochet--; didRicochet = true;
+      } else { b.dead = true; }
+    }
+    
+    // Ceiling
+    if (b.y < -50) { // Slight buffer
+      if (b.ricochet > 0 && b.y < -50) { // Only bounce if really high
+        b.y = -50; b.vy = -b.vy; b.ricochet--; didRicochet = true;
+      } else { b.dead = true; }
+    }
+    
+    // Floor
+    if (b.y > GROUND_Y) {
+      if (b.ricochet > 0) {
+        b.y = GROUND_Y; b.vy = -b.vy; b.ricochet--; didRicochet = true;
+      } else { b.dead = true; }
+    }
+    
+    // Reset hitlist on bounce so we can hit same enemies again from new angle
+    if (didRicochet) {
+      b.hitList = [];
+    }
   }
 
   // Collisions
@@ -612,12 +707,27 @@ function tick() {
     if (b.dead) continue;
     for (const m of missiles) {
       if (m.dead) continue;
+      // Piercing check: don't hit same target twice
+      if (b.hitList && b.hitList.includes(m.id)) continue;
+      
       const dx = m.x - b.x;
       const dy = m.y - b.y;
       const rr = m.r + b.r;
       if (dx * dx + dy * dy <= rr * rr) {
         m.hp -= b.dmg;
-        b.dead = true;
+        
+        // Add to hit list
+        if (!b.hitList) b.hitList = [];
+        b.hitList.push(m.id);
+        
+        // Pierce logic
+        if (b.pierce > 0) {
+          b.pierce--;
+          // Don't die
+        } else {
+          b.dead = true;
+        }
+        
         addDamageNumber(m.x, m.y - m.r, b.dmg, b.isCrit);
         const owner = players.get(b.ownerId);
         if (owner) {
@@ -659,7 +769,7 @@ function tick() {
           m.dead = true;
           createExplosion(m.x, m.y, 25, "#fa0");
         }
-        break;
+        if (b.dead) break; // Bullet died, stop checking collisions
       }
     }
   }
@@ -729,7 +839,6 @@ function assignSlot() {
   return -1;
 }
 
-// Heartbeat interval to keep connections alive
 const interval = setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws.isAlive === false) return ws.terminate();
@@ -745,7 +854,6 @@ wss.on("close", () => {
 wss.on("connection", (ws) => {
   if (phase === "gameover") resetToLobby();
   
-  // Heartbeat setup
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
   
@@ -819,7 +927,6 @@ wss.on("connection", (ws) => {
     }
 
     if (msg.t === "input" && phase === "playing") {
-      // Receive raw X/Y coordinates
       p.targetX = Number(msg.x) || 0;
       p.targetY = Number(msg.y) || 0;
       p.manualShooting = !!msg.shooting;
@@ -830,10 +937,12 @@ wss.on("connection", (ws) => {
       const pickKey = (msg.key || "").toString();
       const pickObj = upgradePicks.get(id);
       if (!pickObj || pickObj.pickedKey) return;
-      if (!pickObj.options.some((o) => o.key === pickKey)) return;
+      
+      const opt = pickObj.options.find((o) => o.key === pickKey);
+      if (!opt) return;
 
       pickObj.pickedKey = pickKey;
-      applyUpgrade(p, pickKey);
+      applyUpgrade(p, opt); // Apply specific card
       safeSend(p.ws, { t: "picked", key: pickKey });
       
       const waiting = [];
@@ -861,7 +970,6 @@ wss.on("connection", (ws) => {
 
 setInterval(() => {
   tick();
-  // FIXED: Removed the lobby broadcast here to prevent network spam and freezing.
 }, 1000 / TICK_RATE);
 
 const PORT = process.env.PORT || 3000;
