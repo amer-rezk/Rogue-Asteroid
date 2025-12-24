@@ -1,6 +1,5 @@
 (() => {
   // ===== Configuration =====
-  // Hardcoded server URL as requested
   const DEFAULT_SERVER = "wss://rogue-asteroid.onrender.com/ws";
   
   // Player colors
@@ -11,7 +10,7 @@
     { main: "#ffaa00", dark: "#664400", name: "ORANGE" },
   ];
 
-  // Tower Config (must match server)
+  // Tower Config
   const TOWER_TYPES = {
     0: { name: "Gatling", cost: 50, color: "#ffff00", desc: "Fast Fire" },
     1: { name: "Sniper",  cost: 120, color: "#00ff00", desc: "Long Range" },
@@ -24,8 +23,7 @@
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
   
-  // HTML Update: Replace the server input with Status Light via JS injection
-  // We do this to ensure your style updates apply without user modifying HTML manually
+  // Inject Status Light HTML
   const serverSection = document.querySelector('#menuScreen .section:first-of-type');
   if (serverSection) {
     serverSection.innerHTML = `
@@ -54,7 +52,7 @@
   let isHost = false;
   let connected = false;
 
-  let phase = "menu"; // menu | lobby | playing | upgrades | gameover
+  let phase = "menu";
   let world = { width: 360, height: 600, segmentWidth: 360 };
   let wave = 0;
   let baseHp = 0;
@@ -76,7 +74,7 @@
   let forcedDisconnect = false;
 
   // Build Mode State
-  let buildMenuOpen = null; // { slotIndex: 0-3, x, y }
+  let buildMenuOpen = null;
   let hoveredBuildOption = -1;
 
   // Visual
@@ -92,6 +90,15 @@
     const g = parseInt(c.slice(2,4), 16);
     const b = parseInt(c.slice(4,6), 16);
     return `rgba(${r},${g},${b},${alpha})`;
+  }
+
+  // Debounce helper for name input
+  function debounce(func, wait) {
+    let timeout;
+    return function(...args) {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => func.apply(this, args), wait);
+    };
   }
 
   function initStars() {
@@ -111,7 +118,6 @@
   // ===== Networking =====
   function connect() {
     forcedDisconnect = false;
-    // Auto status update
     if (statusText) statusText.textContent = "CONNECTING...";
     if (statusLED) statusLED.className = "led";
 
@@ -129,6 +135,7 @@
       
       lobbyEl.style.display = "block";
       
+      // Send current name immediately
       const name = nameInput.value.trim() || `Player`;
       if (name) ws.send(JSON.stringify({ t: "setName", name }));
     };
@@ -144,7 +151,7 @@
       lobbyEl.style.display = "none";
       
       if (!forcedDisconnect) {
-        setTimeout(connect, 3000); // Retry loop
+        setTimeout(connect, 3000);
       } else if (phase !== "menu") {
         showMenu();
       }
@@ -176,7 +183,6 @@
         break;
 
       case "reject":
-        // Override status
         if(statusText) statusText.textContent = msg.reason.toUpperCase();
         forcedDisconnect = true;
         break;
@@ -186,6 +192,7 @@
         allReady = msg.allReady;
         isHost = msg.hostId === myId;
         if (phase === "playing" || phase === "upgrades" || phase === "gameover") {
+          // Reset local state if we get kicked back to lobby
           lastSnap = null;
           upgradeOptions = [];
           upgradePicked = false;
@@ -323,7 +330,6 @@
       return;
     }
 
-    // Build Menu Opening (Check 4 slots)
     if (phase === "playing" && lastSnap) {
       const { sx, sy, offsetX, offsetY } = getScale();
       const me = lastSnap.players.find(p => p.id === myId);
@@ -331,14 +337,11 @@
         const segX0 = me.slot * world.segmentWidth;
         const cx = (segX0 + world.segmentWidth / 2) * sx + offsetX;
         const cy = 560 * sy + offsetY;
-        
-        // Match server offsets: -110, -50, +50, +110
         const offsets = [-110, -50, 50, 110];
         
         for (let i = 0; i < 4; i++) {
-          if (!me.towers[i]) { // Empty slot
+          if (!me.towers[i]) {
             const tx = cx + offsets[i] * sx;
-            // Hitbox
             if (Math.hypot(mouseX - tx, mouseY - cy) < 20 * sx) {
               buildMenuOpen = { slotIndex: i, x: tx, y: cy };
               return;
@@ -407,7 +410,6 @@
     if (screenShake > 0.5) ctx.translate((Math.random() - 0.5) * screenShake, (Math.random() - 0.5) * screenShake);
     ctx.translate(offsetX, offsetY);
 
-    // Grid & Ground
     ctx.strokeStyle = "rgba(0,255,255,0.03)"; ctx.lineWidth = 1;
     for (let x = 0; x < world.width; x += 30) { ctx.beginPath(); ctx.moveTo(x * sx, 0); ctx.lineTo(x * sx, world.height * sy); ctx.stroke(); }
     for (let y = 0; y < world.height; y += 30) { ctx.beginPath(); ctx.moveTo(0, y * sy); ctx.lineTo(world.width * sx, y * sy); ctx.stroke(); }
@@ -421,10 +423,8 @@
     ctx.strokeStyle = "#0ff"; ctx.lineWidth = 3; ctx.shadowColor = "#0ff"; ctx.shadowBlur = 20;
     ctx.beginPath(); ctx.moveTo(0, groundY); ctx.lineTo(world.width * sx, groundY); ctx.stroke(); ctx.shadowBlur = 0;
 
-    // Entities
     for (const p of lastSnap.players) if (p.upgrades?.slowfield) { ctx.fillStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main||"#fff", 0.04); ctx.fillRect(p.slot*world.segmentWidth*sx, 0, world.segmentWidth*sx, 560*sy); }
     for (const p of lastSnap.players) if (p.upgrades?.shieldActive > 0) { const cx = (p.slot*world.segmentWidth + world.segmentWidth/2)*sx; ctx.strokeStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main||"#fff", 0.5); ctx.lineWidth = 3; ctx.shadowColor = PLAYER_COLORS[p.slot]?.main; ctx.shadowBlur = 15; ctx.beginPath(); ctx.arc(cx, groundY, world.segmentWidth*sx*0.45, Math.PI, 0); ctx.stroke(); ctx.shadowBlur=0; }
-    
     if (lastSnap.particles) for (const p of lastSnap.particles) { ctx.fillStyle = hexToRgba(p.color, p.life/(p.maxLife||0.5)); ctx.beginPath(); ctx.arc(p.x*sx, p.y*sy, (p.size||2)*sx, 0, Math.PI*2); ctx.fill(); }
 
     for (const m of lastSnap.missiles) {
@@ -446,13 +446,11 @@
 
     if (lastSnap.damageNumbers) for (const d of lastSnap.damageNumbers) { ctx.font = `bold ${d.isCrit?16:12}px 'Courier New', monospace`; ctx.textAlign = "center"; ctx.fillStyle = d.isCrit ? `rgba(255,255,0,${d.life})` : `rgba(255,255,255,${d.life})`; ctx.fillText(d.amount.toString(), d.x*sx, d.y*sy); }
 
-    // Turrets & 4 Slots
     for (const p of lastSnap.players) {
       if (p.slot < 0) continue;
       const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
       const cx = (p.slot * world.segmentWidth + world.segmentWidth / 2) * sx;
       
-      // Aim Guide
       if (p.id === myId && mouseDown && !buildMenuOpen) {
         const turretX = cx; const turretY = (560 - 14) * sy; 
         const worldMouseX = (mouseX - offsetX) / sx; const worldMouseY = (mouseY - offsetY) / sy;
@@ -466,52 +464,35 @@
         ctx.save(); ctx.strokeStyle = hexToRgba(color.main, 0.4); ctx.lineWidth = 2; ctx.setLineDash([8, 8]); ctx.beginPath(); ctx.moveTo(turretX, turretY); ctx.lineTo(endX * sx, endY * sy); ctx.stroke(); ctx.restore();
       }
 
-      // Draw Turrets
-      // Main
       const baseW = 24 * sx; const baseH = 14 * sy;
       ctx.fillStyle = hexToRgba(color.main, 0.8); ctx.strokeStyle = color.main; ctx.lineWidth = 1.5; ctx.shadowColor = color.main; ctx.shadowBlur = 15;
       ctx.beginPath(); ctx.roundRect(cx - baseW/2, 560*sy - baseH, baseW, baseH, 3); ctx.fill(); ctx.stroke();
       ctx.save(); ctx.translate(cx, 560*sy - baseH/2); ctx.rotate(p.turretAngle + Math.PI/2);
       ctx.fillStyle = color.main; ctx.fillRect(-2.5*sx, -22*sy, 5*sx, 22*sy); ctx.restore(); ctx.shadowBlur = 0;
 
-      // 4 Mini Slots
       const offsets = [-110, -50, 50, 110];
-      // Need safe access to towers array
       const towers = p.towers || [null, null, null, null];
-      
       towers.forEach((t, i) => {
-        const tx = cx + offsets[i] * sx;
-        const ty = 560 * sy;
-        
+        const tx = cx + offsets[i] * sx; const ty = 560 * sy;
         if (t) {
-          // Draw Tower
-          const typeInfo = TOWER_TYPES[t.type];
-          const tColor = typeInfo?.color || "#fff";
-          const mbW = 16*sx; const mbH = 10*sy;
+          const typeInfo = TOWER_TYPES[t.type]; const tColor = typeInfo?.color || "#fff"; const mbW = 16*sx; const mbH = 10*sy;
           ctx.fillStyle = hexToRgba(tColor, 0.8); ctx.strokeStyle = tColor; ctx.lineWidth = 1.5; ctx.shadowColor = tColor; ctx.shadowBlur = 8;
           ctx.beginPath(); ctx.roundRect(tx - mbW/2, ty - mbH, mbW, mbH, 3); ctx.fill(); ctx.stroke();
           ctx.save(); ctx.translate(tx, ty - mbH/2); 
           let bl = 14*sy; let bw = 3*sx; if(typeInfo.name==="Sniper"){bl=22*sy;bw=2*sx;} if(typeInfo.name==="Missile"){bl=10*sy;bw=6*sx;}
           ctx.fillStyle = tColor; ctx.fillRect(-bw/2, -bl, bw, bl); ctx.restore(); ctx.shadowBlur = 0;
         } else if (p.id === myId) {
-          // Draw Ghost
-          ctx.save();
-          const pulse = (Math.sin(time*8)+1)/2;
-          ctx.fillStyle = `rgba(0, 255, 136, ${0.1 + pulse*0.2})`;
-          ctx.strokeStyle = `rgba(0, 255, 136, ${0.3 + pulse*0.3})`;
+          ctx.save(); const pulse = (Math.sin(time*8)+1)/2;
+          ctx.fillStyle = `rgba(0, 255, 136, ${0.1 + pulse*0.2})`; ctx.strokeStyle = `rgba(0, 255, 136, ${0.3 + pulse*0.3})`;
           ctx.beginPath(); ctx.arc(tx, ty-5*sy, 10*sx, 0, Math.PI*2); ctx.fill(); ctx.stroke();
           ctx.fillStyle = "#fff"; ctx.font = `bold ${14*sx}px sans-serif`; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText("+", tx, ty-5*sy);
           ctx.restore();
         }
       });
-
-      // Name
-      ctx.font = "bold 11px 'Courier New', monospace"; ctx.textAlign = "center"; ctx.fillStyle = color.main; 
-      ctx.fillText(p.name, cx, groundY + 14);
+      ctx.font = "bold 11px 'Courier New', monospace"; ctx.textAlign = "center"; ctx.fillStyle = color.main; ctx.fillText(p.name, cx, groundY + 14);
     }
     ctx.restore();
 
-    // === HUD ===
     ctx.fillStyle = "rgba(0,0,0,0.7)"; ctx.fillRect(0, 0, canvas.width, 50);
     drawNeonText(`WAVE ${wave}`, 20, 25, "#ff0", 18, "left");
     const myPlayer = lastSnap.players.find(p => p.id === myId);
@@ -523,19 +504,15 @@
     ctx.strokeStyle = "#0ff"; ctx.strokeRect(hpBarX, hpBarY, hpBarW, hpBarH);
     ctx.font = "bold 12px 'Courier New', monospace"; ctx.textAlign = "center"; ctx.fillStyle = "#fff"; ctx.fillText(`${baseHp} / ${maxBaseHp}`, canvas.width/2, hpBarY + 14);
 
-    // === Build Menu ===
+    ctx.textAlign = "right"; ctx.font = "12px 'Courier New', monospace"; let scoreX = canvas.width - 20;
+    for (let i = lastSnap.players.length - 1; i >= 0; i--) { const p = lastSnap.players[i]; const color = PLAYER_COLORS[p.slot]?.main || "#fff"; ctx.fillStyle = color; const text = `${p.name}: ${p.score}`; ctx.fillText(text, scoreX, 30); scoreX -= ctx.measureText(text).width + 20; } ctx.textAlign = "left";
+
     if (buildMenuOpen) {
-      hoveredBuildOption = -1;
-      const { x, y } = buildMenuOpen;
+      hoveredBuildOption = -1; const { x, y } = buildMenuOpen;
       const menuW = 160; const menuH = 130; const mx = x - menuW/2; const my = y - menuH - 20;
       ctx.fillStyle = "rgba(10,10,30,0.95)"; ctx.strokeStyle = "#0f8"; ctx.lineWidth = 2; ctx.beginPath(); ctx.roundRect(mx, my, menuW, menuH, 8); ctx.fill(); ctx.stroke();
       ctx.font = "bold 12px 'Courier New', monospace"; ctx.fillStyle = "#0f8"; ctx.textAlign = "center"; ctx.fillText("BUILD TOWER", mx + menuW/2, my + 20);
-      
-      const opts = [
-        { id: 0, label: "GATLING", cost: 50, col: "#ff0" },
-        { id: 1, label: "SNIPER",  cost: 120, col: "#0f0" },
-        { id: 2, label: "MISSILE", cost: 250, col: "#f00" }
-      ];
+      const opts = [ { id: 0, label: "GATLING", cost: 50, col: "#ff0" }, { id: 1, label: "SNIPER",  cost: 120, col: "#0f0" }, { id: 2, label: "MISSILE", cost: 250, col: "#f00" } ];
       for (let i=0; i<opts.length; i++) {
         const o = opts[i]; const by = my + 35 + i * 30; const bx = mx + 10;
         const isHovered = mouseX >= bx && mouseX <= bx+140 && mouseY >= by && mouseY <= by+24;
@@ -548,7 +525,6 @@
       }
     }
     
-    // (Render Upgrades / Game Over UI - Same as previous, kept compact)
     if (phase === "upgrades" && upgradeOptions.length > 0) {
       ctx.fillStyle = "rgba(0,0,0,0.75)"; ctx.fillRect(0, 0, canvas.width, canvas.height);
       if (!upgradePicked) {
@@ -566,11 +542,10 @@
           ctx.font = "32px sans-serif"; ctx.fillStyle = "#fff"; ctx.fillText(opt.icon, cardX + cardW/2, cardY + 55);
           ctx.font = "bold 14px 'Courier New', monospace"; ctx.fillStyle = rarityColor; ctx.fillText(opt.title, cardX + cardW/2, cardY + 85);
           ctx.font = "11px 'Courier New', monospace"; ctx.fillStyle = "rgba(255,255,255,0.8)"; ctx.fillText(opt.desc, cardX + cardW/2, cardY + 110);
+          ctx.font = "9px 'Courier New', monospace"; ctx.fillStyle = "rgba(255,255,255,0.4)"; ctx.fillText(opt.category.toUpperCase(), cardX + cardW/2, cardY + 140);
         }
         ctx.textAlign = "left";
-      } else {
-        drawNeonText("UPGRADE SELECTED", canvas.width/2, canvas.height/2 - 20, "#0f8", 20, "center");
-      }
+      } else { drawNeonText("UPGRADE SELECTED", canvas.width/2, canvas.height/2 - 20, "#0f8", 20, "center"); }
     }
     if (phase === "gameover" && gameOverData) {
       ctx.fillStyle = "rgba(0,0,0,0.85)"; ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -579,6 +554,18 @@
     }
   }
 
-  // Auto-connect on load
+  // Auto-connect
   connect();
+  
+  // "On the Fly" Name Updates
+  nameInput.addEventListener("input", debounce(() => {
+    if (connected) {
+      const name = nameInput.value.trim();
+      if (name) send({ t: "setName", name });
+    }
+  }, 300));
+  
+  // Handlers
+  readyBtn.onclick = () => { send({ t: "ready" }); };
+  launchBtn.onclick = () => { if (allReady) send({ t: "start" }); };
 })();
