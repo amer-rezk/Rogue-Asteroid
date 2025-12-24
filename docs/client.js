@@ -2,6 +2,21 @@
   // ===== Configuration =====
   const DEFAULT_SERVER = "wss://rogue-asteroid.onrender.com/ws";
   
+  // Polyfill for roundRect (for older browsers)
+  if (!CanvasRenderingContext2D.prototype.roundRect) {
+    CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+      if (w < 2 * r) r = w / 2;
+      if (h < 2 * r) r = h / 2;
+      this.moveTo(x + r, y);
+      this.arcTo(x + w, y, x + w, y + h, r);
+      this.arcTo(x + w, y + h, x, y + h, r);
+      this.arcTo(x, y + h, x, y, r);
+      this.arcTo(x, y, x + w, y, r);
+      this.closePath();
+      return this;
+    };
+  }
+  
   // Player colors
   const PLAYER_COLORS = [
     { main: "#00ffff", dark: "#006666", name: "CYAN" },
@@ -384,25 +399,27 @@
 
   function draw() {
     requestAnimationFrame(draw);
-    const dt = 1/60; time += dt; screenShake *= 0.92;
+    
+    try {
+      const dt = 1/60; time += dt; screenShake *= 0.92;
 
-    ctx.fillStyle = "#050510"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    for (const s of stars) {
-      s.y += s.speed; if (s.y > 1) s.y = 0;
-      const twinkle = Math.sin(time * 3 + s.twinkle) * 0.3 + 0.7;
-      ctx.fillStyle = `rgba(255,255,255,${twinkle * 0.5})`;
-      ctx.beginPath(); ctx.arc(s.x * canvas.width, s.y * canvas.height, s.size, 0, Math.PI * 2); ctx.fill();
-    }
+      ctx.fillStyle = "#050510"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      for (const s of stars) {
+        s.y += s.speed; if (s.y > 1) s.y = 0;
+        const twinkle = Math.sin(time * 3 + s.twinkle) * 0.3 + 0.7;
+        ctx.fillStyle = `rgba(255,255,255,${twinkle * 0.5})`;
+        ctx.beginPath(); ctx.arc(s.x * canvas.width, s.y * canvas.height, s.size, 0, Math.PI * 2); ctx.fill();
+      }
 
-    if (phase === "menu" || phase === "lobby") {
-      drawNeonText("ROGUE ASTEROID", canvas.width/2, 60, "#0ff", 28, "center");
-      return;
-    }
+      if (phase === "menu" || phase === "lobby") {
+        drawNeonText("ROGUE ASTEROID", canvas.width/2, 60, "#0ff", 28, "center");
+        return;
+      }
 
-    if (!lastSnap) return;
+      if (!lastSnap) return;
 
-    const { sx, sy, offsetX, offsetY } = getScale();
-    ctx.save();
+      const { sx, sy, offsetX, offsetY } = getScale();
+      ctx.save();
     if (screenShake > 0.5) ctx.translate((Math.random() - 0.5) * screenShake, (Math.random() - 0.5) * screenShake);
     ctx.translate(offsetX, offsetY);
 
@@ -551,12 +568,15 @@
       drawNeonText("GAME OVER", canvas.width/2, 100, "#f44", 36, "center");
       drawNeonText("RETURNING TO LOBBY...", canvas.width/2, canvas.height - 80, "#0ff", 14, "center");
     }
+    } catch (err) {
+      console.error('Draw error:', err);
+    }
   }
 
   // Auto-connect
   connect();
   
-  // Start render loop
+  // Start render loop - THIS IS ESSENTIAL!
   draw();
   
   nameInput.addEventListener("input", debounce(() => {
