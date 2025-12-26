@@ -1025,7 +1025,7 @@ function tick() {
               }
             }
           } else {
-            if (owner) owner.score = (owner.score || 0) + b.dmg * 10;
+            if (owner) owner.score = (owner.score || 0) + Math.round(b.dmg * 10);
           }
           
           if (b.explosive > 0) {
@@ -1223,6 +1223,15 @@ wss.on("connection", (ws) => {
     // Return to lobby from game over screen
     if (msg.t === "returnToLobby" && phase === "gameover") {
       resetLobby();
+      return;
+    }
+
+    // Clear leaderboard with password
+    if (msg.t === "clearLeaderboard") {
+      if (msg.password === "1122") {
+        leaderboard = [];
+        broadcast({ t: "lobby", ...lobbySnapshot() });
+      }
       return;
     }
 
