@@ -45,54 +45,59 @@ const ATTACK_TYPES = {
     name: "Swarm", 
     cost: 15, 
     count: 3, 
-    hp: 1, 
+    hp: 2, // 50% more HP
     size: "small", 
     speed: 1.2,
     desc: "3 fast weak asteroids",
-    color: "#ffcc00"
+    color: "#ffcc00",
+    icon: "🐝"
   },
   bruiser: { 
     name: "Bruiser", 
     cost: 40, 
     count: 1, 
-    hp: 6, 
+    hp: 9, // 50% more HP
     size: "large", 
     speed: 0.7,
     desc: "Tanky asteroid",
-    color: "#ff4444"
+    color: "#ff4444",
+    icon: "🪨"
   },
   bomber: { 
     name: "Bomber", 
     cost: 60, 
     count: 1, 
-    hp: 3, 
+    hp: 5, // 50% more HP
     size: "medium", 
     speed: 0.9,
     explosive: true,
     desc: "Explodes on death",
-    color: "#ff00ff"
+    color: "#ff00ff",
+    icon: "💣"
   },
   splitter: { 
     name: "Splitter", 
     cost: 50, 
     count: 1, 
-    hp: 4, 
+    hp: 6, // 50% more HP
     size: "large", 
     speed: 0.8,
     splits: 3,
     desc: "Splits into 3 on death",
-    color: "#00ffff"
+    color: "#00ffff",
+    icon: "💎"
   },
   ghost: {
     name: "Ghost",
     cost: 35,
     count: 2,
-    hp: 2,
+    hp: 3, // 50% more HP
     size: "medium",
     speed: 1.0,
     phasing: true,
     desc: "Phases through some hits",
-    color: "#8800ff"
+    color: "#8800ff",
+    icon: "👻"
   }
 };
 
@@ -199,13 +204,13 @@ const RARITY_CONFIG = {
 };
 
 const UPGRADE_DEFS = [
-  { id: "dmg", name: "Heavy Rounds", cat: "offense", icon: "💥", desc: "+{val} Damage", stat: "damageAdd", base: 1, type: "add" },
-  { id: "spd", name: "Velocity", cat: "offense", icon: "💨", desc: "+{val}% Bullet Speed", stat: "bulletSpeedMult", base: 0.15, type: "mult" },
-  { id: "fire", name: "Rapid Fire", cat: "offense", icon: "⚡", desc: "+{val}% Fire Rate", stat: "fireRateMult", base: 0.20, type: "mult" },
+  { id: "dmg", name: "Heavy Rounds", cat: "offense", icon: "💥", desc: "+{val} Damage", stat: "damageAdd", base: 0.5, type: "add" },
+  { id: "spd", name: "Velocity", cat: "offense", icon: "💨", desc: "+{val}% Bullet Speed", stat: "bulletSpeedMult", base: 0.08, type: "mult" },
+  { id: "fire", name: "Rapid Fire", cat: "offense", icon: "⚡", desc: "+{val}% Fire Rate", stat: "fireRateMult", base: 0.10, type: "mult" },
   { id: "multi", name: "Multishot", cat: "offense", icon: "⚔️", desc: "+{val} Bullets", stat: "multishot", base: 1, type: "add" },
-  { id: "crit", name: "Crit Scope", cat: "offense", icon: "🎯", desc: "+{val}% Crit Chance", stat: "critChance", base: 0.10, type: "add_cap", cap: 1.0 },
+  { id: "crit", name: "Crit Scope", cat: "offense", icon: "🎯", desc: "+{val}% Crit Chance", stat: "critChance", base: 0.05, type: "add_cap", cap: 1.0 },
   { id: "boom", name: "Explosive", cat: "offense", icon: "💣", desc: "Explosions size +{val}", stat: "explosive", base: 1, type: "add" },
-  { id: "life", name: "Stabilizer", cat: "utility", icon: "⏱️", desc: "+{val}s Bullet Life", stat: "lifespanAdd", base: 1.5, type: "add" },
+  { id: "life", name: "Stabilizer", cat: "utility", icon: "⏱️", desc: "+{val}s Bullet Life", stat: "lifespanAdd", base: 0.75, type: "add" },
   { id: "rico", name: "Ricochet", cat: "utility", icon: "🎱", desc: "Bounces {val} times", stat: "ricochet", base: 1, type: "add" },
   { id: "pierce", name: "Railgun", cat: "utility", icon: "📌", desc: "Pierces {val} enemies", stat: "pierce", base: 1, type: "add" },
   { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "Chain Lightning", stat: "chain", base: 1, type: "bool" },
@@ -213,8 +218,8 @@ const UPGRADE_DEFS = [
   { id: "shield", name: "Shield Gen", cat: "defense", icon: "🛡️", desc: "Block {val} Hits/Wave", stat: "shield", base: 1, type: "add" },
   { id: "slow", name: "Grav Field", cat: "defense", icon: "🌀", desc: "Slow Enemies", stat: "slowfield", base: 1, type: "bool" },
   // PvP specific upgrades
-  { id: "income", name: "War Profiteer", cat: "economy", icon: "💰", desc: "+{val}% Gold Gain", stat: "goldMult", base: 0.25, type: "mult" },
-  { id: "discount", name: "Arms Dealer", cat: "economy", icon: "🏷️", desc: "-{val}% Attack Cost", stat: "attackDiscount", base: 0.15, type: "add_cap", cap: 0.5 },
+  { id: "income", name: "War Profiteer", cat: "economy", icon: "💰", desc: "+{val}% Gold Gain", stat: "goldMult", base: 0.12, type: "mult" },
+  { id: "discount", name: "Arms Dealer", cat: "economy", icon: "🏷️", desc: "-{val}% Attack Cost", stat: "attackDiscount", base: 0.08, type: "add_cap", cap: 0.5 },
 ];
 
 function rollRarity() {
@@ -582,7 +587,7 @@ function fireWithMultishot(owner, originX, originY, targetX, targetY) {
   }
 }
 
-function findBestTarget(x0, x1, turretX, turretY, rangeMult = 1.0) {
+function findBestTarget(x0, x1, turretX, turretY, rangeMult = 1.0, ownerSlot = 0) {
   let best = null;
   let bestScore = -Infinity;
   const extend = (rangeMult > 1.2);
@@ -592,6 +597,16 @@ function findBestTarget(x0, x1, turretX, turretY, rangeMult = 1.0) {
   for (const m of missiles) {
     if (m.x < searchX0 || m.x > searchX1) continue;
     if (m.y < 0) continue;
+    // Only target asteroids that are in the owner's segment (can actually be hit)
+    // Natural asteroids: check if currently in segment
+    // Spawned mobs: only if targeting this player
+    if (m.attackType && m.targetSlot !== ownerSlot) continue;
+    // For natural asteroids, check if they're currently within our walls
+    if (!m.attackType) {
+      const { x0: segX0, x1: segX1 } = segmentBounds(ownerSlot);
+      if (m.x < segX0 || m.x > segX1) continue;
+    }
+    
     const danger = m.y / GROUND_Y;
     const dist = Math.hypot(m.x - turretX, m.y - turretY);
     const score = danger * 1000 - dist * 0.1;
@@ -704,7 +719,7 @@ function tick() {
         targetX = clamped.x;
         targetY = clamped.y;
       } else {
-        const target = findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend ? 1.5 : 1.0);
+        const target = findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend ? 1.5 : 1.0, p.slot);
         if (target) {
           clamped = clampAimAngle(pos.main.x, pos.main.y, target.x, target.y);
         } else {
@@ -714,7 +729,7 @@ function tick() {
         targetY = clamped.y;
       }
       p.turretAngle = clamped.angle;
-      const shouldFire = p.manualShooting || findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend ? 1.5 : 1.0);
+      const shouldFire = p.manualShooting || findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend ? 1.5 : 1.0, p.slot);
       if (shouldFire && p.cooldown <= 0) {
         p.cooldown = baseCooldown;
         fireWithMultishot(p, pos.main.x, pos.main.y, clamped.x, clamped.y);
@@ -730,7 +745,7 @@ function tick() {
           if (!stats) return;
 
           const rangeMult = (stats.rangeMult || 1.0) * (canExtend ? 1.5 : 1.0);
-          const target = findBestTarget(x0, x1, towerPos.x, towerPos.y, rangeMult);
+          const target = findBestTarget(x0, x1, towerPos.x, towerPos.y, rangeMult, p.slot);
           
           // Update tower angle even when not firing
           if (target) {
