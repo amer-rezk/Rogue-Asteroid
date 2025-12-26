@@ -120,6 +120,8 @@ let damageNumbers = [];
 
 let upgradePicks = new Map();
 let attackQueue = new Map(); // Queued attacks for next wave: Map<targetSlot, attacks[]>
+let upgradePhaseStart = 0; // Timestamp when upgrade phase started
+const UPGRADE_TIMEOUT = 10; // Seconds to choose upgrade
 
 // ===== Utilities =====
 function uid() {
@@ -416,15 +418,16 @@ function startGame() {
 function beginUpgradePhase() {
   phase = "upgrades";
   upgradePicks = new Map();
+  upgradePhaseStart = Date.now();
 
   for (const id of lockedSlots) {
     const p = players.get(id);
     if (!p || p.hp <= 0) continue;
     const options = makeUpgradeOptions(p);
     upgradePicks.set(id, { options, pickedKey: null });
-    safeSend(p.ws, { t: "upgrade", options });
+    safeSend(p.ws, { t: "upgrade", options, deadline: upgradePhaseStart + UPGRADE_TIMEOUT * 1000 });
   }
-  broadcast({ t: "upgradePhase" });
+  broadcast({ t: "upgradePhase", deadline: upgradePhaseStart + UPGRADE_TIMEOUT * 1000 });
 }
 
 function maybeEndUpgradePhase() {
@@ -436,6 +439,7 @@ function maybeEndUpgradePhase() {
   }
   wave += 1;
   phase = "playing";
+  upgradePhaseStart = 0;
   spawnWave();
   broadcast({ t: "wave", wave });
 }
@@ -634,6 +638,33 @@ function addDamageNumber(x, y, amount, isCrit) {
 }
 
 function tick() {
+  // Check upgrade phase timeout
+  if (phase === "upgrades" && upgradePhaseStart > 0) {
+    const elapsed = Date.now() - upgradePhaseStart;
+    if (elapsed >= UPGRADE_TIMEOUT * 1000) {
+      // Auto-pick for players who haven't chosen
+      for (const id of lockedSlots) {
+        const p = players.get(id);
+        if (!p || p.hp <= 0) continue;
+        const pickObj = upgradePicks.get(id);
+        if (pickObj && !pickObj.pickedKey && pickObj.options.length > 0) {
+          // Pick random upgrade
+          const randomOpt = pickObj.options[Math.floor(Math.random() * pickObj.options.length)];
+          pickObj.pickedKey = randomOpt.key;
+          applyUpgrade(p, randomOpt);
+          safeSend(p.ws, { t: "picked", key: randomOpt.key, auto: true });
+        }
+      }
+      // Move to next wave
+      wave += 1;
+      phase = "playing";
+      upgradePhaseStart = 0;
+      spawnWave();
+      broadcast({ t: "wave", wave });
+      return;
+    }
+  }
+  
   if (phase !== "playing") return;
 
   try {
@@ -658,7 +689,7 @@ function tick() {
       p.cooldown = Math.max(0, (p.cooldown ?? 0) - DT);
 
       if (p.towers) {
-        p.towers.forEach(t => { if (t) t.cd = Math.max(0, (t.cd || 0) - DT); });
+        // Tower cooldowns are now updated in the main tower loop below
       }
 
       const slot = p.slot;
@@ -691,7 +722,7 @@ function tick() {
 
       if (p.towers) {
         p.towers.forEach((tower, idx) => {
-          if (!tower || tower.cd > 0) return;
+          if (!tower) return;
           const towerPos = pos.slots[idx];
           if (!towerPos) return;
 
@@ -700,12 +731,25 @@ function tick() {
 
           const rangeMult = (stats.rangeMult || 1.0) * (canExtend ? 1.5 : 1.0);
           const target = findBestTarget(x0, x1, towerPos.x, towerPos.y, rangeMult);
+          
+          // Update tower angle even when not firing
           if (target) {
-            const levelBonus = 1 + (tower.level - 1) * 0.15;
-            tower.cd = stats.cooldown / levelBonus;
             const aim = clampAimAngle(towerPos.x, towerPos.y, target.x, target.y);
-            fireBullet(p, towerPos.x, towerPos.y, aim.x, aim.y, 0, { ...stats, level: tower.level });
+            tower.angle = aim.angle;
+            
+            // Fire if cooldown ready
+            if (tower.cd <= 0) {
+              const levelBonus = 1 + (tower.level - 1) * 0.15;
+              tower.cd = stats.cooldown / levelBonus;
+              fireBullet(p, towerPos.x, towerPos.y, aim.x, aim.y, 0, { ...stats, level: tower.level });
+            }
+          } else {
+            // Default angle pointing up when no target
+            tower.angle = -Math.PI / 2;
           }
+          
+          // Decrease cooldown
+          tower.cd = Math.max(0, (tower.cd || 0) - DT);
         });
       }
     }
@@ -730,11 +774,17 @@ function tick() {
       m.y += m.vy * DT * speedMult;
       m.rotation += m.rotSpeed * DT;
       
-      // Asteroids are confined to their target segment (walls between players)
-      const targetSlot = m.targetSlot !== undefined ? m.targetSlot : 0;
-      const { x0: segX0, x1: segX1 } = segmentBounds(targetSlot);
-      if (m.x - m.r < segX0) { m.x = segX0 + m.r; m.vx = Math.abs(m.vx); }
-      if (m.x + m.r > segX1) { m.x = segX1 - m.r; m.vx = -Math.abs(m.vx); }
+      // Spawned mobs (attackType set) are confined to their target segment
+      // Natural asteroids can cross walls freely
+      if (m.attackType) {
+        const { x0: segX0, x1: segX1 } = segmentBounds(m.targetSlot);
+        if (m.x - m.r < segX0) { m.x = segX0 + m.r; m.vx = Math.abs(m.vx); }
+        if (m.x + m.r > segX1) { m.x = segX1 - m.r; m.vx = -Math.abs(m.vx); }
+      } else {
+        // Natural asteroids bounce off world edges only
+        if (m.x - m.r < 0) { m.x = m.r; m.vx = Math.abs(m.vx); }
+        if (m.x + m.r > worldW) { m.x = worldW - m.r; m.vx = -Math.abs(m.vx); }
+      }
       
       // Hit ground - damage target player
       if (m.y + m.r >= GROUND_Y) {
@@ -819,8 +869,17 @@ function tick() {
       if (b.lifespan <= 0) { b.dead = true; continue; }
 
       let didRicochet = false;
-      if (b.x < 0) { if (b.ricochet > 0) { b.x = 0; b.vx = -b.vx; b.ricochet--; didRicochet = true; } else { b.dead = true; } }
-      else if (b.x > worldW) { if (b.ricochet > 0) { b.x = worldW; b.vx = -b.vx; b.ricochet--; didRicochet = true; } else { b.dead = true; } }
+      
+      // Bullets can only exist in their owner's segment (hard walls)
+      const { x0: ownerX0, x1: ownerX1 } = segmentBounds(b.ownerSlot);
+      if (b.x < ownerX0) { 
+        if (b.ricochet > 0) { b.x = ownerX0; b.vx = -b.vx; b.ricochet--; didRicochet = true; } 
+        else { b.dead = true; } 
+      }
+      else if (b.x > ownerX1) { 
+        if (b.ricochet > 0) { b.x = ownerX1; b.vx = -b.vx; b.ricochet--; didRicochet = true; } 
+        else { b.dead = true; } 
+      }
       if (b.y < -50) { if (b.ricochet > 0) { b.y = -50; b.vy = -b.vy; b.ricochet--; didRicochet = true; } else { b.dead = true; } }
       if (b.y > GROUND_Y) { if (b.ricochet > 0) { b.y = GROUND_Y; b.vy = -b.vy; b.ricochet--; didRicochet = true; } else { b.dead = true; } }
       if (didRicochet) b.hitList = [];
@@ -1024,7 +1083,8 @@ wss.on("connection", (ws) => {
       return;
     }
     if (msg.t === "start") {
-      if (id === hostId && phase === "lobby") {
+      // Any ready player can start the game when all are ready
+      if (phase === "lobby" && p.ready) {
         const snap = lobbySnapshot();
         if (snap.allReady) startGame();
       }
@@ -1054,6 +1114,12 @@ wss.on("connection", (ws) => {
       }
       broadcast({ t: "upgradeWaiting", waiting });
       maybeEndUpgradePhase();
+      return;
+    }
+
+    // Return to lobby from game over screen
+    if (msg.t === "returnToLobby" && phase === "gameover") {
+      resetLobby();
       return;
     }
 
