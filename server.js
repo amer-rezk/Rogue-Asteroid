@@ -18,10 +18,10 @@ const SEGMENT_W = 360;
 const BASE_HP_PER_PLAYER = 8; // Increased for PvP
 
 const BULLET_R = 2.5;
-const BULLET_SPEED = 700;
+const BULLET_SPEED = 175; // Slowed to 25% of original (was 700)
 const BULLET_COOLDOWN = 0.72;
 const BULLET_DAMAGE = 1;
-const BULLET_LIFESPAN = 3.0;
+const BULLET_LIFESPAN = 6.0; // Increased for slower homing bullets
 
 const ASTEROID_R_MIN = 8;
 const ASTEROID_R_MAX = 16;
@@ -206,7 +206,6 @@ const UPGRADE_DEFS = [
   { id: "life", name: "Stabilizer", cat: "utility", icon: "⏱️", desc: "+{val}s Bullet Life", stat: "lifespanAdd", base: 1.5, type: "add" },
   { id: "rico", name: "Ricochet", cat: "utility", icon: "🎱", desc: "Bounces {val} times", stat: "ricochet", base: 1, type: "add" },
   { id: "pierce", name: "Railgun", cat: "utility", icon: "📌", desc: "Pierces {val} enemies", stat: "pierce", base: 1, type: "add" },
-  { id: "homing", name: "Magnetism", cat: "utility", icon: "🧲", desc: "Homing Strength", stat: "magnet", base: 1, type: "bool" },
   { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "Chain Lightning", stat: "chain", base: 1, type: "bool" },
   { id: "range", name: "Long Range", cat: "turret", icon: "📡", desc: "Shoot Neighbors", stat: "range", base: 1, type: "bool" },
   { id: "shield", name: "Shield Gen", cat: "defense", icon: "🛡️", desc: "Block {val} Hits/Wave", stat: "shield", base: 1, type: "add" },
@@ -559,7 +558,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     lifespan: lifespan,
     isTowerBullet: !isPlayerBullet,
     bulletType: bulletType,
-    magnet: isPlayerBullet && !!owner.upgrades?.magnet,
+    magnet: true, // All bullets are now homing
     chain: isPlayerBullet && !!owner.upgrades?.chain,
     ricochet: isPlayerBullet ? (owner.upgrades?.ricochet || 0) : 0,
     pierce: isPlayerBullet ? (owner.upgrades?.pierce || 0) : (bulletType === "sniper" ? 1 : 0),
@@ -781,9 +780,10 @@ function tick() {
 
     // Bullet collision
     for (const b of bullets) {
+      // All bullets now have perfect homing
       if (b.magnet) {
         let nearest = null;
-        let nearestDist = 150;
+        let nearestDist = 400; // Increased detection range
         for (const m of missiles) {
           if (m.dead || m.isPhased) continue;
           const d = Math.hypot(m.x - b.x, m.y - b.y);
@@ -796,10 +796,13 @@ function tick() {
           const dx = nearest.x - b.x;
           const dy = nearest.y - b.y;
           const len = Math.hypot(dx, dy) || 1;
-          b.vx += (dx / len) * 500 * DT;
-          b.vy += (dy / len) * 500 * DT;
+          // Strong homing - bullets curve sharply toward targets
+          const homingStrength = 1500 * DT;
+          b.vx += (dx / len) * homingStrength;
+          b.vy += (dy / len) * homingStrength;
+          // Normalize to maintain consistent speed
           const speed = Math.hypot(b.vx, b.vy);
-          const targetSpeed = BULLET_SPEED * 1.1;
+          const targetSpeed = BULLET_SPEED * 1.2;
           b.vx = (b.vx / speed) * targetSpeed;
           b.vy = (b.vy / speed) * targetSpeed;
         }
