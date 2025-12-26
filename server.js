@@ -20,7 +20,7 @@ const BASE_HP_PER_PLAYER = 8; // Increased for PvP
 const BULLET_R = 2.5;
 const BULLET_SPEED = 175; // Slowed to 25% of original (was 700)
 const BULLET_COOLDOWN = 0.72;
-const BULLET_DAMAGE = 0.25; // Reduced again by 50%
+const BULLET_DAMAGE = 1.25; // Base damage increased by +1
 const BULLET_LIFESPAN = 6.0; // Increased for slower homing bullets
 
 const ASTEROID_R_MIN = 8;
@@ -370,12 +370,29 @@ function spawnWave() {
   for (let i = 0; i < baseCount; i++) {
     const targetSlot = Math.floor(Math.random() * playerCount);
     const { x0, x1 } = segmentBounds(targetSlot);
-    const r = rand(ASTEROID_R_MIN, ASTEROID_R_MAX);
+    
+    // Weighted size selection - large asteroids are rarer, especially early
+    // Base chances: small 50%, medium 35%, large 15%
+    // Large chance increases slightly with wave (up to ~30% by wave 10)
+    const largeChance = Math.min(0.15 + wave * 0.015, 0.30);
+    const mediumChance = 0.35;
+    const sizeRoll = Math.random();
+    let type, r;
+    if (sizeRoll < largeChance) {
+      type = "large";
+      r = rand(15, ASTEROID_R_MAX);
+    } else if (sizeRoll < largeChance + mediumChance) {
+      type = "medium";
+      r = rand(11, 14);
+    } else {
+      type = "small";
+      r = rand(ASTEROID_R_MIN, 10);
+    }
+    
     const x = rand(x0 + r + 20, x1 - r - 20);
     // Spawn at top of screen (y=0 to slight negative) - FTL will handle entry
     const y = rand(-r - 10, -r);
 
-    const type = r > 14 ? "large" : r > 10 ? "medium" : "small";
     // Reduced base HP by 25%, but faster scaling (0.5 -> 0.8)
     const baseHpVal = type === "large" ? 3 : type === "medium" ? 1.5 : 0.75;
     const waveHpBonus = Math.floor(wave * 0.8);
