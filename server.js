@@ -20,7 +20,7 @@ const BASE_HP_PER_PLAYER = 8; // Increased for PvP
 const BULLET_R = 2.5;
 const BULLET_SPEED = 175; // Slowed to 25% of original (was 700)
 const BULLET_COOLDOWN = 0.72;
-const BULLET_DAMAGE = 0.5; // Halved starting damage
+const BULLET_DAMAGE = 0.25; // Reduced again by 50%
 const BULLET_LIFESPAN = 6.0; // Increased for slower homing bullets
 
 const ASTEROID_R_MIN = 8;
@@ -780,12 +780,17 @@ function tick() {
 
     // Bullet collision
     for (const b of bullets) {
-      // All bullets now have perfect homing
+      // All bullets now have perfect homing - but only target asteroids in owner's segment
       if (b.magnet) {
         let nearest = null;
-        let nearestDist = 400; // Increased detection range
+        let nearestDist = 400; // Detection range
+        const { x0: ownerX0, x1: ownerX1 } = segmentBounds(b.ownerSlot);
+        
         for (const m of missiles) {
           if (m.dead || m.isPhased) continue;
+          // Only home toward asteroids targeting the bullet owner's segment
+          if (m.targetSlot !== b.ownerSlot) continue;
+          
           const d = Math.hypot(m.x - b.x, m.y - b.y);
           if (d < nearestDist) {
             nearestDist = d;
@@ -825,6 +830,8 @@ function tick() {
       if (b.dead) continue;
       for (const m of missiles) {
         if (m.dead) continue;
+        // Bullets can only damage asteroids targeting their owner's segment
+        if (m.targetSlot !== b.ownerSlot) continue;
         if (m.isPhased && Math.random() > 0.3) continue; // Phased asteroids have 70% evasion
         if (b.hitList && b.hitList.includes(m.id)) continue;
         const dx = m.x - b.x;
