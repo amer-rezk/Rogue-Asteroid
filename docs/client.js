@@ -788,6 +788,55 @@
           baseColor = ATTACK_TYPES[m.attackType].color;
         }
 
+        // FTL entry effect - Star Wars hyperspace exit style
+        if (m.inFTL) {
+          ctx.save();
+          
+          // Draw streak lines (motion trails)
+          const streakLength = 80 * sy;
+          const numStreaks = 5;
+          
+          for (let i = 0; i < numStreaks; i++) {
+            const offsetX = (Math.random() - 0.5) * r * 1.5;
+            const alpha = 0.3 + Math.random() * 0.4;
+            
+            const grad = ctx.createLinearGradient(x + offsetX, y - streakLength, x + offsetX, y);
+            grad.addColorStop(0, "rgba(150, 180, 255, 0)");
+            grad.addColorStop(0.5, `rgba(180, 200, 255, ${alpha})`);
+            grad.addColorStop(1, `rgba(255, 255, 255, ${alpha + 0.2})`);
+            
+            ctx.strokeStyle = grad;
+            ctx.lineWidth = 1 + Math.random() * 2;
+            ctx.beginPath();
+            ctx.moveTo(x + offsetX, y - streakLength);
+            ctx.lineTo(x + offsetX, y);
+            ctx.stroke();
+          }
+          
+          // Main FTL glow around asteroid
+          ctx.shadowColor = "#aaccff";
+          ctx.shadowBlur = 25;
+          
+          // Draw elongated asteroid (stretched during FTL)
+          ctx.translate(x, y);
+          ctx.scale(1, 2.5); // Stretch vertically
+          ctx.rotate(m.rotation || 0);
+          
+          const ftlGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+          ftlGrad.addColorStop(0, "#ffffff");
+          ftlGrad.addColorStop(0.4, baseColor);
+          ftlGrad.addColorStop(1, hexToRgba(baseColor, 0.5));
+          ctx.fillStyle = ftlGrad;
+          
+          ctx.beginPath();
+          ctx.arc(0, 0, r, 0, Math.PI * 2);
+          ctx.fill();
+          
+          ctx.restore();
+          ctx.shadowBlur = 0;
+          continue; // Skip normal rendering for FTL asteroids
+        }
+
         // Ghost phasing effect
         const phaseAlpha = m.isPhased ? 0.3 : 0.7;
 
@@ -1386,66 +1435,140 @@
 
       // Upgrade phase
       if (phase === "upgrades" && upgradeOptions.length > 0) {
-        ctx.fillStyle = "rgba(0,0,0,0.75)";
+        // Darker overlay with subtle gradient
+        const overlayGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+        overlayGrad.addColorStop(0, "rgba(5,5,15,0.9)");
+        overlayGrad.addColorStop(0.5, "rgba(10,10,25,0.85)");
+        overlayGrad.addColorStop(1, "rgba(5,5,15,0.9)");
+        ctx.fillStyle = overlayGrad;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
         if (!upgradePicked) {
-          drawNeonText("CHOOSE UPGRADE", canvas.width / 2, 80, "#ff0", 24, "center");
-          
-          // Countdown timer
-          const timeLeft = Math.max(0, Math.ceil((upgradeDeadline - Date.now()) / 1000));
-          const timerColor = timeLeft <= 3 ? "#f44" : timeLeft <= 5 ? "#fa0" : "#0f8";
-          ctx.font = "bold 18px 'Courier New', monospace";
+          // Header with wave info
+          ctx.font = "bold 14px 'Courier New', monospace";
           ctx.textAlign = "center";
-          ctx.fillStyle = timerColor;
-          ctx.fillText(`⏱ ${timeLeft}s`, canvas.width / 2, 110);
-          if (timeLeft <= 3) {
-            ctx.fillStyle = `rgba(255,68,68,${0.3 + Math.sin(Date.now() / 100) * 0.2})`;
-            ctx.fillText(`⏱ ${timeLeft}s`, canvas.width / 2, 110);
-          }
+          ctx.fillStyle = "rgba(255,255,255,0.5)";
+          ctx.fillText(`WAVE ${lastSnap?.wave || 1} COMPLETE`, canvas.width / 2, 50);
           
-          const cardW = 220;
-          const cardH = 160;
-          const gap = 30;
+          // Main title
+          ctx.font = "bold 28px 'Courier New', monospace";
+          ctx.fillStyle = "#fff";
+          ctx.fillText("SELECT UPGRADE", canvas.width / 2, 85);
+          
+          // Countdown timer - minimal style
+          const timeLeft = Math.max(0, Math.ceil((upgradeDeadline - Date.now()) / 1000));
+          const timerColor = timeLeft <= 3 ? "#ff4466" : timeLeft <= 5 ? "#ffaa00" : "#44ff88";
+          ctx.font = "bold 16px 'Courier New', monospace";
+          ctx.fillStyle = timerColor;
+          const timerAlpha = timeLeft <= 3 ? (0.7 + Math.sin(Date.now() / 80) * 0.3) : 1;
+          ctx.globalAlpha = timerAlpha;
+          ctx.fillText(`${timeLeft}s`, canvas.width / 2, 115);
+          ctx.globalAlpha = 1;
+          
+          // Cards - sleeker horizontal design
+          const cardW = 180;
+          const cardH = 220;
+          const gap = 25;
           const totalW = upgradeOptions.length * cardW + (upgradeOptions.length - 1) * gap;
           const startX = canvas.width / 2 - totalW / 2;
-          const cardY = canvas.height / 2 - cardH / 2;
+          const cardY = canvas.height / 2 - cardH / 2 + 20;
+          
           hoveredUpgrade = -1;
+          
           for (let i = 0; i < upgradeOptions.length; i++) {
             const opt = upgradeOptions[i];
             const cardX = startX + i * (cardW + gap);
             const isHovered = mouseX >= cardX && mouseX <= cardX + cardW && mouseY >= cardY && mouseY <= cardY + cardH;
             if (isHovered) hoveredUpgrade = i;
+            
             const rarityColor = opt.rarityColor || "#fff";
-            ctx.fillStyle = isHovered ? "rgba(255,255,255,0.1)" : "rgba(20,20,40,0.9)";
-            ctx.strokeStyle = isHovered ? rarityColor : hexToRgba(rarityColor, 0.3);
-            ctx.lineWidth = isHovered ? 4 : 2;
-            ctx.shadowColor = isHovered ? rarityColor : "transparent";
-            ctx.shadowBlur = isHovered ? 20 : 0;
+            
+            // Card background
+            ctx.save();
+            if (isHovered) {
+              ctx.shadowColor = rarityColor;
+              ctx.shadowBlur = 30;
+            }
+            
+            // Main card body
+            const cardGrad = ctx.createLinearGradient(cardX, cardY, cardX, cardY + cardH);
+            cardGrad.addColorStop(0, isHovered ? "rgba(40,40,60,0.95)" : "rgba(20,20,35,0.9)");
+            cardGrad.addColorStop(1, isHovered ? "rgba(30,30,50,0.95)" : "rgba(15,15,25,0.9)");
+            ctx.fillStyle = cardGrad;
+            
             ctx.beginPath();
-            ctx.roundRect(cardX, cardY, cardW, cardH, 10);
+            ctx.roundRect(cardX, cardY, cardW, cardH, 8);
             ctx.fill();
+            
+            // Border with rarity color
+            ctx.strokeStyle = isHovered ? rarityColor : hexToRgba(rarityColor, 0.4);
+            ctx.lineWidth = isHovered ? 2 : 1;
             ctx.stroke();
-            ctx.shadowBlur = 0;
-            ctx.font = "bold 10px 'Courier New', monospace";
+            ctx.restore();
+            
+            // Rarity indicator bar at top
+            ctx.fillStyle = rarityColor;
+            ctx.beginPath();
+            ctx.roundRect(cardX + 10, cardY + 8, cardW - 20, 3, 2);
+            ctx.fill();
+            
+            // Rarity label
+            ctx.font = "bold 9px 'Courier New', monospace";
             ctx.textAlign = "center";
-            ctx.fillStyle = rarityColor;
-            ctx.fillText(opt.rarityLabel, cardX + cardW / 2, cardY + 20);
-            ctx.font = "32px sans-serif";
+            ctx.fillStyle = hexToRgba(rarityColor, 0.8);
+            ctx.fillText(opt.rarityLabel, cardX + cardW / 2, cardY + 28);
+            
+            // Icon - larger and centered
+            ctx.font = "42px sans-serif";
             ctx.fillStyle = "#fff";
-            ctx.fillText(opt.icon, cardX + cardW / 2, cardY + 55);
-            ctx.font = "bold 14px 'Courier New', monospace";
-            ctx.fillStyle = rarityColor;
-            ctx.fillText(opt.title, cardX + cardW / 2, cardY + 85);
+            ctx.fillText(opt.icon, cardX + cardW / 2, cardY + 85);
+            
+            // Title
+            ctx.font = "bold 13px 'Courier New', monospace";
+            ctx.fillStyle = "#fff";
+            ctx.fillText(opt.title, cardX + cardW / 2, cardY + 120);
+            
+            // Description - wrapped if needed
             ctx.font = "11px 'Courier New', monospace";
-            ctx.fillStyle = "rgba(255,255,255,0.8)";
-            ctx.fillText(opt.desc, cardX + cardW / 2, cardY + 110);
-            ctx.font = "9px 'Courier New', monospace";
-            ctx.fillStyle = "rgba(255,255,255,0.4)";
-            ctx.fillText(opt.category.toUpperCase(), cardX + cardW / 2, cardY + 140);
+            ctx.fillStyle = "rgba(255,255,255,0.7)";
+            const desc = opt.desc;
+            if (desc.length > 22) {
+              // Split into two lines
+              const mid = desc.lastIndexOf(' ', 22);
+              if (mid > 0) {
+                ctx.fillText(desc.substring(0, mid), cardX + cardW / 2, cardY + 150);
+                ctx.fillText(desc.substring(mid + 1), cardX + cardW / 2, cardY + 165);
+              } else {
+                ctx.fillText(desc, cardX + cardW / 2, cardY + 155);
+              }
+            } else {
+              ctx.fillText(desc, cardX + cardW / 2, cardY + 155);
+            }
+            
+            // Category tag at bottom
+            ctx.fillStyle = "rgba(255,255,255,0.3)";
+            ctx.font = "8px 'Courier New', monospace";
+            ctx.fillText(opt.category.toUpperCase(), cardX + cardW / 2, cardY + cardH - 15);
+            
+            // Hover hint
+            if (isHovered) {
+              ctx.fillStyle = hexToRgba(rarityColor, 0.9);
+              ctx.font = "bold 10px 'Courier New', monospace";
+              ctx.fillText("CLICK TO SELECT", cardX + cardW / 2, cardY + cardH - 30);
+            }
           }
+          
           ctx.textAlign = "left";
         } else {
-          drawNeonText("UPGRADE SELECTED", canvas.width / 2, canvas.height / 2 - 20, "#0f8", 20, "center");
+          // Selection confirmation
+          ctx.font = "bold 24px 'Courier New', monospace";
+          ctx.textAlign = "center";
+          ctx.fillStyle = "#44ff88";
+          ctx.fillText("✓ UPGRADE SELECTED", canvas.width / 2, canvas.height / 2 - 10);
+          ctx.font = "14px 'Courier New', monospace";
+          ctx.fillStyle = "rgba(255,255,255,0.5)";
+          ctx.fillText("Waiting for other players...", canvas.width / 2, canvas.height / 2 + 20);
+          ctx.textAlign = "left";
         }
       }
 
