@@ -197,17 +197,17 @@ function lobbySnapshot() {
 
 // ===== Roguelike Upgrades System =====
 const RARITY_CONFIG = {
-  common: { weight: 60, color: "#ffffff", scale: 1.0, label: "COMMON" },
-  rare: { weight: 25, color: "#00ffff", scale: 1.5, label: "RARE" },
-  epic: { weight: 10, color: "#bf00ff", scale: 2.5, label: "EPIC" },
-  legendary: { weight: 5, color: "#ffaa00", scale: 4.0, label: "LEGENDARY" },
+  common: { weight: 75, color: "#ffffff", scale: 1.0, label: "COMMON" },
+  rare: { weight: 17, color: "#00ffff", scale: 1.5, label: "RARE" },
+  epic: { weight: 6, color: "#bf00ff", scale: 2.5, label: "EPIC" },
+  legendary: { weight: 2, color: "#ffaa00", scale: 4.0, label: "LEGENDARY" },
 };
 
 const UPGRADE_DEFS = [
   { id: "dmg", name: "Heavy Rounds", cat: "offense", icon: "💥", desc: "+{val} Damage", stat: "damageAdd", base: 0.5, type: "add" },
   { id: "spd", name: "Velocity", cat: "offense", icon: "💨", desc: "+{val}% Bullet Speed", stat: "bulletSpeedMult", base: 0.08, type: "mult" },
-  { id: "fire", name: "Rapid Fire", cat: "offense", icon: "⚡", desc: "+{val}% Fire Rate", stat: "fireRateMult", base: 0.10, type: "mult" },
-  { id: "multi", name: "Multishot", cat: "offense", icon: "⚔️", desc: "+{val} Bullets", stat: "multishot", base: 1, type: "add" },
+  { id: "fire", name: "Rapid Fire", cat: "offense", icon: "⚡", desc: "+{val}% Fire Rate", stat: "fireRateMult", base: 0.05, type: "mult" },
+  { id: "multi", name: "Multishot", cat: "offense", icon: "⚔️", desc: "+{val} Bullets (-{penalty}% dmg)", stat: "multishot", base: 1, type: "multishot" },
   { id: "crit", name: "Crit Scope", cat: "offense", icon: "🎯", desc: "+{val}% Crit Chance", stat: "critChance", base: 0.05, type: "add_cap", cap: 1.0 },
   { id: "boom", name: "Explosive", cat: "offense", icon: "💣", desc: "Explosions size +{val}", stat: "explosive", base: 1, type: "add" },
   { id: "life", name: "Stabilizer", cat: "utility", icon: "⏱️", desc: "+{val}s Bullet Life", stat: "lifespanAdd", base: 0.75, type: "add" },
@@ -243,18 +243,30 @@ function makeUpgradeOptions(player) {
     const rarity = RARITY_CONFIG[rarityKey];
 
     let val = def.base;
-    if (def.type === "add" || def.type === "mult" || def.type === "add_cap") {
+    let desc = def.desc;
+    let effect = { stat: def.stat, type: def.type };
+    
+    if (def.type === "multishot") {
+      // Multishot scales with rarity: 1/1/2/3
+      val = rarityKey === "legendary" ? 3 : rarityKey === "epic" ? 2 : 1;
+      // Damage penalty: +1 = 35%, +2 = 60%, +3 = 85%
+      const penalty = val === 1 ? 35 : val === 2 ? 60 : 85;
+      desc = def.desc.replace("{val}", val).replace("{penalty}", penalty);
+      effect.val = val;
+      effect.penalty = penalty / 100;
+    } else if (def.type === "add" || def.type === "mult" || def.type === "add_cap") {
       val = def.base * rarity.scale;
-      if (def.stat === "multishot" || def.stat === "shield" || def.stat === "ricochet" || def.stat === "pierce") {
+      if (def.stat === "shield" || def.stat === "ricochet" || def.stat === "pierce") {
         val = Math.max(1, Math.round(val));
       } else if (def.type === "mult" || def.stat === "critChance" || def.stat === "attackDiscount") {
         val = Math.round(val * 100);
       } else {
         val = Math.round(val * 10) / 10;
       }
+      desc = def.desc.replace("{val}", val);
+      effect.val = def.type === "mult" || def.stat === "critChance" || def.stat === "attackDiscount" ? val / 100 : val;
     }
 
-    let desc = def.desc.replace("{val}", val);
     opts.push({
       key: uid(),
       defId: def.id,
@@ -265,7 +277,7 @@ function makeUpgradeOptions(player) {
       rarity: rarityKey,
       rarityLabel: rarity.label,
       rarityColor: rarity.color,
-      effect: { stat: def.stat, val: def.type === "mult" || def.stat === "critChance" || def.stat === "attackDiscount" ? val / 100 : val, type: def.type }
+      effect: effect
     });
   }
   return opts;
@@ -282,6 +294,11 @@ function applyUpgrade(player, card) {
     u[eff.stat] = (u[eff.stat] || 1) * (1 + eff.val);
   } else if (eff.type === "bool") {
     u[eff.stat] = true;
+  } else if (eff.type === "multishot") {
+    // Add bullets but reduce damage
+    u.multishot = (u.multishot || 0) + eff.val;
+    // Apply damage penalty multiplicatively
+    u.multishotDmgMult = (u.multishotDmgMult || 1) * (1 - eff.penalty);
   }
   if (eff.stat === "shield") {
     u.shieldActive = u.shield;
@@ -528,6 +545,8 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     }
   } else {
     dmg = BULLET_DAMAGE + (owner.upgrades?.damageAdd ?? 0);
+    // Apply multishot damage penalty
+    dmg *= (owner.upgrades?.multishotDmgMult ?? 1);
     speed = BULLET_SPEED * (owner.upgrades?.bulletSpeedMult ?? 1);
     isCrit = Math.random() < (owner.upgrades?.critChance ?? 0);
     explosive = owner.upgrades?.explosive ?? 0;
