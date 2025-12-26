@@ -900,7 +900,10 @@
           ctx.font = `bold ${d.isCrit ? 16 : 12}px 'Courier New', monospace`;
           ctx.textAlign = "center";
           ctx.fillStyle = d.isCrit ? `rgba(255,255,0,${d.life})` : `rgba(255,255,255,${d.life})`;
-          ctx.fillText(d.amount.toString(), d.x * sx, d.y * sy);
+          // Round to max 2 decimal places, remove trailing zeros
+          const rounded = Math.round(d.amount * 100) / 100;
+          const displayText = Number.isInteger(rounded) ? rounded.toString() : rounded.toFixed(2).replace(/\.?0+$/, '');
+          ctx.fillText(displayText, d.x * sx, d.y * sy);
         }
       }
 
