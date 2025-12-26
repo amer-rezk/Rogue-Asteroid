@@ -85,6 +85,7 @@
   let lastSnap = null;
   let upgradeOptions = [];
   let upgradePicked = false;
+  let upgradeDeadline = 0;
   let waitingFor = [];
   let gameOverData = null;
 
@@ -272,14 +273,19 @@
         upgradeOptions = msg.options;
         upgradePicked = false;
         buildMenuOpen = null;
+        if (msg.deadline) upgradeDeadline = msg.deadline;
         break;
 
       case "upgradePhase":
         phase = "upgrades";
+        if (msg.deadline) upgradeDeadline = msg.deadline;
         break;
 
       case "picked":
         upgradePicked = true;
+        if (msg.auto) {
+          // Show feedback that upgrade was auto-picked
+        }
         break;
 
       case "upgradeWaiting":
@@ -344,7 +350,8 @@
     const me = lobbyPlayers.find(p => p.id === myId);
     readyBtn.textContent = me?.ready ? "✓ READY" : "READY UP";
     readyBtn.className = "btn" + (me?.ready ? " ready" : "");
-    launchBtn.style.display = isHost ? "block" : "none";
+    // Any ready player can launch the game when all are ready
+    launchBtn.style.display = me?.ready ? "block" : "none";
     launchBtn.disabled = !allReady;
     launchBtn.className = "btn launch" + (allReady ? "" : " disabled");
   }
@@ -366,6 +373,15 @@
   canvas.addEventListener("touchend", (e) => { e.preventDefault(); mouseDown = false; });
 
   function handleClick() {
+    // Handle game over return to menu button
+    if (phase === "gameover" && gameOverData && gameOverData.menuBtnBounds) {
+      const btn = gameOverData.menuBtnBounds;
+      if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) {
+        send({ t: "returnToLobby" });
+        return;
+      }
+    }
+    
     if (phase === "upgrades" && hoveredUpgrade >= 0 && !upgradePicked) {
       const opt = upgradeOptions[hoveredUpgrade];
       if (opt) send({ t: "pickUpgrade", key: opt.key });
@@ -903,74 +919,87 @@
               const tColor = typeInfo.color || "#fff";
               const level = t.level || 1;
               const towerAlpha = isDead ? 0.3 : 1;
+              const towerAngle = t.angle !== undefined ? t.angle : -Math.PI / 2;
+              const scale = 0.6; // Make towers smaller
 
-              // Platform
-              const platformW = 28 * sx;
-              const platformH = 8 * sy;
+              // Platform (doesn't rotate)
+              const platformW = 22 * sx * scale;
+              const platformH = 6 * sy * scale;
               ctx.fillStyle = hexToRgba("#333", 0.9 * towerAlpha);
               ctx.strokeStyle = hexToRgba(tColor, 0.6 * towerAlpha);
               ctx.lineWidth = 2;
               ctx.beginPath();
-              ctx.roundRect(tx - platformW / 2, ty - platformH, platformW, platformH, 3);
+              ctx.roundRect(tx - platformW / 2, ty - platformH, platformW, platformH, 2);
               ctx.fill();
               ctx.stroke();
 
               ctx.shadowColor = isDead ? "transparent" : tColor;
-              ctx.shadowBlur = isDead ? 0 : 10 + level * 2;
+              ctx.shadowBlur = isDead ? 0 : 8 + level * 2;
+
+              // Rotating turret part
+              ctx.save();
+              ctx.translate(tx, ty - platformH);
+              ctx.rotate(towerAngle + Math.PI / 2);
 
               if (typeInfo.name === "Gatling") {
-                const bodyW = 18 * sx;
-                const bodyH = 16 * sy;
+                const bodyW = 14 * sx * scale;
+                const bodyH = 12 * sy * scale;
                 ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
                 ctx.strokeStyle = hexToRgba(tColor, towerAlpha);
-                ctx.lineWidth = 1.5;
+                ctx.lineWidth = 1;
                 ctx.beginPath();
-                ctx.roundRect(tx - bodyW / 2, ty - platformH - bodyH, bodyW, bodyH, 4);
+                ctx.roundRect(-bodyW / 2, -bodyH, bodyW, bodyH, 3);
                 ctx.fill();
                 ctx.stroke();
+                // Triple barrels
                 for (let b = -1; b <= 1; b++) {
                   ctx.fillStyle = hexToRgba(tColor, towerAlpha);
-                  ctx.fillRect(tx + b * 4 * sx - 1.5 * sx, ty - platformH - bodyH - 12 * sy, 3 * sx, 14 * sy);
+                  ctx.fillRect(b * 3 * sx * scale - 1 * sx * scale, -bodyH - 10 * sy * scale, 2 * sx * scale, 12 * sy * scale);
                 }
               } else if (typeInfo.name === "Sniper") {
-                const bodyW = 12 * sx;
-                const bodyH = 20 * sy;
+                const bodyW = 10 * sx * scale;
+                const bodyH = 14 * sy * scale;
                 ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
                 ctx.strokeStyle = hexToRgba(tColor, towerAlpha);
-                ctx.lineWidth = 1.5;
+                ctx.lineWidth = 1;
                 ctx.beginPath();
-                ctx.roundRect(tx - bodyW / 2, ty - platformH - bodyH, bodyW, bodyH, 3);
+                ctx.roundRect(-bodyW / 2, -bodyH, bodyW, bodyH, 2);
                 ctx.fill();
                 ctx.stroke();
+                // Long barrel
                 ctx.fillStyle = hexToRgba(tColor, towerAlpha);
-                ctx.fillRect(tx - 2 * sx, ty - platformH - bodyH - 18 * sy, 4 * sx, 20 * sy);
+                ctx.fillRect(-1.5 * sx * scale, -bodyH - 14 * sy * scale, 3 * sx * scale, 16 * sy * scale);
+                // Scope
                 ctx.fillStyle = hexToRgba("#00ffaa", towerAlpha);
                 ctx.beginPath();
-                ctx.arc(tx + 6 * sx, ty - platformH - bodyH + 6 * sy, 3 * sx, 0, Math.PI * 2);
+                ctx.arc(5 * sx * scale, -bodyH + 4 * sy * scale, 2 * sx * scale, 0, Math.PI * 2);
                 ctx.fill();
               } else if (typeInfo.name === "Missile") {
-                const bodyW = 22 * sx;
-                const bodyH = 18 * sy;
+                const bodyW = 16 * sx * scale;
+                const bodyH = 12 * sy * scale;
                 ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
                 ctx.strokeStyle = hexToRgba(tColor, towerAlpha);
-                ctx.lineWidth = 1.5;
+                ctx.lineWidth = 1;
                 ctx.beginPath();
-                ctx.roundRect(tx - bodyW / 2, ty - platformH - bodyH, bodyW, bodyH, 4);
+                ctx.roundRect(-bodyW / 2, -bodyH, bodyW, bodyH, 3);
                 ctx.fill();
                 ctx.stroke();
+                // Missile tubes
                 ctx.fillStyle = "#222";
                 for (let m = -1; m <= 1; m += 2) {
                   ctx.beginPath();
-                  ctx.arc(tx + m * 5 * sx, ty - platformH - bodyH / 2, 4 * sx, 0, Math.PI * 2);
+                  ctx.arc(m * 4 * sx * scale, -bodyH / 2, 3 * sx * scale, 0, Math.PI * 2);
                   ctx.fill();
                 }
+                // Missile tips
                 ctx.fillStyle = hexToRgba("#ff6600", towerAlpha);
                 for (let m = -1; m <= 1; m += 2) {
                   ctx.beginPath();
-                  ctx.arc(tx + m * 5 * sx, ty - platformH - bodyH - 3 * sy, 3 * sx, 0, Math.PI * 2);
+                  ctx.arc(m * 4 * sx * scale, -bodyH - 2 * sy * scale, 2 * sx * scale, 0, Math.PI * 2);
                   ctx.fill();
                 }
               }
+              ctx.restore();
               ctx.shadowBlur = 0;
 
               // Level stars
@@ -1361,6 +1390,19 @@
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         if (!upgradePicked) {
           drawNeonText("CHOOSE UPGRADE", canvas.width / 2, 80, "#ff0", 24, "center");
+          
+          // Countdown timer
+          const timeLeft = Math.max(0, Math.ceil((upgradeDeadline - Date.now()) / 1000));
+          const timerColor = timeLeft <= 3 ? "#f44" : timeLeft <= 5 ? "#fa0" : "#0f8";
+          ctx.font = "bold 18px 'Courier New', monospace";
+          ctx.textAlign = "center";
+          ctx.fillStyle = timerColor;
+          ctx.fillText(`⏱ ${timeLeft}s`, canvas.width / 2, 110);
+          if (timeLeft <= 3) {
+            ctx.fillStyle = `rgba(255,68,68,${0.3 + Math.sin(Date.now() / 100) * 0.2})`;
+            ctx.fillText(`⏱ ${timeLeft}s`, canvas.width / 2, 110);
+          }
+          
           const cardW = 220;
           const cardH = 160;
           const gap = 30;
@@ -1433,7 +1475,32 @@
           ctx.fillText(`${i + 1}. ${s.name} - ${s.score} pts (${s.kills} kills)`, canvas.width / 2, y);
         });
 
-        drawNeonText("RETURNING TO LOBBY...", canvas.width / 2, canvas.height - 80, "#0ff", 14, "center");
+        // Return to Menu button
+        const btnW = 200;
+        const btnH = 50;
+        const btnX = canvas.width / 2 - btnW / 2;
+        const btnY = canvas.height - 120;
+        const isHovered = mouseX >= btnX && mouseX <= btnX + btnW && mouseY >= btnY && mouseY <= btnY + btnH;
+        
+        ctx.fillStyle = isHovered ? "rgba(0,255,136,0.3)" : "rgba(0,255,136,0.1)";
+        ctx.strokeStyle = isHovered ? "#0f8" : "rgba(0,255,136,0.5)";
+        ctx.lineWidth = isHovered ? 3 : 2;
+        ctx.shadowColor = isHovered ? "#0f8" : "transparent";
+        ctx.shadowBlur = isHovered ? 15 : 0;
+        ctx.beginPath();
+        ctx.roundRect(btnX, btnY, btnW, btnH, 8);
+        ctx.fill();
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        
+        ctx.font = "bold 16px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = isHovered ? "#fff" : "#0f8";
+        ctx.fillText("RETURN TO MENU", canvas.width / 2, btnY + btnH / 2);
+        
+        // Store button bounds for click handling
+        gameOverData.menuBtnBounds = { x: btnX, y: btnY, w: btnW, h: btnH };
       }
     } catch (err) {
       console.error('Draw error:', err);
@@ -1452,5 +1519,9 @@
   }, 300));
 
   readyBtn.onclick = () => { send({ t: "ready" }); };
-  launchBtn.onclick = () => { if (allReady) send({ t: "start" }); };
+  launchBtn.onclick = () => { 
+    // Any ready player can start when all are ready
+    const me = lobbyPlayers.find(p => p.id === myId);
+    if (allReady && me?.ready) send({ t: "start" }); 
+  };
 })();
