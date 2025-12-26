@@ -127,6 +127,12 @@ let upgradePicks = new Map();
 let attackQueue = new Map(); // Queued attacks for next wave: Map<targetSlot, attacks[]>
 let upgradePhaseStart = 0; // Timestamp when upgrade phase started
 const UPGRADE_TIMEOUT = 10; // Seconds to choose upgrade
+let waveClearedTime = 0; // Timestamp when last asteroid was destroyed
+const WAVE_CLEAR_DELAY = 1000; // 1 second delay before upgrade phase
+
+// Leaderboard - persists across games (in memory, resets on server restart)
+let leaderboard = []; // { name, score, kills, wave, date }
+const MAX_LEADERBOARD_ENTRIES = 10;
 
 // ===== Utilities =====
 function uid() {
@@ -192,7 +198,7 @@ function lobbySnapshot() {
       ready: !!p.ready
     }));
   const allReady = list.length > 0 && list.every(p => p.ready);
-  return { players: list, hostId, allReady };
+  return { players: list, hostId, allReady, leaderboard };
 }
 
 // ===== Roguelike Upgrades System =====
@@ -548,6 +554,22 @@ function endGame(winnerId) {
       isWinner: id === winnerId
     };
   }).sort((a, b) => b.score - a.score);
+
+  // Update leaderboard with all players' scores
+  for (const s of scores) {
+    if (s.score > 0) {
+      leaderboard.push({
+        name: s.name,
+        score: s.score,
+        kills: s.kills,
+        wave: wave,
+        date: Date.now()
+      });
+    }
+  }
+  // Sort and keep top entries
+  leaderboard.sort((a, b) => b.score - a.score);
+  leaderboard = leaderboard.slice(0, MAX_LEADERBOARD_ENTRIES);
 
   broadcast({ t: "gameOver", wave, scores, winnerId });
 
@@ -1039,10 +1061,17 @@ function tick() {
     // Check for game over (PvP: last player standing)
     if (checkGameOver()) return;
 
-    // Check if wave is complete
+    // Check if wave is complete (with 1 second delay for visual clarity)
     if (missiles.length === 0) {
-      beginUpgradePhase();
-      return;
+      if (waveClearedTime === 0) {
+        waveClearedTime = Date.now();
+      } else if (Date.now() - waveClearedTime >= WAVE_CLEAR_DELAY) {
+        waveClearedTime = 0; // Reset for next wave
+        beginUpgradePhase();
+        return;
+      }
+    } else {
+      waveClearedTime = 0; // Reset if new asteroids appear
     }
 
     broadcast({
