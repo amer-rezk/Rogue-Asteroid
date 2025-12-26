@@ -214,7 +214,6 @@ const UPGRADE_DEFS = [
   { id: "rico", name: "Ricochet", cat: "utility", icon: "🎱", desc: "Bounces {val} times", stat: "ricochet", base: 1, type: "add" },
   { id: "pierce", name: "Railgun", cat: "utility", icon: "📌", desc: "Pierces {val} enemies", stat: "pierce", base: 1, type: "add" },
   { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "Chain Lightning", stat: "chain", base: 1, type: "bool" },
-  { id: "range", name: "Long Range", cat: "turret", icon: "📡", desc: "Shoot Neighbors", stat: "range", base: 1, type: "bool" },
   { id: "shield", name: "Shield Gen", cat: "defense", icon: "🛡️", desc: "Block {val} Hits/Wave", stat: "shield", base: 1, type: "add" },
   { id: "slow", name: "Grav Field", cat: "defense", icon: "🌀", desc: "Slow Enemies", stat: "slowfield", base: 1, type: "bool" },
   // PvP specific upgrades
@@ -590,22 +589,15 @@ function fireWithMultishot(owner, originX, originY, targetX, targetY) {
 function findBestTarget(x0, x1, turretX, turretY, rangeMult = 1.0, ownerSlot = 0) {
   let best = null;
   let bestScore = -Infinity;
-  const extend = (rangeMult > 1.2);
-  const searchX0 = extend ? Math.max(0, x0 - SEGMENT_W) : x0;
-  const searchX1 = extend ? Math.min(worldW, x1 + SEGMENT_W) : x1;
+  // Always use the owner's segment bounds - no cross-lane targeting
+  const { x0: segX0, x1: segX1 } = segmentBounds(ownerSlot);
 
   for (const m of missiles) {
-    if (m.x < searchX0 || m.x > searchX1) continue;
+    // Must be within owner's segment
+    if (m.x < segX0 || m.x > segX1) continue;
     if (m.y < 0) continue;
-    // Only target asteroids that are in the owner's segment (can actually be hit)
-    // Natural asteroids: check if currently in segment
-    // Spawned mobs: only if targeting this player
+    // Spawned mobs must be targeting this player
     if (m.attackType && m.targetSlot !== ownerSlot) continue;
-    // For natural asteroids, check if they're currently within our walls
-    if (!m.attackType) {
-      const { x0: segX0, x1: segX1 } = segmentBounds(ownerSlot);
-      if (m.x < segX0 || m.x > segX1) continue;
-    }
     
     const danger = m.y / GROUND_Y;
     const dist = Math.hypot(m.x - turretX, m.y - turretY);
@@ -710,7 +702,6 @@ function tick() {
       const slot = p.slot;
       const { x0, x1 } = segmentBounds(slot);
       const pos = turretPositions(slot);
-      const canExtend = !!p.upgrades?.range;
       const baseCooldown = BULLET_COOLDOWN / (p.upgrades?.fireRateMult ?? 1);
 
       let targetX, targetY, clamped;
@@ -719,7 +710,7 @@ function tick() {
         targetX = clamped.x;
         targetY = clamped.y;
       } else {
-        const target = findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend ? 1.5 : 1.0, p.slot);
+        const target = findBestTarget(x0, x1, pos.main.x, pos.main.y, 1.0, p.slot);
         if (target) {
           clamped = clampAimAngle(pos.main.x, pos.main.y, target.x, target.y);
         } else {
@@ -729,7 +720,7 @@ function tick() {
         targetY = clamped.y;
       }
       p.turretAngle = clamped.angle;
-      const shouldFire = p.manualShooting || findBestTarget(x0, x1, pos.main.x, pos.main.y, canExtend ? 1.5 : 1.0, p.slot);
+      const shouldFire = p.manualShooting || findBestTarget(x0, x1, pos.main.x, pos.main.y, 1.0, p.slot);
       if (shouldFire && p.cooldown <= 0) {
         p.cooldown = baseCooldown;
         fireWithMultishot(p, pos.main.x, pos.main.y, clamped.x, clamped.y);
@@ -744,7 +735,7 @@ function tick() {
           const stats = TOWER_TYPES[tower.type];
           if (!stats) return;
 
-          const rangeMult = (stats.rangeMult || 1.0) * (canExtend ? 1.5 : 1.0);
+          const rangeMult = stats.rangeMult || 1.0;
           const target = findBestTarget(x0, x1, towerPos.x, towerPos.y, rangeMult, p.slot);
           
           // Update tower angle even when not firing
@@ -845,15 +836,17 @@ function tick() {
 
     // Bullet collision
     for (const b of bullets) {
-      // All bullets now have perfect homing
+      // All bullets now have perfect homing - but ONLY within owner's segment
       if (b.magnet) {
         let nearest = null;
         let nearestDist = 400; // Detection range
+        const { x0: ownerX0, x1: ownerX1 } = segmentBounds(b.ownerSlot);
         
         for (const m of missiles) {
           if (m.dead || m.isPhased) continue;
-          // Player-spawned attacks can only be targeted by the player being attacked
-          // Natural asteroids (no attackType) can be targeted by anyone
+          // Only target asteroids within the bullet owner's segment
+          if (m.x < ownerX0 || m.x > ownerX1) continue;
+          // Spawned mobs must also be targeting this player
           if (m.attackType && m.targetSlot !== b.ownerSlot) continue;
           
           const d = Math.hypot(m.x - b.x, m.y - b.y);
@@ -902,10 +895,12 @@ function tick() {
 
     for (const b of bullets) {
       if (b.dead) continue;
+      const { x0: ownerX0, x1: ownerX1 } = segmentBounds(b.ownerSlot);
       for (const m of missiles) {
         if (m.dead) continue;
-        // Player-spawned attacks can only be damaged by the player being attacked
-        // Natural asteroids (no attackType) can be damaged by anyone
+        // Bullets can only hit asteroids within their owner's segment
+        if (m.x < ownerX0 || m.x > ownerX1) continue;
+        // Spawned mobs must also be targeting this player
         if (m.attackType && m.targetSlot !== b.ownerSlot) continue;
         if (m.isPhased && Math.random() > 0.3) continue; // Phased asteroids have 70% evasion
         if (b.hitList && b.hitList.includes(m.id)) continue;
@@ -1019,7 +1014,6 @@ function tick() {
           kills: p.kills || 0,
           upgrades: {
             shieldActive: p.upgrades?.shieldActive ?? 0,
-            range: !!p.upgrades?.range,
             slowfield: !!p.upgrades?.slowfield,
           },
         };
