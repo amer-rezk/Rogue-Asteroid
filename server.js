@@ -326,6 +326,9 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null) {
   const vy = baseVy * (1 + wave * 0.015);
   const vx = rand(-15, 15);
 
+  // FTL entry - asteroids start in hyperspace mode
+  const ftlThreshold = GROUND_Y * 0.1; // Exit FTL at 10% into field
+
   return {
     id: uid(),
     x, y, vx, vy, r, type,
@@ -339,6 +342,10 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null) {
     phaseTimer: attackType === "ghost" ? 0 : null,
     splits: attackType === "splitter" ? 3 : 0,
     explosive: attackType === "bomber",
+    // FTL state
+    inFTL: true,
+    ftlThreshold: ftlThreshold,
+    ftlTrail: [], // Trail points for visual effect
   };
 }
 
@@ -365,13 +372,15 @@ function spawnWave() {
     const { x0, x1 } = segmentBounds(targetSlot);
     const r = rand(ASTEROID_R_MIN, ASTEROID_R_MAX);
     const x = rand(x0 + r + 20, x1 - r - 20);
-    const y = rand(-WORLD_H * 0.8, -r - 50);
+    // Spawn at top of screen (y=0 to slight negative) - FTL will handle entry
+    const y = rand(-r - 10, -r);
 
     const type = r > 14 ? "large" : r > 10 ? "medium" : "small";
-    const baseHpVal = type === "large" ? 4 : type === "medium" ? 2 : 1;
-    const waveHpBonus = Math.floor(wave * 0.5);
+    // Reduced base HP by 25%, but faster scaling (0.5 -> 0.8)
+    const baseHpVal = type === "large" ? 3 : type === "medium" ? 1.5 : 0.75;
+    const waveHpBonus = Math.floor(wave * 0.8);
 
-    missiles.push(createAsteroid(x, y, type, baseHpVal + waveHpBonus, targetSlot, null));
+    missiles.push(createAsteroid(x, y, type, Math.ceil(baseHpVal + waveHpBonus), targetSlot, null));
   }
 
   // Spawn player-purchased attack asteroids
@@ -386,9 +395,11 @@ function spawnWave() {
         const sizeMap = { small: 10, medium: 13, large: 17 };
         const r = sizeMap[attackDef.size] || 12;
         const x = rand(x0 + r + 30, x1 - r - 30);
-        const y = rand(-WORLD_H * 0.6, -r - 100);
+        // Spawn at top of screen
+        const y = rand(-r - 20, -r);
 
-        missiles.push(createAsteroid(x, y, attackDef.size, attackDef.hp + Math.floor(wave * 0.3), targetSlot, attack.type));
+        // Player attacks also scale faster (0.3 -> 0.5)
+        missiles.push(createAsteroid(x, y, attackDef.size, attackDef.hp + Math.floor(wave * 0.5), targetSlot, attack.type));
       }
     }
   }
@@ -787,6 +798,23 @@ function tick() {
         m.isPhased = Math.sin(m.phaseTimer * 4) > 0.5;
       }
 
+      // FTL entry handling - asteroids move super fast until threshold
+      if (m.inFTL) {
+        const ftlSpeed = 8; // 8x normal speed during FTL
+        m.y += m.vy * DT * ftlSpeed;
+        // Minimal x movement during FTL (looks like straight-line entry)
+        m.x += m.vx * DT * 0.3;
+        m.rotation += m.rotSpeed * DT * 3; // Faster spin during FTL
+        
+        // Exit FTL when reaching threshold
+        if (m.y >= m.ftlThreshold) {
+          m.inFTL = false;
+          // Create exit flash effect
+          createExplosion(m.x, m.y, 15, "#88f");
+        }
+        continue; // Skip normal movement while in FTL
+      }
+
       let speedMult = 1;
       for (const id of lockedSlots) {
         const p = players.get(id);
@@ -1008,7 +1036,8 @@ function tick() {
       world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
       missiles: missiles.map((m) => ({
         id: m.id, x: m.x, y: m.y, r: m.r, hp: m.hp, maxHp: m.maxHp, type: m.type,
-        rotation: m.rotation, vertices: m.vertices, attackType: m.attackType, isPhased: m.isPhased
+        rotation: m.rotation, vertices: m.vertices, attackType: m.attackType, isPhased: m.isPhased,
+        inFTL: m.inFTL
       })),
       bullets: bullets.map((b) => ({
         id: b.id, x: b.x, y: b.y, r: b.r, vx: b.vx, vy: b.vy,
