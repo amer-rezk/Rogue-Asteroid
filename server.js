@@ -1057,15 +1057,24 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    // PvP: Buy attack to send at opponent
+    // PvP: Buy attack to send at random opponent
     if (msg.t === "buyAttack" && (phase === "playing" || phase === "upgrades")) {
-      const { attackType, targetSlot } = msg;
+      const { attackType } = msg;
       if (!ATTACK_TYPES[attackType]) return;
-      if (targetSlot < 0 || targetSlot >= lockedSlots.length) return;
-      if (targetSlot === p.slot) return; // Can't attack yourself
       
-      const targetPlayer = players.get(lockedSlots[targetSlot]);
-      if (!targetPlayer || targetPlayer.hp <= 0) return;
+      // Get list of valid targets (alive players that aren't the buyer)
+      const validTargets = lockedSlots.filter(pid => {
+        if (pid === id) return false;
+        const targetPlayer = players.get(pid);
+        return targetPlayer && targetPlayer.hp > 0;
+      });
+      
+      if (validTargets.length === 0) return; // No valid targets
+      
+      // Randomly select a target
+      const targetId = validTargets[Math.floor(Math.random() * validTargets.length)];
+      const targetPlayer = players.get(targetId);
+      const targetSlot = targetPlayer.slot;
       
       let cost = ATTACK_TYPES[attackType].cost;
       const discount = p.upgrades?.attackDiscount || 0;
@@ -1079,7 +1088,7 @@ wss.on("connection", (ws) => {
         }
         attackQueue.get(targetSlot).push({ type: attackType, senderId: id });
         
-        safeSend(ws, { t: "attackQueued", attackType, targetSlot, cost });
+        safeSend(ws, { t: "attackQueued", attackType, targetSlot, targetName: targetPlayer.name, cost });
         
         // Notify target
         if (targetPlayer.ws) {
