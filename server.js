@@ -731,8 +731,11 @@ function tick() {
       m.y += m.vy * DT * speedMult;
       m.rotation += m.rotSpeed * DT;
       
-      if (m.x - m.r < 0) { m.x = m.r; m.vx = Math.abs(m.vx); }
-      if (m.x + m.r > worldW) { m.x = worldW - m.r; m.vx = -Math.abs(m.vx); }
+      // Asteroids are confined to their target segment (walls between players)
+      const targetSlot = m.targetSlot !== undefined ? m.targetSlot : 0;
+      const { x0: segX0, x1: segX1 } = segmentBounds(targetSlot);
+      if (m.x - m.r < segX0) { m.x = segX0 + m.r; m.vx = Math.abs(m.vx); }
+      if (m.x + m.r > segX1) { m.x = segX1 - m.r; m.vx = -Math.abs(m.vx); }
       
       // Hit ground - damage target player
       if (m.y + m.r >= GROUND_Y) {
