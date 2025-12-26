@@ -99,12 +99,10 @@
   let buildMenuOpen = null;
   let hoveredBuildOption = -1;
 
-  // PvP Attack Menu
-  let attackMenuOpen = false;
+  // PvP Attack Panel (always visible)
   let hoveredAttack = null;
-  let hoveredTargetSlot = null;
-  let selectedTarget = null;
   let incomingAttacks = [];
+  let recentAttackSent = null; // For feedback animation
 
   // Visual
   let stars = [];
@@ -242,7 +240,7 @@
           gameOverData = null;
           wave = 0;
           buildMenuOpen = null;
-          attackMenuOpen = false;
+          hoveredAttack = null;
           showMenu();
         }
         phase = "lobby";
@@ -257,7 +255,6 @@
         upgradeOptions = [];
         upgradePicked = false;
         buildMenuOpen = null;
-        attackMenuOpen = false;
         incomingAttacks = [];
         showGame();
         break;
@@ -267,7 +264,6 @@
         upgradeOptions = [];
         upgradePicked = false;
         buildMenuOpen = null;
-        attackMenuOpen = false;
         incomingAttacks = [];
         screenShake = 10;
         break;
@@ -300,6 +296,7 @@
       case "attackQueued":
         // Visual feedback that attack was queued
         screenShake = 3;
+        recentAttackSent = { type: msg.attackType, target: msg.targetName, time: Date.now() };
         break;
 
       case "incomingAttack":
@@ -311,7 +308,6 @@
         phase = "gameover";
         gameOverData = msg;
         buildMenuOpen = null;
-        attackMenuOpen = false;
         break;
     }
   }
@@ -376,41 +372,15 @@
       return;
     }
 
-    // Handle attack menu clicks - check bounds to prevent click-through
-    if (attackMenuOpen) {
-      const menuW = 320;
-      const menuH = 280;
-      const mx = canvas.width / 2 - menuW / 2;
-      const my = canvas.height / 2 - menuH / 2;
-      
-      // Check if click is inside menu bounds
-      const insideMenu = mouseX >= mx && mouseX <= mx + menuW && mouseY >= my && mouseY <= my + menuH;
-      
-      if (insideMenu) {
-        // Check if clicking on a target
-        if (hoveredTargetSlot !== null) {
-          selectedTarget = hoveredTargetSlot;
-          return; // Stay in menu, target selected
-        }
-        
-        // Check if clicking on an attack with valid target
-        if (hoveredAttack && selectedTarget !== null) {
-          send({ t: "buyAttack", attackType: hoveredAttack, targetSlot: selectedTarget });
-          attackMenuOpen = false;
-          hoveredAttack = null;
-          selectedTarget = null;
-          return;
-        }
-        
-        // Clicked inside menu but not on actionable item - do nothing
-        return;
-      } else {
-        // Clicked outside menu - close it
-        attackMenuOpen = false;
-        hoveredAttack = null;
-        selectedTarget = null;
-        return;
+    // Handle attack panel clicks (always visible, no popup)
+    if (hoveredAttack && phase === "playing" && lastSnap && lastSnap.players.length > 1) {
+      const myPlayer = lastSnap.players.find(p => p.id === myId);
+      const atkDef = ATTACK_TYPES[hoveredAttack];
+      if (myPlayer && atkDef && myPlayer.gold >= atkDef.cost) {
+        send({ t: "buyAttack", attackType: hoveredAttack });
+        recentAttackSent = { type: hoveredAttack, time: Date.now() };
       }
+      return;
     }
 
     // Handle build/upgrade menu clicks
@@ -435,21 +405,6 @@
 
     if (phase === "playing" && lastSnap) {
       const { sx, sy, offsetX, offsetY } = getScale();
-      const me = lastSnap.players.find(p => p.id === myId);
-      
-      // Check attack button click
-      const attackBtnX = canvas.width - 70;
-      const attackBtnY = canvas.height - 70;
-      if (Math.hypot(mouseX - attackBtnX, mouseY - attackBtnY) < 35) {
-        attackMenuOpen = !attackMenuOpen;
-        // Reset selection state when toggling menu
-        if (attackMenuOpen) {
-          selectedTarget = null;
-          hoveredAttack = null;
-          hoveredTargetSlot = null;
-        }
-        return;
-      }
 
       if (me && me.towers) {
         const segX0 = me.slot * world.segmentWidth;
@@ -481,7 +436,7 @@
     const scale = getScale();
     const worldX = (mouseX - scale.offsetX) / scale.sx;
     const worldY = (mouseY - scale.offsetY) / scale.sy;
-    send({ t: "input", x: worldX, y: worldY, shooting: mouseDown && !buildMenuOpen && !attackMenuOpen });
+    send({ t: "input", x: worldX, y: worldY, shooting: mouseDown && !buildMenuOpen });
   }
   setInterval(sendInput, 33);
 
@@ -892,7 +847,7 @@
         const isDead = p.hp <= 0;
 
         // Aim line for current player
-        if (p.id === myId && mouseDown && !buildMenuOpen && !attackMenuOpen && !isDead) {
+        if (p.id === myId && mouseDown && !buildMenuOpen && !isDead) {
           const turretX = cx;
           const turretY = (560 - 14) * sy;
           const worldMouseX = (mouseX - offsetX) / sx;
@@ -1114,32 +1069,109 @@
       }
       ctx.textAlign = "left";
 
-      // Attack button (PvP)
+      // Always-visible Attack Panel (PvP) - right side
       if (phase === "playing" && lastSnap.players.length > 1 && myPlayer && myPlayer.hp > 0) {
-        const btnX = canvas.width - 70;
-        const btnY = canvas.height - 70;
-        const btnR = 35;
-        const isHovered = Math.hypot(mouseX - btnX, mouseY - btnY) < btnR;
+        hoveredAttack = null;
+        const panelW = 140;
+        const panelH = 260;
+        const panelX = canvas.width - panelW - 15;
+        const panelY = 60;
+        const myGold = myPlayer?.gold || 0;
 
-        ctx.fillStyle = isHovered ? "rgba(255,68,68,0.4)" : "rgba(255,68,68,0.2)";
-        ctx.strokeStyle = "#f44";
-        ctx.lineWidth = 3;
-        ctx.shadowColor = "#f44";
-        ctx.shadowBlur = isHovered ? 20 : 10;
+        // Panel background
+        ctx.fillStyle = "rgba(10,10,25,0.9)";
+        ctx.strokeStyle = "rgba(255,68,68,0.6)";
+        ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(btnX, btnY, btnR, 0, Math.PI * 2);
+        ctx.roundRect(panelX, panelY, panelW, panelH, 10);
         ctx.fill();
         ctx.stroke();
-        ctx.shadowBlur = 0;
 
-        ctx.font = "bold 24px sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillStyle = "#fff";
-        ctx.fillText("⚔️", btnX, btnY);
-        ctx.font = "bold 10px 'Courier New', monospace";
+        // Header
+        ctx.font = "bold 11px 'Orbitron', monospace";
         ctx.fillStyle = "#f44";
-        ctx.fillText("ATTACK", btnX, btnY + 25);
+        ctx.textAlign = "center";
+        ctx.fillText("⚔️ ATTACKS", panelX + panelW / 2, panelY + 18);
+        
+        // Subtitle
+        ctx.font = "8px 'Courier New', monospace";
+        ctx.fillStyle = "#666";
+        ctx.fillText("Random Target", panelX + panelW / 2, panelY + 32);
+
+        // Divider
+        ctx.strokeStyle = "rgba(255,68,68,0.3)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(panelX + 10, panelY + 40);
+        ctx.lineTo(panelX + panelW - 10, panelY + 40);
+        ctx.stroke();
+
+        // Attack buttons
+        const attacks = Object.entries(ATTACK_TYPES);
+        const btnH = 38;
+        const btnGap = 4;
+        const startY = panelY + 48;
+
+        attacks.forEach(([key, atk], i) => {
+          const btnY = startY + i * (btnH + btnGap);
+          const btnX = panelX + 8;
+          const btnW = panelW - 16;
+          const canAfford = myGold >= atk.cost;
+          const isHovered = mouseX >= btnX && mouseX <= btnX + btnW && mouseY >= btnY && mouseY <= btnY + btnH;
+
+          if (isHovered && canAfford) hoveredAttack = key;
+
+          // Button background
+          ctx.fillStyle = isHovered && canAfford ? hexToRgba(atk.color, 0.35) : 
+                          canAfford ? hexToRgba(atk.color, 0.15) : "rgba(30,30,30,0.5)";
+          ctx.strokeStyle = isHovered && canAfford ? atk.color : 
+                            canAfford ? hexToRgba(atk.color, 0.5) : "#333";
+          ctx.lineWidth = isHovered && canAfford ? 2 : 1;
+          ctx.beginPath();
+          ctx.roundRect(btnX, btnY, btnW, btnH, 6);
+          ctx.fill();
+          ctx.stroke();
+
+          // Icon
+          ctx.font = "16px sans-serif";
+          ctx.textAlign = "left";
+          ctx.fillText(atk.icon, btnX + 6, btnY + 24);
+
+          // Name
+          ctx.font = "bold 10px 'Courier New', monospace";
+          ctx.fillStyle = canAfford ? atk.color : "#555";
+          ctx.fillText(atk.name.toUpperCase(), btnX + 28, btnY + 14);
+
+          // Description
+          ctx.font = "8px 'Courier New', monospace";
+          ctx.fillStyle = canAfford ? "rgba(255,255,255,0.5)" : "#444";
+          ctx.fillText(atk.desc, btnX + 28, btnY + 26);
+
+          // Cost
+          ctx.font = "bold 10px 'Courier New', monospace";
+          ctx.textAlign = "right";
+          ctx.fillStyle = canAfford ? "#fd0" : "#555";
+          ctx.fillText(atk.cost + "g", btnX + btnW - 6, btnY + 24);
+        });
+
+        // Footer hint
+        ctx.font = "7px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#555";
+        ctx.fillText("Spawns next wave", panelX + panelW / 2, panelY + panelH - 8);
+        ctx.textAlign = "left";
+      }
+
+      // Recent attack sent feedback
+      if (recentAttackSent && Date.now() - recentAttackSent.time < 2000) {
+        const age = (Date.now() - recentAttackSent.time) / 2000;
+        const alpha = 1 - age;
+        const atkDef = ATTACK_TYPES[recentAttackSent.type];
+        ctx.font = "bold 16px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.fillStyle = `rgba(255,200,100,${alpha})`;
+        const targetText = recentAttackSent.target ? ` → ${recentAttackSent.target.toUpperCase()}` : "";
+        ctx.fillText(`${atkDef?.icon || "?"} ${atkDef?.name || "?"} QUEUED!${targetText}`, canvas.width / 2, canvas.height - 40);
       }
 
       // Incoming attack warnings
@@ -1320,129 +1352,6 @@
             ctx.fillText(o.cost + " G", bx + bw - 8, by + 22);
           }
         }
-        ctx.textAlign = "left";
-      }
-
-      // Attack menu (PvP)
-      if (attackMenuOpen && lastSnap.players.length > 1) {
-        hoveredAttack = null;
-        hoveredTargetSlot = null;
-        const menuW = 320;
-        const menuH = 280;
-        const mx = canvas.width / 2 - menuW / 2;
-        const my = canvas.height / 2 - menuH / 2;
-        const myGold = myPlayer?.gold || 0;
-
-        ctx.fillStyle = "rgba(10,10,30,0.98)";
-        ctx.strokeStyle = "#f44";
-        ctx.lineWidth = 3;
-        ctx.shadowColor = "#f44";
-        ctx.shadowBlur = 20;
-        ctx.beginPath();
-        ctx.roundRect(mx, my, menuW, menuH, 12);
-        ctx.fill();
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-
-        ctx.font = "bold 16px 'Courier New', monospace";
-        ctx.fillStyle = "#f44";
-        ctx.textAlign = "center";
-        ctx.fillText("⚔️ SEND ATTACK", mx + menuW / 2, my + 25);
-
-        // Target selector
-        ctx.font = "bold 11px 'Courier New', monospace";
-        ctx.fillStyle = "#888";
-        ctx.fillText("SELECT TARGET:", mx + menuW / 2, my + 48);
-
-        const enemies = lastSnap.players.filter(p => p.id !== myId && p.hp > 0);
-        const targetY = my + 58;
-        const targetH = 28;
-        const targetW = (menuW - 30) / Math.max(1, enemies.length);
-
-        enemies.forEach((enemy, i) => {
-          const tx = mx + 15 + i * targetW;
-          const isSelected = selectedTarget === enemy.slot;
-          const isHovered = mouseX >= tx && mouseX <= tx + targetW - 5 && mouseY >= targetY && mouseY <= targetY + targetH;
-          
-          // Track hovered target for click detection
-          if (isHovered) hoveredTargetSlot = enemy.slot;
-
-          const enemyColor = PLAYER_COLORS[enemy.slot]?.main || "#fff";
-          ctx.fillStyle = isSelected ? hexToRgba(enemyColor, 0.5) : (isHovered ? hexToRgba(enemyColor, 0.3) : "rgba(0,0,0,0.3)");
-          ctx.strokeStyle = isSelected ? enemyColor : hexToRgba(enemyColor, 0.5);
-          ctx.lineWidth = isSelected ? 3 : 1;
-          ctx.beginPath();
-          ctx.roundRect(tx, targetY, targetW - 5, targetH, 4);
-          ctx.fill();
-          ctx.stroke();
-
-          ctx.font = "bold 10px 'Courier New', monospace";
-          ctx.textAlign = "center";
-          ctx.fillStyle = isSelected ? "#fff" : enemyColor;
-          ctx.fillText(enemy.name.toUpperCase(), tx + (targetW - 5) / 2, targetY + 12);
-          
-          // Show HP
-          ctx.font = "9px 'Courier New', monospace";
-          ctx.fillStyle = isSelected ? "#aaa" : "#666";
-          ctx.fillText(`${enemy.hp}/${enemy.maxHp} HP`, tx + (targetW - 5) / 2, targetY + 23);
-        });
-        
-        // Prompt to select target if none selected
-        if (selectedTarget === null) {
-          ctx.font = "bold 10px 'Courier New', monospace";
-          ctx.fillStyle = "#ff8";
-          ctx.textAlign = "center";
-          ctx.fillText("↑ Click a target above ↑", mx + menuW / 2, my + 92);
-        }
-
-        // Attack options
-        const attacks = Object.entries(ATTACK_TYPES);
-        const attackStartY = my + 100;
-        const attackH = 32;
-
-        attacks.forEach(([key, atk], i) => {
-          const ay = attackStartY + i * (attackH + 3);
-          const ax = mx + 15;
-          const aw = menuW - 30;
-          const canAfford = myGold >= atk.cost;
-          const hasTarget = selectedTarget !== null;
-          const isEnabled = canAfford && hasTarget;
-          const isHovered = mouseX >= ax && mouseX <= ax + aw && mouseY >= ay && mouseY <= ay + attackH;
-
-          if (isHovered && isEnabled) hoveredAttack = key;
-
-          ctx.fillStyle = isHovered && isEnabled ? hexToRgba(atk.color, 0.3) : "rgba(0,0,0,0.4)";
-          if (!canAfford) ctx.fillStyle = "rgba(30,0,0,0.3)";
-          if (!hasTarget) ctx.fillStyle = "rgba(20,20,20,0.3)";
-          ctx.strokeStyle = isHovered && isEnabled ? atk.color : hexToRgba(atk.color, hasTarget ? 0.4 : 0.15);
-          if (!canAfford) ctx.strokeStyle = "#400";
-          ctx.lineWidth = isHovered && isEnabled ? 2 : 1;
-          ctx.beginPath();
-          ctx.roundRect(ax, ay, aw, attackH, 6);
-          ctx.fill();
-          ctx.stroke();
-
-          ctx.font = "18px sans-serif";
-          ctx.textAlign = "left";
-          ctx.globalAlpha = hasTarget ? 1 : 0.4;
-          ctx.fillText(atk.icon, ax + 10, ay + 22);
-          ctx.font = "bold 11px 'Courier New', monospace";
-          ctx.fillStyle = isEnabled ? atk.color : "#555";
-          ctx.fillText(atk.name.toUpperCase(), ax + 40, ay + 14);
-          ctx.font = "9px 'Courier New', monospace";
-          ctx.fillStyle = isEnabled ? "rgba(255,255,255,0.6)" : "#444";
-          ctx.fillText(atk.desc, ax + 40, ay + 25);
-          ctx.font = "bold 11px 'Courier New', monospace";
-          ctx.textAlign = "right";
-          ctx.fillStyle = canAfford ? "#fd0" : "#555";
-          ctx.fillText(atk.cost + " G", ax + aw - 10, ay + 20);
-          ctx.globalAlpha = 1;
-        });
-
-        ctx.font = "9px 'Courier New', monospace";
-        ctx.textAlign = "center";
-        ctx.fillStyle = "#666";
-        ctx.fillText("Attacks spawn next wave", mx + menuW / 2, my + menuH - 10);
         ctx.textAlign = "left";
       }
 
