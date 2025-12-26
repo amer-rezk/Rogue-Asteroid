@@ -102,6 +102,7 @@
   // PvP Attack Menu
   let attackMenuOpen = false;
   let hoveredAttack = null;
+  let hoveredTargetSlot = null;
   let selectedTarget = null;
   let incomingAttacks = [];
 
@@ -375,18 +376,39 @@
       return;
     }
 
-    // Handle attack menu clicks
+    // Handle attack menu clicks - check bounds to prevent click-through
     if (attackMenuOpen) {
-      if (hoveredAttack && selectedTarget !== null) {
-        send({ t: "buyAttack", attackType: hoveredAttack, targetSlot: selectedTarget });
+      const menuW = 320;
+      const menuH = 280;
+      const mx = canvas.width / 2 - menuW / 2;
+      const my = canvas.height / 2 - menuH / 2;
+      
+      // Check if click is inside menu bounds
+      const insideMenu = mouseX >= mx && mouseX <= mx + menuW && mouseY >= my && mouseY <= my + menuH;
+      
+      if (insideMenu) {
+        // Check if clicking on a target
+        if (hoveredTargetSlot !== null) {
+          selectedTarget = hoveredTargetSlot;
+          return; // Stay in menu, target selected
+        }
+        
+        // Check if clicking on an attack with valid target
+        if (hoveredAttack && selectedTarget !== null) {
+          send({ t: "buyAttack", attackType: hoveredAttack, targetSlot: selectedTarget });
+          attackMenuOpen = false;
+          hoveredAttack = null;
+          selectedTarget = null;
+          return;
+        }
+        
+        // Clicked inside menu but not on actionable item - do nothing
+        return;
+      } else {
+        // Clicked outside menu - close it
         attackMenuOpen = false;
         hoveredAttack = null;
         selectedTarget = null;
-        return;
-      }
-      // Click outside closes menu
-      if (!hoveredAttack) {
-        attackMenuOpen = false;
         return;
       }
     }
@@ -420,6 +442,12 @@
       const attackBtnY = canvas.height - 70;
       if (Math.hypot(mouseX - attackBtnX, mouseY - attackBtnY) < 35) {
         attackMenuOpen = !attackMenuOpen;
+        // Reset selection state when toggling menu
+        if (attackMenuOpen) {
+          selectedTarget = null;
+          hoveredAttack = null;
+          hoveredTargetSlot = null;
+        }
         return;
       }
 
@@ -699,18 +727,39 @@
         ctx.stroke();
       }
 
-      // Segment dividers
+      // Segment dividers - solid walls between players
       const segCount = Math.round(world.width / world.segmentWidth);
       for (let i = 1; i < segCount; i++) {
         const x = i * world.segmentWidth * sx;
-        ctx.strokeStyle = "rgba(160,0,255,0.3)";
-        ctx.lineWidth = 2;
-        ctx.setLineDash([10, 10]);
+        
+        // Wall glow effect
+        const gradient = ctx.createLinearGradient(x - 15, 0, x + 15, 0);
+        gradient.addColorStop(0, "rgba(160,0,255,0)");
+        gradient.addColorStop(0.5, "rgba(160,0,255,0.15)");
+        gradient.addColorStop(1, "rgba(160,0,255,0)");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(x - 15, 0, 30, world.height * sy);
+        
+        // Main wall line
+        ctx.strokeStyle = "rgba(160,0,255,0.8)";
+        ctx.lineWidth = 3;
+        ctx.shadowColor = "#a000ff";
+        ctx.shadowBlur = 15;
         ctx.beginPath();
         ctx.moveTo(x, 0);
         ctx.lineTo(x, world.height * sy);
         ctx.stroke();
-        ctx.setLineDash([]);
+        ctx.shadowBlur = 0;
+        
+        // Energy pulse effect
+        const pulseY = ((time * 100) % (world.height * sy));
+        ctx.fillStyle = "rgba(200,100,255,0.6)";
+        ctx.beginPath();
+        ctx.arc(x, pulseY, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(x, world.height * sy - pulseY, 4, 0, Math.PI * 2);
+        ctx.fill();
       }
 
       // Ground line
@@ -1277,6 +1326,7 @@
       // Attack menu (PvP)
       if (attackMenuOpen && lastSnap.players.length > 1) {
         hoveredAttack = null;
+        hoveredTargetSlot = null;
         const menuW = 320;
         const menuH = 280;
         const mx = canvas.width / 2 - menuW / 2;
@@ -1314,12 +1364,13 @@
           const isSelected = selectedTarget === enemy.slot;
           const isHovered = mouseX >= tx && mouseX <= tx + targetW - 5 && mouseY >= targetY && mouseY <= targetY + targetH;
           
-          if (isHovered && !selectedTarget) selectedTarget = enemy.slot;
+          // Track hovered target for click detection
+          if (isHovered) hoveredTargetSlot = enemy.slot;
 
           const enemyColor = PLAYER_COLORS[enemy.slot]?.main || "#fff";
-          ctx.fillStyle = isSelected ? hexToRgba(enemyColor, 0.4) : (isHovered ? hexToRgba(enemyColor, 0.2) : "rgba(0,0,0,0.3)");
+          ctx.fillStyle = isSelected ? hexToRgba(enemyColor, 0.5) : (isHovered ? hexToRgba(enemyColor, 0.3) : "rgba(0,0,0,0.3)");
           ctx.strokeStyle = isSelected ? enemyColor : hexToRgba(enemyColor, 0.5);
-          ctx.lineWidth = isSelected ? 2 : 1;
+          ctx.lineWidth = isSelected ? 3 : 1;
           ctx.beginPath();
           ctx.roundRect(tx, targetY, targetW - 5, targetH, 4);
           ctx.fill();
@@ -1328,46 +1379,64 @@
           ctx.font = "bold 10px 'Courier New', monospace";
           ctx.textAlign = "center";
           ctx.fillStyle = isSelected ? "#fff" : enemyColor;
-          ctx.fillText(enemy.name.toUpperCase(), tx + (targetW - 5) / 2, targetY + 18);
+          ctx.fillText(enemy.name.toUpperCase(), tx + (targetW - 5) / 2, targetY + 12);
+          
+          // Show HP
+          ctx.font = "9px 'Courier New', monospace";
+          ctx.fillStyle = isSelected ? "#aaa" : "#666";
+          ctx.fillText(`${enemy.hp}/${enemy.maxHp} HP`, tx + (targetW - 5) / 2, targetY + 23);
         });
+        
+        // Prompt to select target if none selected
+        if (selectedTarget === null) {
+          ctx.font = "bold 10px 'Courier New', monospace";
+          ctx.fillStyle = "#ff8";
+          ctx.textAlign = "center";
+          ctx.fillText("↑ Click a target above ↑", mx + menuW / 2, my + 92);
+        }
 
         // Attack options
         const attacks = Object.entries(ATTACK_TYPES);
-        const attackStartY = my + 95;
-        const attackH = 34;
+        const attackStartY = my + 100;
+        const attackH = 32;
 
         attacks.forEach(([key, atk], i) => {
-          const ay = attackStartY + i * (attackH + 4);
+          const ay = attackStartY + i * (attackH + 3);
           const ax = mx + 15;
           const aw = menuW - 30;
           const canAfford = myGold >= atk.cost;
+          const hasTarget = selectedTarget !== null;
+          const isEnabled = canAfford && hasTarget;
           const isHovered = mouseX >= ax && mouseX <= ax + aw && mouseY >= ay && mouseY <= ay + attackH;
 
-          if (isHovered && canAfford && selectedTarget !== null) hoveredAttack = key;
+          if (isHovered && isEnabled) hoveredAttack = key;
 
-          ctx.fillStyle = isHovered && canAfford ? hexToRgba(atk.color, 0.3) : "rgba(0,0,0,0.4)";
+          ctx.fillStyle = isHovered && isEnabled ? hexToRgba(atk.color, 0.3) : "rgba(0,0,0,0.4)";
           if (!canAfford) ctx.fillStyle = "rgba(30,0,0,0.3)";
-          ctx.strokeStyle = isHovered && canAfford ? atk.color : hexToRgba(atk.color, 0.4);
+          if (!hasTarget) ctx.fillStyle = "rgba(20,20,20,0.3)";
+          ctx.strokeStyle = isHovered && isEnabled ? atk.color : hexToRgba(atk.color, hasTarget ? 0.4 : 0.15);
           if (!canAfford) ctx.strokeStyle = "#400";
-          ctx.lineWidth = isHovered && canAfford ? 2 : 1;
+          ctx.lineWidth = isHovered && isEnabled ? 2 : 1;
           ctx.beginPath();
           ctx.roundRect(ax, ay, aw, attackH, 6);
           ctx.fill();
           ctx.stroke();
 
-          ctx.font = "20px sans-serif";
+          ctx.font = "18px sans-serif";
           ctx.textAlign = "left";
-          ctx.fillText(atk.icon, ax + 10, ay + 24);
-          ctx.font = "bold 12px 'Courier New', monospace";
-          ctx.fillStyle = canAfford ? atk.color : "#555";
-          ctx.fillText(atk.name.toUpperCase(), ax + 45, ay + 15);
+          ctx.globalAlpha = hasTarget ? 1 : 0.4;
+          ctx.fillText(atk.icon, ax + 10, ay + 22);
+          ctx.font = "bold 11px 'Courier New', monospace";
+          ctx.fillStyle = isEnabled ? atk.color : "#555";
+          ctx.fillText(atk.name.toUpperCase(), ax + 40, ay + 14);
           ctx.font = "9px 'Courier New', monospace";
-          ctx.fillStyle = canAfford ? "rgba(255,255,255,0.6)" : "#444";
-          ctx.fillText(atk.desc, ax + 45, ay + 27);
-          ctx.font = "bold 12px 'Courier New', monospace";
+          ctx.fillStyle = isEnabled ? "rgba(255,255,255,0.6)" : "#444";
+          ctx.fillText(atk.desc, ax + 40, ay + 25);
+          ctx.font = "bold 11px 'Courier New', monospace";
           ctx.textAlign = "right";
           ctx.fillStyle = canAfford ? "#fd0" : "#555";
-          ctx.fillText(atk.cost + " G", ax + aw - 10, ay + 22);
+          ctx.fillText(atk.cost + " G", ax + aw - 10, ay + 20);
+          ctx.globalAlpha = 1;
         });
 
         ctx.font = "9px 'Courier New', monospace";
