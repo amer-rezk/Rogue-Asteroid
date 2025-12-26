@@ -20,7 +20,7 @@ const BASE_HP_PER_PLAYER = 8; // Increased for PvP
 const BULLET_R = 2.5;
 const BULLET_SPEED = 175; // Slowed to 25% of original (was 700)
 const BULLET_COOLDOWN = 0.72;
-const BULLET_DAMAGE = 1;
+const BULLET_DAMAGE = 0.5; // Halved starting damage
 const BULLET_LIFESPAN = 6.0; // Increased for slower homing bullets
 
 const ASTEROID_R_MIN = 8;
@@ -845,9 +845,12 @@ function tick() {
             if (owner) {
               owner.score = (owner.score || 0) + 50;
               owner.kills = (owner.kills || 0) + 1;
-              const goldMult = owner.upgrades?.goldMult ?? 1;
-              const goldReward = m.type === "large" ? 4 : m.type === "medium" ? 2 : 1;
-              owner.gold = (owner.gold || 0) + Math.round(goldReward * goldMult);
+              // Only natural asteroids give gold, not player-spawned attacks
+              if (!m.attackType) {
+                const goldMult = owner.upgrades?.goldMult ?? 1;
+                const goldReward = m.type === "large" ? 4 : m.type === "medium" ? 2 : 1;
+                owner.gold = (owner.gold || 0) + Math.round(goldReward * goldMult);
+              }
             }
             
             // Handle splitter
