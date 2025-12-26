@@ -68,8 +68,9 @@
   const launchBtn = document.getElementById("launchBtn");
   const statusLED = document.getElementById("statusLED");
   const statusText = document.getElementById("statusText");
-  const leaderboardSection = document.getElementById("leaderboardSection");
+  const leaderboardPanel = document.getElementById("leaderboardPanel");
   const leaderboardList = document.getElementById("leaderboardList");
+  const clearLeaderboardBtn = document.getElementById("clearLeaderboardBtn");
 
   // ===== State =====
   let ws = null;
@@ -360,8 +361,13 @@
     launchBtn.className = "btn launch" + (allReady ? "" : " disabled");
     
     // Update leaderboard
+    updateLeaderboardUI();
+  }
+  
+  function updateLeaderboardUI() {
+    if (!leaderboardList) return;
+    
     if (leaderboard && leaderboard.length > 0) {
-      leaderboardSection.style.display = "block";
       leaderboardList.innerHTML = "";
       for (let i = 0; i < leaderboard.length; i++) {
         const entry = leaderboard[i];
@@ -371,15 +377,26 @@
         div.innerHTML = `
           <div class="leaderboard-rank">#${i + 1}</div>
           <div class="leaderboard-name">${entry.name}</div>
-          <div class="leaderboard-score">${entry.score}</div>
+          <div class="leaderboard-score">${Math.round(entry.score)}</div>
           <div class="leaderboard-wave">W${entry.wave}</div>
         `;
         leaderboardList.appendChild(div);
       }
     } else {
-      leaderboardSection.style.display = "block";
       leaderboardList.innerHTML = '<div class="leaderboard-empty">No scores yet - be the first!</div>';
     }
+  }
+  
+  // Clear leaderboard button with password
+  if (clearLeaderboardBtn) {
+    clearLeaderboardBtn.addEventListener("click", () => {
+      const password = prompt("Enter password to clear leaderboard:");
+      if (password === "1122") {
+        send({ t: "clearLeaderboard", password: password });
+      } else if (password !== null) {
+        alert("Incorrect password!");
+      }
+    });
   }
 
   // ===== Canvas =====
@@ -447,6 +464,7 @@
 
     if (phase === "playing" && lastSnap) {
       const { sx, sy, offsetX, offsetY } = getScale();
+      const me = lastSnap.players.find(p => p.id === myId);
 
       if (me && me.towers) {
         const segX0 = me.slot * world.segmentWidth;
@@ -457,7 +475,7 @@
         for (let i = 0; i < 4; i++) {
           const tx = cx + offsets[i] * sx;
           const clickRadius = me.towers[i] ? 25 * sx : 20 * sx;
-          if (Math.hypot(mouseX - tx, mouseY - (cy - 15 * sy)) < clickRadius) {
+          if (Math.hypot(mouseX - tx, mouseY - (cy - 18 * sy)) < clickRadius) {
             buildMenuOpen = {
               slotIndex: i,
               x: tx,
