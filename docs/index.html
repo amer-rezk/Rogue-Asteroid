@@ -11,49 +11,54 @@
 <body>
   <!-- Menu Screen -->
   <div id="menuScreen">
-    <div class="menu-container">
-      <h1 class="title">☄️ ROGUE ASTEROID</h1>
-      <p class="subtitle">COMPETITIVE ASTEROID WARFARE</p>
-      <p class="pvp-badge">⚔️ PvP MODE ⚔️</p>
+    <div class="menu-layout">
+      <div class="menu-container">
+        <h1 class="title">☄️ ROGUE ASTEROID</h1>
+        <p class="subtitle">COMPETITIVE ASTEROID WARFARE</p>
+        <p class="pvp-badge">⚔️ PvP MODE ⚔️</p>
 
-      <div class="section">
-        <label>SERVER</label>
-        <div class="input-row">
-          <input type="text" id="serverUrl" placeholder="wss://server-address/ws">
-          <button id="connectBtn" class="btn">CONNECT</button>
+        <div class="section">
+          <label>SERVER</label>
+          <div class="input-row">
+            <input type="text" id="serverUrl" placeholder="wss://server-address/ws">
+            <button id="connectBtn" class="btn">CONNECT</button>
+          </div>
+          <div id="status" class="status">NOT CONNECTED</div>
         </div>
-        <div id="status" class="status">NOT CONNECTED</div>
-      </div>
 
-      <div class="section">
-        <label>CALLSIGN</label>
-        <input type="text" id="nameInput" maxlength="16" placeholder="Enter your name">
-      </div>
+        <div class="section">
+          <label>CALLSIGN</label>
+          <input type="text" id="nameInput" maxlength="16" placeholder="Enter your name">
+        </div>
 
-      <div id="lobby" class="section" style="display:none;">
-        <label>COMBATANTS</label>
-        <div id="players" class="players"></div>
-        <div class="button-row">
-          <button id="readyBtn" class="btn">READY UP</button>
-          <button id="launchBtn" class="btn launch" style="display:none;">▶ BATTLE</button>
+        <div id="lobby" class="section" style="display:none;">
+          <label>COMBATANTS</label>
+          <div id="players" class="players"></div>
+          <div class="button-row">
+            <button id="readyBtn" class="btn">READY UP</button>
+            <button id="launchBtn" class="btn launch" style="display:none;">▶ BATTLE</button>
+          </div>
+        </div>
+
+        <div class="controls-info">
+          <div class="control"><span class="key">AUTO</span> Turrets auto-target</div>
+          <div class="control"><span class="key">CLICK</span> Manual aim</div>
+          <div class="control"><span class="key">⚔️</span> Send attacks!</div>
+          <div class="control"><span class="key">💰</span> Buy towers & attacks</div>
+        </div>
+
+        <div class="pvp-info">
+          <h3>⚔️ PvP Mode</h3>
+          <p>Destroy asteroids to earn gold. Buy towers for defense or send attack asteroids at your opponents! Last player standing wins.</p>
         </div>
       </div>
 
-      <div id="leaderboardSection" class="section" style="display:none;">
-        <label>🏆 HIGH SCORES</label>
+      <div id="leaderboardPanel" class="leaderboard-panel">
+        <div class="leaderboard-header">
+          <h2>🏆 HIGH SCORES</h2>
+          <button id="clearLeaderboardBtn" class="btn-small">CLEAR</button>
+        </div>
         <div id="leaderboardList" class="leaderboard"></div>
-      </div>
-
-      <div class="controls-info">
-        <div class="control"><span class="key">AUTO</span> Turrets auto-target</div>
-        <div class="control"><span class="key">CLICK</span> Manual aim</div>
-        <div class="control"><span class="key">⚔️</span> Send attacks!</div>
-        <div class="control"><span class="key">💰</span> Buy towers & attacks</div>
-      </div>
-
-      <div class="pvp-info">
-        <h3>⚔️ PvP Mode</h3>
-        <p>Destroy asteroids to earn gold. Buy towers for defense or send attack asteroids at your opponents! Last player standing wins.</p>
       </div>
     </div>
   </div>
