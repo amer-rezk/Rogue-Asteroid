@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>ROGUE ASTEROID</title>
+  <title>ROGUE ASTEROID PvP</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>☄️</text></svg>">
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
@@ -13,7 +13,8 @@
   <div id="menuScreen">
     <div class="menu-container">
       <h1 class="title">☄️ ROGUE ASTEROID</h1>
-      <p class="subtitle">COOPERATIVE ASTEROID DEFENSE</p>
+      <p class="subtitle">COMPETITIVE ASTEROID WARFARE</p>
+      <p class="pvp-badge">⚔️ PvP MODE ⚔️</p>
 
       <div class="section">
         <label>SERVER</label>
@@ -30,18 +31,24 @@
       </div>
 
       <div id="lobby" class="section" style="display:none;">
-        <label>CREW</label>
+        <label>COMBATANTS</label>
         <div id="players" class="players"></div>
         <div class="button-row">
           <button id="readyBtn" class="btn">READY UP</button>
-          <button id="launchBtn" class="btn launch" style="display:none;">▶ LAUNCH</button>
+          <button id="launchBtn" class="btn launch" style="display:none;">▶ BATTLE</button>
         </div>
       </div>
 
       <div class="controls-info">
-        <div class="control"><span class="key">AUTO</span> Turrets auto-target threats</div>
-        <div class="control"><span class="key">CLICK</span> Manual aim override</div>
-        <div class="control"><span class="key">160°</span> Wide firing arc</div>
+        <div class="control"><span class="key">AUTO</span> Turrets auto-target</div>
+        <div class="control"><span class="key">CLICK</span> Manual aim</div>
+        <div class="control"><span class="key">⚔️</span> Send attacks!</div>
+        <div class="control"><span class="key">💰</span> Buy towers & attacks</div>
+      </div>
+
+      <div class="pvp-info">
+        <h3>⚔️ PvP Mode</h3>
+        <p>Destroy asteroids to earn gold. Buy towers for defense or send attack asteroids at your opponents! Last player standing wins.</p>
       </div>
     </div>
   </div>
