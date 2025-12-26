@@ -780,16 +780,16 @@ function tick() {
 
     // Bullet collision
     for (const b of bullets) {
-      // All bullets now have perfect homing - but only target asteroids in owner's segment
+      // All bullets now have perfect homing
       if (b.magnet) {
         let nearest = null;
         let nearestDist = 400; // Detection range
-        const { x0: ownerX0, x1: ownerX1 } = segmentBounds(b.ownerSlot);
         
         for (const m of missiles) {
           if (m.dead || m.isPhased) continue;
-          // Only home toward asteroids targeting the bullet owner's segment
-          if (m.targetSlot !== b.ownerSlot) continue;
+          // Player-spawned attacks can only be targeted by the player being attacked
+          // Natural asteroids (no attackType) can be targeted by anyone
+          if (m.attackType && m.targetSlot !== b.ownerSlot) continue;
           
           const d = Math.hypot(m.x - b.x, m.y - b.y);
           if (d < nearestDist) {
@@ -830,8 +830,9 @@ function tick() {
       if (b.dead) continue;
       for (const m of missiles) {
         if (m.dead) continue;
-        // Bullets can only damage asteroids targeting their owner's segment
-        if (m.targetSlot !== b.ownerSlot) continue;
+        // Player-spawned attacks can only be damaged by the player being attacked
+        // Natural asteroids (no attackType) can be damaged by anyone
+        if (m.attackType && m.targetSlot !== b.ownerSlot) continue;
         if (m.isPhased && Math.random() > 0.3) continue; // Phased asteroids have 70% evasion
         if (b.hitList && b.hitList.includes(m.id)) continue;
         const dx = m.x - b.x;
