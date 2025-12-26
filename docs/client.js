@@ -68,6 +68,8 @@
   const launchBtn = document.getElementById("launchBtn");
   const statusLED = document.getElementById("statusLED");
   const statusText = document.getElementById("statusText");
+  const leaderboardSection = document.getElementById("leaderboardSection");
+  const leaderboardList = document.getElementById("leaderboardList");
 
   // ===== State =====
   let ws = null;
@@ -82,6 +84,7 @@
 
   let lobbyPlayers = [];
   let allReady = false;
+  let leaderboard = [];
   let lastSnap = null;
   let upgradeOptions = [];
   let upgradePicked = false;
@@ -232,6 +235,7 @@
       case "lobby":
         lobbyPlayers = msg.players;
         allReady = msg.allReady;
+        leaderboard = msg.leaderboard || [];
         isHost = msg.hostId === myId;
         if (phase === "playing" || phase === "upgrades" || phase === "gameover") {
           lastSnap = null;
@@ -354,6 +358,28 @@
     launchBtn.style.display = me?.ready ? "block" : "none";
     launchBtn.disabled = !allReady;
     launchBtn.className = "btn launch" + (allReady ? "" : " disabled");
+    
+    // Update leaderboard
+    if (leaderboard && leaderboard.length > 0) {
+      leaderboardSection.style.display = "block";
+      leaderboardList.innerHTML = "";
+      for (let i = 0; i < leaderboard.length; i++) {
+        const entry = leaderboard[i];
+        const div = document.createElement("div");
+        const rankClass = i === 0 ? "gold" : i === 1 ? "silver" : i === 2 ? "bronze" : "";
+        div.className = "leaderboard-entry " + rankClass;
+        div.innerHTML = `
+          <div class="leaderboard-rank">#${i + 1}</div>
+          <div class="leaderboard-name">${entry.name}</div>
+          <div class="leaderboard-score">${entry.score}</div>
+          <div class="leaderboard-wave">W${entry.wave}</div>
+        `;
+        leaderboardList.appendChild(div);
+      }
+    } else {
+      leaderboardSection.style.display = "block";
+      leaderboardList.innerHTML = '<div class="leaderboard-empty">No scores yet - be the first!</div>';
+    }
   }
 
   // ===== Canvas =====
@@ -373,11 +399,11 @@
   canvas.addEventListener("touchend", (e) => { e.preventDefault(); mouseDown = false; });
 
   function handleClick() {
-    // Handle game over return to menu button
+    // Handle game over return to menu button - refresh page
     if (phase === "gameover" && gameOverData && gameOverData.menuBtnBounds) {
       const btn = gameOverData.menuBtnBounds;
       if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) {
-        send({ t: "returnToLobby" });
+        window.location.reload();
         return;
       }
     }
