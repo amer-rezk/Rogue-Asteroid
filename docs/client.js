@@ -122,501 +122,29 @@
   let screenShake = 0;
   let time = 0;
 
-  // ===== SOLO MODE LOCAL STATE =====
-  let soloState = null; // Holds all local game state when playing solo
+  // ===== SOLO MODE =====
+  // Solo mode uses LocalServer (from local-server.js) which runs the exact same
+  // game logic as the real server, just locally in the browser.
   
-  const SOLO_CONFIG = {
-    WORLD_W: 360,
-    WORLD_H: 600,
-    STARTING_GOLD: 50,
-    STARTING_HP: 10,
-    WAVE_BASE_COUNT: 8,
-    WAVE_COUNT_SCALE: 2,
-    ASTEROID_SPEED: 40,
-    BULLET_SPEED: 400,
-    BASE_DAMAGE: 1,
-    BASE_FIRE_RATE: 0.25,
-    GOLD_PER_KILL: 5,
-    UPGRADE_TIMEOUT: 15,
-  };
-  
-  const SOLO_UPGRADE_DEFS = [
-    { id: "dmg", name: "Power Core", icon: "⚡", desc: "+{val}% Damage", stat: "damage", base: 0.15 },
-    { id: "speed", name: "Rapid Fire", icon: "🔥", desc: "+{val}% Fire Rate", stat: "fireRate", base: 0.12 },
-    { id: "multi", name: "Multishot", icon: "⚔️", desc: "+1 Bullet", stat: "multishot", base: 1, type: "add" },
-    { id: "crit", name: "Crit Scope", icon: "🎯", desc: "+{val}% Crit", stat: "critChance", base: 0.08 },
-    { id: "pierce", name: "Railgun", icon: "📌", desc: "+1 Pierce", stat: "pierce", base: 1, type: "add" },
-    { id: "life", name: "Stabilizer", icon: "⏱️", desc: "+{val}s Bullet Life", stat: "lifespan", base: 0.5, type: "add" },
-    { id: "explosive", name: "Explosive", icon: "💣", desc: "+1 Explosion", stat: "explosive", base: 1, type: "add" },
-    { id: "shield", name: "Shield Gen", icon: "🛡️", desc: "+1 Shield/Wave", stat: "shield", base: 1, type: "add" },
-    { id: "income", name: "War Profiteer", icon: "💰", desc: "+{val}% Gold", stat: "goldMult", base: 0.15 },
-  ];
-
   function initSoloGame() {
     isSolo = true;
-    myId = "solo"; // Set myId for rendering
-    phase = "playing";
-    wave = 1;
-    world = { width: SOLO_CONFIG.WORLD_W, height: SOLO_CONFIG.WORLD_H, segmentWidth: SOLO_CONFIG.WORLD_W };
+    myId = "solo";
+    mySlot = 0;
     
-    soloState = {
-      player: {
-        id: "solo",
-        slot: 0,
-        name: nameInput.value.trim() || "Player",
-        gold: SOLO_CONFIG.STARTING_GOLD,
-        hp: SOLO_CONFIG.STARTING_HP,
-        maxHp: SOLO_CONFIG.STARTING_HP,
-        score: 0,
-        kills: 0,
-        damageDealt: 0,
-        waveDamage: 0,
-        turretAngle: -Math.PI / 2,
-        cooldown: 0,
-        towers: [null, null, null, null],
-        upgrades: {
-          damage: 1,
-          fireRate: 1,
-          multishot: 1,
-          critChance: 0,
-          pierce: 0,
-          lifespan: 1.5,
-          explosive: 0,
-          shield: 0,
-          shieldActive: 0,
-          goldMult: 1,
-        },
-      },
-      missiles: [],
-      bullets: [],
-      particles: [],
-      damageNumbers: [],
-      lastTime: performance.now(),
-      upgradeOptions: [],
-      rerollCount: 0,
-    };
-    
-    soloSpawnWave();
-    showGame();
-    requestAnimationFrame(soloGameLoop);
+    // Start the local server - it will send messages via handleMessage
+    LocalServer.init(nameInput.value.trim() || "Player", handleMessage);
   }
-
-  function soloSpawnWave() {
-    soloState.missiles = [];
-    soloState.bullets = [];
-    soloState.player.waveDamage = 0;
-    soloState.player.upgrades.shieldActive = soloState.player.upgrades.shield || 0;
-    
-    const count = SOLO_CONFIG.WAVE_BASE_COUNT + Math.floor(wave * SOLO_CONFIG.WAVE_COUNT_SCALE);
-    const waveHpScale = wave * 0.8;
-    
-    for (let i = 0; i < count; i++) {
-      const largeChance = Math.min(0.15 + wave * 0.015, 0.30);
-      const mediumChance = 0.35;
-      const roll = Math.random();
-      
-      let type, r;
-      if (roll < largeChance) {
-        type = "large"; r = 15 + Math.random() * 5;
-      } else if (roll < largeChance + mediumChance) {
-        type = "medium"; r = 11 + Math.random() * 3;
-      } else {
-        type = "small"; r = 6 + Math.random() * 4;
-      }
-      
-      const baseHp = type === "large" ? 3 : type === "medium" ? 1.5 : 0.75;
-      const hp = Math.ceil(baseHp + waveHpScale);
-      
-      // Stagger spawn times
-      const spawnDelay = i * 0.3 + Math.random() * 0.2;
-      
-      soloState.missiles.push({
-        id: Math.random().toString(36).substr(2, 9),
-        x: 20 + Math.random() * (SOLO_CONFIG.WORLD_W - 40),
-        y: -r - 50 - spawnDelay * SOLO_CONFIG.ASTEROID_SPEED,
-        vx: (Math.random() - 0.5) * 20,
-        vy: SOLO_CONFIG.ASTEROID_SPEED * (1 + wave * 0.02),
-        r: r,
-        hp: hp,
-        maxHp: hp,
-        type: type,
-        dead: false,
-      });
+  
+  function stopSoloGame() {
+    if (isSolo && LocalServer.tickInterval) {
+      LocalServer.stop();
     }
-  }
-
-  function soloFireBullet() {
-    const p = soloState.player;
-    const ups = p.upgrades;
-    const bulletCount = ups.multishot || 1;
-    const spreadAngle = bulletCount > 1 ? 0.15 : 0;
-    
-    for (let i = 0; i < bulletCount; i++) {
-      const angleOffset = bulletCount > 1 ? (i - (bulletCount - 1) / 2) * spreadAngle : 0;
-      const angle = p.turretAngle + angleOffset;
-      
-      const isCrit = Math.random() < (ups.critChance || 0);
-      const dmg = SOLO_CONFIG.BASE_DAMAGE * (ups.damage || 1) * (isCrit ? 2 : 1);
-      
-      soloState.bullets.push({
-        id: Math.random().toString(36).substr(2, 9),
-        x: SOLO_CONFIG.WORLD_W / 2,
-        y: SOLO_CONFIG.WORLD_H - 30,
-        vx: Math.cos(angle) * SOLO_CONFIG.BULLET_SPEED,
-        vy: Math.sin(angle) * SOLO_CONFIG.BULLET_SPEED,
-        r: 4,
-        dmg: dmg,
-        lifespan: ups.lifespan || 1.5,
-        pierce: ups.pierce || 0,
-        explosive: ups.explosive || 0,
-        isCrit: isCrit,
-        hitList: [],
-        dead: false,
-      });
-    }
-  }
-
-  function soloGameLoop(timestamp) {
-    if (!isSolo || phase === "menu" || phase === "lobby") return;
-    
-    const dt = Math.min((timestamp - soloState.lastTime) / 1000, 0.05);
-    soloState.lastTime = timestamp;
-    
-    if (phase === "playing") {
-      soloUpdateGame(dt);
-    } else if (phase === "upgrades" && !upgradePicked) {
-      // Check upgrade timeout
-      if (Date.now() > upgradeDeadline) {
-        // Auto-pick first upgrade
-        soloPickUpgrade(0);
-      }
-    }
-    
-    // Create lastSnap for rendering compatibility
-    lastSnap = {
-      players: [soloState.player],
-      missiles: soloState.missiles.filter(m => !m.dead && m.y > -m.r),
-      bullets: soloState.bullets.filter(b => !b.dead),
-      particles: soloState.particles,
-      damageNumbers: soloState.damageNumbers,
-      wave: wave,
-      phase: phase,
-    };
-    
-    requestAnimationFrame(soloGameLoop);
-  }
-
-  function soloUpdateGame(dt) {
-    const p = soloState.player;
-    const ups = p.upgrades;
-    
-    // Turret aiming
-    const scale = getScale();
-    const worldX = (mouseX - scale.offsetX) / scale.sx;
-    const worldY = (mouseY - scale.offsetY) / scale.sy;
-    const turretX = SOLO_CONFIG.WORLD_W / 2;
-    const turretY = SOLO_CONFIG.WORLD_H - 30;
-    p.turretAngle = Math.atan2(worldY - turretY, worldX - turretX);
-    
-    // Firing
-    p.cooldown -= dt;
-    if (p.cooldown <= 0) {
-      const fireRate = SOLO_CONFIG.BASE_FIRE_RATE / (ups.fireRate || 1);
-      p.cooldown = fireRate;
-      soloFireBullet();
-    }
-    
-    // Tower firing
-    for (let i = 0; i < p.towers.length; i++) {
-      const tower = p.towers[i];
-      if (!tower) continue;
-      tower.cd = (tower.cd || 0) - dt;
-      if (tower.cd <= 0) {
-        const towerX = 60 + i * 80;
-        const towerY = SOLO_CONFIG.WORLD_H - 60;
-        const target = soloState.missiles.find(m => !m.dead && m.y > 0);
-        if (target) {
-          const angle = Math.atan2(target.y - towerY, target.x - towerX);
-          const towerDmg = tower.type === 0 ? 0.5 : tower.type === 1 ? 2 : 3;
-          const towerSpeed = tower.type === 0 ? 500 : tower.type === 1 ? 600 : 300;
-          soloState.bullets.push({
-            id: Math.random().toString(36).substr(2, 9),
-            x: towerX, y: towerY,
-            vx: Math.cos(angle) * towerSpeed,
-            vy: Math.sin(angle) * towerSpeed,
-            r: 3, dmg: towerDmg * tower.level,
-            lifespan: 2, pierce: 0, explosive: tower.type === 2 ? 1 : 0,
-            isCrit: false, hitList: [], dead: false,
-          });
-          tower.cd = tower.type === 0 ? 0.15 : tower.type === 1 ? 0.8 : 1.5;
-        }
-      }
-    }
-    
-    // Update bullets
-    for (const b of soloState.bullets) {
-      if (b.dead) continue;
-      b.x += b.vx * dt;
-      b.y += b.vy * dt;
-      b.lifespan -= dt;
-      if (b.lifespan <= 0 || b.x < -50 || b.x > SOLO_CONFIG.WORLD_W + 50 || b.y < -50 || b.y > SOLO_CONFIG.WORLD_H + 50) {
-        b.dead = true;
-      }
-    }
-    
-    // Update missiles
-    for (const m of soloState.missiles) {
-      if (m.dead) continue;
-      m.x += m.vx * dt;
-      m.y += m.vy * dt;
-      
-      // Bounce off walls
-      if (m.x < m.r) { m.x = m.r; m.vx = Math.abs(m.vx); }
-      if (m.x > SOLO_CONFIG.WORLD_W - m.r) { m.x = SOLO_CONFIG.WORLD_W - m.r; m.vx = -Math.abs(m.vx); }
-      
-      // Hit bottom
-      if (m.y > SOLO_CONFIG.WORLD_H - m.r) {
-        m.dead = true;
-        if (p.upgrades.shieldActive > 0) {
-          p.upgrades.shieldActive--;
-        } else {
-          p.hp--;
-          screenShake = 15;
-        }
-        if (p.hp <= 0) {
-          soloEndGame();
-          return;
-        }
-      }
-    }
-    
-    // Bullet-missile collisions
-    for (const b of soloState.bullets) {
-      if (b.dead) continue;
-      for (const m of soloState.missiles) {
-        if (m.dead) continue;
-        if (b.hitList.includes(m.id)) continue;
-        
-        const dx = b.x - m.x;
-        const dy = b.y - m.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        
-        if (dist < b.r + m.r) {
-          m.hp -= b.dmg;
-          b.hitList.push(m.id);
-          
-          p.damageDealt += b.dmg;
-          p.waveDamage += b.dmg;
-          
-          // Damage number
-          soloState.damageNumbers.push({
-            x: m.x, y: m.y - m.r,
-            val: Math.round(b.dmg),
-            isCrit: b.isCrit,
-            age: 0,
-          });
-          
-          if (b.pierce > 0) {
-            b.pierce--;
-          } else {
-            b.dead = true;
-          }
-          
-          // Explosion
-          if (b.explosive > 0) {
-            const explosionRadius = 30 + b.explosive * 10;
-            for (const m2 of soloState.missiles) {
-              if (m2.dead || m2.id === m.id) continue;
-              const dx2 = m2.x - b.x;
-              const dy2 = m2.y - b.y;
-              if (Math.sqrt(dx2*dx2 + dy2*dy2) < explosionRadius + m2.r) {
-                m2.hp -= b.dmg * 0.5;
-                p.damageDealt += b.dmg * 0.5;
-              }
-            }
-            // Add explosion particle
-            for (let i = 0; i < 8; i++) {
-              const angle = (i / 8) * Math.PI * 2;
-              soloState.particles.push({
-                x: b.x, y: b.y,
-                vx: Math.cos(angle) * 100,
-                vy: Math.sin(angle) * 100,
-                life: 0.3,
-                color: "#ff8800",
-              });
-            }
-          }
-          
-          if (m.hp <= 0) {
-            m.dead = true;
-            p.score += 50;
-            p.kills++;
-            const goldGain = Math.round(SOLO_CONFIG.GOLD_PER_KILL * (p.upgrades.goldMult || 1));
-            p.gold += goldGain;
-            
-            // Death particles
-            for (let i = 0; i < 6; i++) {
-              const angle = Math.random() * Math.PI * 2;
-              soloState.particles.push({
-                x: m.x, y: m.y,
-                vx: Math.cos(angle) * 80,
-                vy: Math.sin(angle) * 80,
-                life: 0.4,
-                color: "#ffaa00",
-              });
-            }
-          }
-          
-          break;
-        }
-      }
-    }
-    
-    // Update particles
-    for (const part of soloState.particles) {
-      part.x += part.vx * dt;
-      part.y += part.vy * dt;
-      part.life -= dt;
-    }
-    soloState.particles = soloState.particles.filter(p => p.life > 0);
-    
-    // Update damage numbers
-    for (const dn of soloState.damageNumbers) {
-      dn.age += dt;
-      dn.y -= 30 * dt;
-    }
-    soloState.damageNumbers = soloState.damageNumbers.filter(d => d.age < 1);
-    
-    // Clean up dead entities
-    soloState.bullets = soloState.bullets.filter(b => !b.dead);
-    soloState.missiles = soloState.missiles.filter(m => !m.dead);
-    
-    // Check wave complete
-    if (soloState.missiles.length === 0) {
-      soloBeginUpgradePhase();
-    }
-  }
-
-  function soloBeginUpgradePhase() {
-    phase = "upgrades";
-    soloState.rerollCount = 0;
-    currentRerollCost = 10;
-    upgradeDeadline = Date.now() + SOLO_CONFIG.UPGRADE_TIMEOUT * 1000;
-    soloGenerateUpgradeOptions();
-  }
-
-  function soloGenerateUpgradeOptions() {
-    const rarities = [
-      { key: "common", weight: 60, scale: 1, color: "#888", label: "COMMON" },
-      { key: "rare", weight: 25, scale: 1.5, color: "#4488ff", label: "RARE" },
-      { key: "epic", weight: 12, scale: 2, color: "#aa44ff", label: "EPIC" },
-      { key: "legendary", weight: 3, scale: 3, color: "#ffaa00", label: "LEGENDARY" },
-    ];
-    
-    function rollRarity() {
-      const roll = Math.random() * 100;
-      let acc = 0;
-      for (const r of rarities) {
-        acc += r.weight;
-        if (roll < acc) return r;
-      }
-      return rarities[0];
-    }
-    
-    upgradeOptions = [];
-    const used = new Set();
-    
-    for (let i = 0; i < 3; i++) {
-      let def;
-      let attempts = 0;
-      do {
-        def = SOLO_UPGRADE_DEFS[Math.floor(Math.random() * SOLO_UPGRADE_DEFS.length)];
-        attempts++;
-      } while (used.has(def.id) && attempts < 20);
-      
-      used.add(def.id);
-      const rarity = rollRarity();
-      
-      let val = def.base * rarity.scale;
-      let desc = def.desc;
-      
-      if (def.type === "add") {
-        val = Math.max(1, Math.round(val));
-        desc = desc.replace("{val}", val);
-      } else {
-        val = Math.round(val * 100);
-        desc = desc.replace("{val}", val);
-      }
-      
-      upgradeOptions.push({
-        key: Math.random().toString(36).substr(2, 9),
-        defId: def.id,
-        title: def.name,
-        desc: desc,
-        icon: def.icon,
-        stat: def.stat,
-        val: def.type === "add" ? val : val / 100,
-        type: def.type || "mult",
-        rarity: rarity.key,
-        rarityLabel: rarity.label,
-        rarityColor: rarity.color,
-      });
-    }
-    
-    upgradePicked = false;
-  }
-
-  function soloPickUpgrade(index) {
-    if (upgradePicked || index < 0 || index >= upgradeOptions.length) return;
-    
-    const opt = upgradeOptions[index];
-    const ups = soloState.player.upgrades;
-    
-    if (opt.type === "add") {
-      ups[opt.stat] = (ups[opt.stat] || 0) + opt.val;
-    } else {
-      ups[opt.stat] = (ups[opt.stat] || 1) * (1 + opt.val);
-    }
-    
-    upgradePicked = true;
-    
-    setTimeout(() => {
-      wave++;
-      phase = "playing";
-      soloSpawnWave();
-    }, 500);
-  }
-
-  function soloRerollUpgrades() {
-    const p = soloState.player;
-    if (p.gold < currentRerollCost) return;
-    
-    p.gold -= currentRerollCost;
-    soloState.rerollCount++;
-    currentRerollCost = Math.floor(10 * Math.pow(1.5, soloState.rerollCount));
-    soloGenerateUpgradeOptions();
-  }
-
-  function soloEndGame() {
-    phase = "gameover";
-    gameOverData = {
-      wave: wave,
-      solo: true,
-      scores: [{
-        id: "solo",
-        name: soloState.player.name,
-        score: soloState.player.score,
-        kills: soloState.player.kills,
-        slot: 0,
-        isWinner: false,
-      }],
-    };
-  }
-
-  function soloReturnToMenu() {
     isSolo = false;
+  }
+  
+  function soloReturnToMenu() {
+    stopSoloGame();
     phase = "menu";
-    soloState = null;
     lastSnap = null;
     upgradeOptions = [];
     upgradePicked = false;
@@ -624,38 +152,6 @@
     wave = 0;
     showMenu();
     updateLobbyUI();
-  }
-
-  function soloBuyTower(slotIndex, type) {
-    const p = soloState.player;
-    if (p.towers[slotIndex]) return;
-    const cost = TOWER_TYPES[type].cost;
-    if (p.gold >= cost) {
-      p.gold -= cost;
-      p.towers[slotIndex] = { type, level: 1, cd: 0 };
-    }
-  }
-
-  function soloUpgradeTower(slotIndex) {
-    const p = soloState.player;
-    const tower = p.towers[slotIndex];
-    if (!tower || tower.level >= MAX_TOWER_LEVEL) return;
-    const cost = TOWER_TYPES[tower.type].upgradeCost * tower.level;
-    if (p.gold >= cost) {
-      p.gold -= cost;
-      tower.level++;
-    }
-  }
-
-  function soloSellTower(slotIndex) {
-    const p = soloState.player;
-    const tower = p.towers[slotIndex];
-    if (!tower) return;
-    const baseCost = TOWER_TYPES[tower.type].cost;
-    const upgradeCost = TOWER_TYPES[tower.type].upgradeCost;
-    const totalSpent = baseCost + upgradeCost * (tower.level - 1) * tower.level / 2;
-    p.gold += Math.floor(totalSpent * 0.5);
-    p.towers[slotIndex] = null;
   }
 
   // ===== Utilities =====
@@ -753,7 +249,12 @@
   }
 
   function send(obj) {
-    if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+    if (isSolo) {
+      // Route to local server
+      LocalServer.handleMessage(obj);
+    } else if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify(obj));
+    }
   }
 
   function handleMessage(msg) {
@@ -998,26 +499,16 @@
     }
     
     if (phase === "upgrades" && hoveredUpgrade >= 0 && !upgradePicked) {
-      if (isSolo) {
-        soloPickUpgrade(hoveredUpgrade);
-      } else {
-        const opt = upgradeOptions[hoveredUpgrade];
-        if (opt) send({ t: "pickUpgrade", key: opt.key });
-      }
+      const opt = upgradeOptions[hoveredUpgrade];
+      if (opt) send({ t: "pickUpgrade", key: opt.key });
       return;
     }
 
     // Handle reroll button click
     if (phase === "upgrades" && hoveredReroll && !upgradePicked) {
-      if (isSolo) {
-        if (soloState.player.gold >= currentRerollCost) {
-          soloRerollUpgrades();
-        }
-      } else {
-        const myPlayer = lastSnap?.players.find(p => p.id === myId);
-        if (myPlayer && myPlayer.gold >= currentRerollCost) {
-          send({ t: "rerollUpgrades" });
-        }
+      const myPlayer = lastSnap?.players.find(p => p.id === myId);
+      if (myPlayer && myPlayer.gold >= currentRerollCost) {
+        send({ t: "rerollUpgrades" });
       }
       return;
     }
@@ -1042,27 +533,15 @@
     // Handle build/upgrade menu clicks
     if (buildMenuOpen) {
       if (hoveredBuildOption === "upgrade") {
-        if (isSolo) {
-          soloUpgradeTower(buildMenuOpen.slotIndex);
-        } else {
-          send({ t: "upgradeTower", slotIndex: buildMenuOpen.slotIndex });
-        }
+        send({ t: "upgradeTower", slotIndex: buildMenuOpen.slotIndex });
         buildMenuOpen = null;
         return;
       } else if (hoveredBuildOption === "sell") {
-        if (isSolo) {
-          soloSellTower(buildMenuOpen.slotIndex);
-        } else {
-          send({ t: "sellTower", slotIndex: buildMenuOpen.slotIndex });
-        }
+        send({ t: "sellTower", slotIndex: buildMenuOpen.slotIndex });
         buildMenuOpen = null;
         return;
       } else if (typeof hoveredBuildOption === "number" && hoveredBuildOption >= 0) {
-        if (isSolo) {
-          soloBuyTower(buildMenuOpen.slotIndex, hoveredBuildOption);
-        } else {
-          send({ t: "buyTower", slotIndex: buildMenuOpen.slotIndex, type: hoveredBuildOption });
-        }
+        send({ t: "buyTower", slotIndex: buildMenuOpen.slotIndex, type: hoveredBuildOption });
         buildMenuOpen = null;
         return;
       } else {
