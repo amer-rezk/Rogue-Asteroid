@@ -114,8 +114,8 @@ app.use(express.static(path.join(__dirname, "docs")));
 app.get("/health", (_, res) => res.json({ ok: true, phase, players: players.size }));
 
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: "/ws" });
-console.log("[SERVER] Server started with WebSocket on /ws");
+const wss = new WebSocketServer({ server });
+console.log("[SERVER] Server started with WebSocket on root path");
 
 wss.on("error", (err) => {
   console.error("[WSS ERROR]", err);
