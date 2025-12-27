@@ -439,6 +439,116 @@ canvas {
   padding: 15px;
 }
 
+/* Lobby Chat */
+.lobby-chat {
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid rgba(0, 255, 255, 0.2);
+}
+
+.chat-header {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 12px;
+  color: var(--cyan);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-messages {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 8px;
+  height: 150px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.chat-messages::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-messages::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+.chat-messages::-webkit-scrollbar-thumb {
+  background: var(--cyan-dim);
+  border-radius: 3px;
+}
+
+.chat-messages::-webkit-scrollbar-thumb:hover {
+  background: var(--cyan);
+}
+
+.chat-message {
+  margin-bottom: 4px;
+  line-height: 1.4;
+  word-wrap: break-word;
+}
+
+.chat-time {
+  color: #555;
+  font-size: 10px;
+  margin-right: 4px;
+}
+
+.chat-name {
+  color: var(--cyan);
+  font-weight: bold;
+  margin-right: 4px;
+}
+
+.chat-text {
+  color: #ddd;
+}
+
+.chat-input-row {
+  display: flex;
+  gap: 6px;
+}
+
+.chat-input-row input {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  padding: 8px 10px;
+  color: #fff;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.chat-input-row input:focus {
+  border-color: var(--cyan);
+}
+
+.chat-input-row input::placeholder {
+  color: #666;
+}
+
+.chat-send-btn {
+  background: var(--cyan);
+  border: none;
+  border-radius: 4px;
+  padding: 8px 12px;
+  color: #000;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.chat-send-btn:hover {
+  background: #fff;
+  box-shadow: 0 0 10px var(--cyan);
+}
+
 @media (max-width: 800px) {
   .menu-layout {
     flex-direction: column;
