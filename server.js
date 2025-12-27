@@ -404,11 +404,14 @@ function spawnWave() {
   spawnQueue = []; // Reset spawn queue
   spawnTimer = 0;
 
-  // Reset shields
+  // Reset shields and wave damage
   for (const id of lockedSlots) {
     const p = players.get(id);
-    if (p && p.upgrades?.shield) {
-      p.upgrades.shieldActive = p.upgrades.shield;
+    if (p) {
+      if (p.upgrades?.shield) {
+        p.upgrades.shieldActive = p.upgrades.shield;
+      }
+      p.waveDamage = 0; // Reset wave damage for each new wave
     }
   }
 
@@ -514,6 +517,7 @@ function startGame() {
       p.score = 0;
       p.kills = 0;
       p.damageDealt = 0;
+      p.waveDamage = 0;
       p.hp = BASE_HP_PER_PLAYER;
       p.maxHp = BASE_HP_PER_PLAYER;
       p.ready = false;
@@ -1070,9 +1074,10 @@ function tick() {
           addDamageNumber(m.x, m.y - m.r, b.dmg, b.isCrit);
           const owner = players.get(b.ownerId);
           
-          // Track damage dealt
+          // Track damage dealt (total and wave)
           if (owner) {
             owner.damageDealt = (owner.damageDealt || 0) + b.dmg;
+            owner.waveDamage = (owner.waveDamage || 0) + b.dmg;
           }
           
           if (m.hp <= 0) {
@@ -1183,6 +1188,7 @@ function tick() {
           towers: p.towers,
           kills: p.kills || 0,
           damageDealt: p.damageDealt || 0,
+          waveDamage: p.waveDamage || 0,
           upgrades: {
             shieldActive: p.upgrades?.shieldActive ?? 0,
             slowfield: !!p.upgrades?.slowfield,
@@ -1228,7 +1234,7 @@ wss.on("connection", (ws) => {
     manualShooting: false,
     upgrades: {},
     towers: [null, null, null, null],
-    gold: 0, cooldown: 0, score: 0, ready: false, damageDealt: 0,
+    gold: 0, cooldown: 0, score: 0, ready: false, damageDealt: 0, waveDamage: 0,
     hp: BASE_HP_PER_PLAYER,
     maxHp: BASE_HP_PER_PLAYER,
     kills: 0,
