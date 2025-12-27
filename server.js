@@ -781,16 +781,21 @@ function clampAimAngle(turretX, turretY, targetX, targetY) {
 }
 
 function createExplosion(x, y, radius, color) {
-  for (let i = 0; i < 8; i++) {
-    const angle = (i / 8) * Math.PI * 2 + Math.random() * 0.5;
+  // Limit total particles for performance
+  if (particles.length > 200) {
+    particles.splice(0, 50); // Remove oldest particles
+  }
+  const count = radius > 40 ? 6 : 4; // Fewer particles for smaller explosions
+  for (let i = 0; i < count; i++) {
+    const angle = (i / count) * Math.PI * 2 + Math.random() * 0.5;
     particles.push({
       x, y,
-      vx: Math.cos(angle) * rand(60, 120),
-      vy: Math.sin(angle) * rand(60, 120),
-      life: rand(0.3, 0.5),
-      maxLife: 0.5,
+      vx: Math.cos(angle) * rand(50, 100),
+      vy: Math.sin(angle) * rand(50, 100),
+      life: rand(0.25, 0.4),
+      maxLife: 0.4,
       color: color || "#f80",
-      size: rand(2, 4),
+      size: rand(2, 3.5),
     });
   }
 }
@@ -1137,11 +1142,30 @@ function tick() {
           }
           
           if (b.explosive > 0) {
-            createExplosion(b.x, b.y, 35, "#fa0");
+            const explosionRadius = 30 + b.explosive * 15;
+            const splashDmg = b.dmg * 0.5; // 50% of bullet damage
+            createExplosion(b.x, b.y, explosionRadius, "#ff6600");
+            // Add explosion ring for client to render
+            particles.push({ 
+              x: b.x, y: b.y, 
+              vx: 0, vy: 0, 
+              life: 0.3, maxLife: 0.3, 
+              color: "#ff6600", 
+              size: explosionRadius,
+              isExplosionRing: true 
+            });
             for (const m2 of missiles) {
               if (m2.dead || m2 === m) continue;
               const d = Math.hypot(m2.x - b.x, m2.y - b.y);
-              if (d < 35 + m2.r) { m2.hp -= 1; if (m2.hp <= 0) m2.dead = true; }
+              if (d < explosionRadius + m2.r) { 
+                m2.hp -= splashDmg; 
+                addDamageNumber(m2.x, m2.y - m2.r, splashDmg, false);
+                if (owner) {
+                  owner.damageDealt = (owner.damageDealt || 0) + splashDmg;
+                  owner.waveDamage = (owner.waveDamage || 0) + splashDmg;
+                }
+                if (m2.hp <= 0) m2.dead = true; 
+              }
             }
           }
           if (b.chain && m.hp <= 0) {
@@ -1182,6 +1206,11 @@ function tick() {
       waveClearedTime = 0; // Reset if new asteroids appear or queue not empty
     }
 
+    // Limit damage numbers for performance
+    if (damageNumbers.length > 30) {
+      damageNumbers.splice(0, damageNumbers.length - 30);
+    }
+    
     broadcast({
       t: "state",
       ts: Date.now(),
@@ -1189,17 +1218,17 @@ function tick() {
       wave,
       world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
       missiles: missiles.map((m) => ({
-        id: m.id, x: m.x, y: m.y, r: m.r, hp: m.hp, maxHp: m.maxHp, type: m.type,
+        id: m.id, x: Math.round(m.x), y: Math.round(m.y), r: m.r, hp: m.hp, maxHp: m.maxHp, type: m.type,
         rotation: m.rotation, vertices: m.vertices, attackType: m.attackType, isPhased: m.isPhased,
         inFTL: m.inFTL
       })),
       bullets: bullets.map((b) => ({
-        id: b.id, x: b.x, y: b.y, r: b.r, vx: b.vx, vy: b.vy,
+        id: b.id, x: Math.round(b.x), y: Math.round(b.y), r: b.r, vx: Math.round(b.vx), vy: Math.round(b.vy),
         slot: b.ownerSlot, isCrit: b.isCrit, lifespan: b.lifespan,
         isTower: b.isTowerBullet, bulletType: b.bulletType
       })),
-      particles: particles.map((p) => ({ x: p.x, y: p.y, life: p.life, maxLife: p.maxLife, color: p.color, size: p.size })),
-      damageNumbers: damageNumbers.map((d) => ({ x: d.x, y: d.y, amount: d.amount, isCrit: d.isCrit, life: d.life })),
+      particles: particles.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y), life: p.life, maxLife: p.maxLife, color: p.color, size: p.size, isExplosionRing: p.isExplosionRing })),
+      damageNumbers: damageNumbers.map((d) => ({ x: Math.round(d.x), y: Math.round(d.y), amount: d.amount, isCrit: d.isCrit, life: d.life })),
       players: lockedSlots.map((id) => {
         const p = players.get(id);
         if (!p) return { id, slot: -1 };
