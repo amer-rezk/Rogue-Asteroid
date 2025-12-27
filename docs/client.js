@@ -1194,227 +1194,248 @@
       }
       ctx.textAlign = "left";
 
-      // Always-visible Attack Panel (PvP) - right side
-      if (phase === "playing" && lastSnap.players.length > 1 && myPlayer && myPlayer.hp > 0) {
+      // ===== UNIFIED RIGHT PANEL (Attacks + DPS Meters) =====
+      if (phase === "playing" && lastSnap && lastSnap.players.length > 1) {
         hoveredAttack = null;
-        const panelW = 140;
-        const panelH = 260;
-        const panelX = canvas.width - panelW - 15;
-        const panelY = 60;
+        const panelW = 175;
+        const panelX = canvas.width - panelW - 12;
+        let currentY = 15;
         const myGold = myPlayer?.gold || 0;
+        const isAlive = myPlayer && myPlayer.hp > 0;
 
-        // Panel background
-        ctx.fillStyle = "rgba(10,10,25,0.9)";
-        ctx.strokeStyle = "rgba(255,68,68,0.6)";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.roundRect(panelX, panelY, panelW, panelH, 10);
-        ctx.fill();
-        ctx.stroke();
-
-        // Header
-        ctx.font = "bold 11px 'Orbitron', monospace";
-        ctx.fillStyle = "#f44";
-        ctx.textAlign = "center";
-        ctx.fillText("⚔️ ATTACKS", panelX + panelW / 2, panelY + 18);
-        
-        // Subtitle
-        ctx.font = "8px 'Courier New', monospace";
-        ctx.fillStyle = "#666";
-        ctx.fillText("Random Target", panelX + panelW / 2, panelY + 32);
-
-        // Divider
-        ctx.strokeStyle = "rgba(255,68,68,0.3)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(panelX + 10, panelY + 40);
-        ctx.lineTo(panelX + panelW - 10, panelY + 40);
-        ctx.stroke();
-
-        // Attack buttons
-        const attacks = Object.entries(ATTACK_TYPES);
-        const btnH = 38;
-        const btnGap = 4;
-        const startY = panelY + 48;
-
-        attacks.forEach(([key, atk], i) => {
-          const btnY = startY + i * (btnH + btnGap);
-          const btnX = panelX + 8;
-          const btnW = panelW - 16;
-          const canAfford = myGold >= atk.cost;
-          const isHovered = mouseX >= btnX && mouseX <= btnX + btnW && mouseY >= btnY && mouseY <= btnY + btnH;
-
-          if (isHovered && canAfford) hoveredAttack = key;
-
-          // Button background
-          ctx.fillStyle = isHovered && canAfford ? hexToRgba(atk.color, 0.35) : 
-                          canAfford ? hexToRgba(atk.color, 0.15) : "rgba(30,30,30,0.5)";
-          ctx.strokeStyle = isHovered && canAfford ? atk.color : 
-                            canAfford ? hexToRgba(atk.color, 0.5) : "#333";
-          ctx.lineWidth = isHovered && canAfford ? 2 : 1;
+        // Helper function to draw a section panel
+        function drawSectionPanel(x, y, w, h, borderColor, title, titleColor) {
+          // Panel background with gradient
+          const grad = ctx.createLinearGradient(x, y, x, y + h);
+          grad.addColorStop(0, "rgba(10,17,34,0.95)");
+          grad.addColorStop(1, "rgba(15,20,40,0.95)");
+          ctx.fillStyle = grad;
+          ctx.strokeStyle = borderColor;
+          ctx.lineWidth = 1.5;
           ctx.beginPath();
-          ctx.roundRect(btnX, btnY, btnW, btnH, 6);
+          ctx.roundRect(x, y, w, h, 10);
           ctx.fill();
           ctx.stroke();
+          
+          // Title
+          if (title) {
+            ctx.font = "bold 11px 'Orbitron', sans-serif";
+            ctx.fillStyle = titleColor;
+            ctx.textAlign = "center";
+            ctx.fillText(title, x + w / 2, y + 16);
+            
+            // Separator line
+            ctx.strokeStyle = hexToRgba(borderColor, 0.4);
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x + 10, y + 26);
+            ctx.lineTo(x + w - 10, y + 26);
+            ctx.stroke();
+          }
+        }
 
-          // Icon
-          ctx.font = "16px sans-serif";
-          ctx.textAlign = "left";
-          ctx.fillText(atk.icon, btnX + 6, btnY + 24);
-
-          // Name
-          ctx.font = "bold 10px 'Courier New', monospace";
-          ctx.fillStyle = canAfford ? atk.color : "#555";
-          ctx.fillText(atk.name.toUpperCase(), btnX + 28, btnY + 14);
-
-          // Description
-          ctx.font = "8px 'Courier New', monospace";
-          ctx.fillStyle = canAfford ? "rgba(255,255,255,0.5)" : "#444";
-          ctx.fillText(atk.desc, btnX + 28, btnY + 26);
-
-          // Cost
-          ctx.font = "bold 10px 'Courier New', monospace";
-          ctx.textAlign = "right";
-          ctx.fillStyle = canAfford ? "#fd0" : "#555";
-          ctx.fillText(atk.cost + "g", btnX + btnW - 6, btnY + 24);
-        });
-
-        // Footer hint
-        ctx.font = "7px 'Courier New', monospace";
-        ctx.textAlign = "center";
-        ctx.fillStyle = "#555";
-        ctx.fillText("Spawns next wave", panelX + panelW / 2, panelY + panelH - 8);
-        ctx.textAlign = "left";
-      }
-
-      // ===== DAMAGE METER PANEL =====
-      if (lastSnap && lastSnap.players.length > 1) {
-        const dmgPanelW = 155;
-        const playerCount = lastSnap.players.filter(p => p.slot >= 0).length;
-        const dmgPanelH = 50 + playerCount * 44;
-        const dmgPanelX = canvas.width - dmgPanelW - 10;
-        const dmgPanelY = 330; // Below attack panel
-        
-        // Calculate total and max damage
-        const totalDamage = lastSnap.players.reduce((sum, p) => sum + (p.damageDealt || 0), 0);
-        const maxDamage = Math.max(...lastSnap.players.map(p => p.damageDealt || 0), 1);
-        
-        // Panel background with gradient
-        const panelGrad = ctx.createLinearGradient(dmgPanelX, dmgPanelY, dmgPanelX, dmgPanelY + dmgPanelH);
-        panelGrad.addColorStop(0, "rgba(26,36,66,0.92)");
-        panelGrad.addColorStop(1, "rgba(15,20,40,0.95)");
-        ctx.fillStyle = panelGrad;
-        ctx.strokeStyle = "rgba(122,224,255,0.25)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.roundRect(dmgPanelX, dmgPanelY, dmgPanelW, dmgPanelH, 10);
-        ctx.fill();
-        ctx.stroke();
-        
-        // Header with icon
-        ctx.font = "bold 11px 'Courier New', monospace";
-        ctx.textAlign = "left";
-        ctx.fillStyle = "#7ae0ff";
-        ctx.fillText("⚔️ DPS TRACKER", dmgPanelX + 10, dmgPanelY + 16);
-        
-        // Total damage display
-        ctx.font = "bold 9px 'Courier New', monospace";
-        ctx.textAlign = "right";
-        ctx.fillStyle = "#91ff7a";
-        ctx.fillText(Math.round(totalDamage).toLocaleString(), dmgPanelX + dmgPanelW - 10, dmgPanelY + 16);
-        
-        // Separator line with glow
-        ctx.strokeStyle = "rgba(122,224,255,0.3)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(dmgPanelX + 8, dmgPanelY + 26);
-        ctx.lineTo(dmgPanelX + dmgPanelW - 8, dmgPanelY + 26);
-        ctx.stroke();
-        
-        // Sort players by damage (highest first)
-        const sortedPlayers = [...lastSnap.players]
-          .filter(p => p.slot >= 0)
-          .sort((a, b) => (b.damageDealt || 0) - (a.damageDealt || 0));
-        
-        // Player damage bars
-        sortedPlayers.forEach((p, i) => {
-          const rowY = dmgPanelY + 34 + i * 44;
+        // Helper function to draw player damage row (reusable for both meters)
+        function drawPlayerDamageRow(p, rowY, damage, maxDamage, totalDamage, isLeader, panelX, panelW) {
           const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
-          const damage = p.damageDealt || 0;
-          const barWidth = maxDamage > 0 ? (damage / maxDamage) * (dmgPanelW - 20) : 0;
-          const percent = totalDamage > 0 ? ((damage / totalDamage) * 100).toFixed(1) : "0.0";
-          const isLeader = i === 0 && damage > 0;
+          const barWidth = maxDamage > 0 ? (damage / maxDamage) * (panelW - 48) : 0;
+          const percent = totalDamage > 0 ? ((damage / totalDamage) * 100).toFixed(0) : "0";
           const isMe = p.id === myId;
           
-          // Row background for current player
+          // Highlight row for current player
           if (isMe) {
-            ctx.fillStyle = "rgba(255,255,255,0.05)";
+            ctx.fillStyle = "rgba(122,224,255,0.08)";
             ctx.beginPath();
-            ctx.roundRect(dmgPanelX + 4, rowY - 4, dmgPanelW - 8, 40, 6);
+            ctx.roundRect(panelX + 4, rowY - 2, panelW - 8, 28, 4);
             ctx.fill();
           }
           
-          // Rank indicator
+          // Player color indicator
+          ctx.fillStyle = color.main;
+          ctx.shadowColor = color.main;
+          ctx.shadowBlur = isLeader ? 8 : 4;
+          ctx.beginPath();
+          ctx.roundRect(panelX + 8, rowY + 2, 4, 20, 2);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          
+          // Rank / Crown
           ctx.font = "bold 10px sans-serif";
-          ctx.textAlign = "center";
-          if (isLeader) {
+          ctx.textAlign = "left";
+          if (isLeader && damage > 0) {
             ctx.fillStyle = "#ffd700";
-            ctx.fillText("👑", dmgPanelX + 14, rowY + 10);
-          } else {
-            ctx.fillStyle = "#666";
-            ctx.fillText(`${i + 1}`, dmgPanelX + 14, rowY + 10);
+            ctx.fillText("👑", panelX + 16, rowY + 16);
           }
           
           // Player name
-          ctx.font = "bold 10px 'Courier New', monospace";
-          ctx.textAlign = "left";
-          ctx.fillStyle = isLeader ? "#ffd700" : color.main;
-          const displayName = p.name.length > 10 ? p.name.substring(0, 9) + "…" : p.name;
-          ctx.fillText(displayName, dmgPanelX + 26, rowY + 10);
+          ctx.font = "bold 9px 'Courier New', monospace";
+          ctx.fillStyle = isLeader ? "#ffd700" : "#e8f0ff";
+          const displayName = p.name.length > 8 ? p.name.substring(0, 7) + "…" : p.name;
+          ctx.fillText(displayName, panelX + (isLeader ? 30 : 18), rowY + 10);
           
           // Damage amount
-          ctx.font = "bold 10px 'Courier New', monospace";
+          ctx.font = "bold 9px 'Courier New', monospace";
           ctx.textAlign = "right";
-          ctx.fillStyle = "#7ae0ff";
-          ctx.fillText(Math.round(damage).toLocaleString(), dmgPanelX + dmgPanelW - 10, rowY + 10);
+          ctx.fillStyle = "#91ff7a";
+          ctx.fillText(Math.round(damage).toLocaleString(), panelX + panelW - 32, rowY + 10);
+          
+          // Percentage
+          ctx.font = "bold 8px 'Courier New', monospace";
+          ctx.fillStyle = isLeader ? "#ffd700" : "#7ae0ff";
+          ctx.fillText(percent + "%", panelX + panelW - 8, rowY + 10);
           
           // Damage bar background
           ctx.fillStyle = "rgba(255,255,255,0.08)";
           ctx.beginPath();
-          ctx.roundRect(dmgPanelX + 10, rowY + 16, dmgPanelW - 20, 10, 4);
+          ctx.roundRect(panelX + 18, rowY + 16, panelW - 48, 6, 3);
           ctx.fill();
           
-          // Damage bar fill with gradient
+          // Damage bar fill
           if (barWidth > 2) {
-            const barGrad = ctx.createLinearGradient(dmgPanelX + 10, 0, dmgPanelX + 10 + barWidth, 0);
-            barGrad.addColorStop(0, hexToRgba(color.main, 0.5));
-            barGrad.addColorStop(0.5, hexToRgba(color.main, 0.8));
+            const barGrad = ctx.createLinearGradient(panelX + 18, 0, panelX + 18 + barWidth, 0);
+            barGrad.addColorStop(0, hexToRgba(color.main, 0.4));
+            barGrad.addColorStop(0.5, hexToRgba(color.main, 0.7));
             barGrad.addColorStop(1, color.main);
             ctx.fillStyle = barGrad;
             ctx.beginPath();
-            ctx.roundRect(dmgPanelX + 10, rowY + 16, barWidth, 10, 4);
+            ctx.roundRect(panelX + 18, rowY + 16, barWidth, 6, 3);
             ctx.fill();
             
-            // Leader glow
+            // Glow for leader
             if (isLeader) {
               ctx.shadowColor = color.main;
-              ctx.shadowBlur = 10;
+              ctx.shadowBlur = 6;
               ctx.fill();
               ctx.shadowBlur = 0;
             }
             
-            // Bar end glow pip
+            // End pip
             ctx.fillStyle = "rgba(255,255,255,0.9)";
             ctx.beginPath();
-            ctx.roundRect(dmgPanelX + 8 + barWidth, rowY + 17, 3, 8, 2);
+            ctx.arc(panelX + 18 + barWidth - 1, rowY + 19, 2, 0, Math.PI * 2);
             ctx.fill();
           }
           
-          // Percentage label
-          ctx.font = "bold 8px 'Courier New', monospace";
-          ctx.textAlign = "right";
-          ctx.fillStyle = isLeader ? "#ffd700" : "rgba(255,255,255,0.6)";
-          ctx.fillText(`${percent}%`, dmgPanelX + dmgPanelW - 10, rowY + 34);
+          ctx.textAlign = "left";
+        }
+
+        // ===== ATTACK SPAWN PANEL =====
+        if (isAlive) {
+          const attackPanelH = 255;
+          drawSectionPanel(panelX, currentY, panelW, attackPanelH, "rgba(255,68,68,0.5)", "⚔️ SEND ATTACKS", "#ff6666");
+          
+          // Subtitle
+          ctx.font = "8px 'Courier New', monospace";
+          ctx.fillStyle = "#666";
+          ctx.textAlign = "center";
+          ctx.fillText("Targets random enemy", panelX + panelW / 2, currentY + 38);
+
+          // Attack buttons
+          const attacks = Object.entries(ATTACK_TYPES);
+          const btnH = 36;
+          const btnGap = 3;
+          const startY = currentY + 46;
+
+          attacks.forEach(([key, atk], i) => {
+            const btnY = startY + i * (btnH + btnGap);
+            const btnX = panelX + 6;
+            const btnW = panelW - 12;
+            const canAfford = myGold >= atk.cost;
+            const isHovered = mouseX >= btnX && mouseX <= btnX + btnW && mouseY >= btnY && mouseY <= btnY + btnH;
+
+            if (isHovered && canAfford) hoveredAttack = key;
+
+            // Button background
+            ctx.fillStyle = isHovered && canAfford ? hexToRgba(atk.color, 0.35) : 
+                            canAfford ? hexToRgba(atk.color, 0.12) : "rgba(20,20,30,0.6)";
+            ctx.strokeStyle = isHovered && canAfford ? atk.color : 
+                              canAfford ? hexToRgba(atk.color, 0.4) : "#2a2a3a";
+            ctx.lineWidth = isHovered && canAfford ? 2 : 1;
+            ctx.beginPath();
+            ctx.roundRect(btnX, btnY, btnW, btnH, 6);
+            ctx.fill();
+            ctx.stroke();
+
+            // Icon
+            ctx.font = "15px sans-serif";
+            ctx.textAlign = "left";
+            ctx.fillText(atk.icon, btnX + 6, btnY + 23);
+
+            // Name
+            ctx.font = "bold 10px 'Courier New', monospace";
+            ctx.fillStyle = canAfford ? atk.color : "#444";
+            ctx.fillText(atk.name.toUpperCase(), btnX + 28, btnY + 13);
+
+            // Description
+            ctx.font = "8px 'Courier New', monospace";
+            ctx.fillStyle = canAfford ? "rgba(255,255,255,0.5)" : "#333";
+            ctx.fillText(atk.desc, btnX + 28, btnY + 24);
+
+            // Cost
+            ctx.font = "bold 10px 'Courier New', monospace";
+            ctx.textAlign = "right";
+            ctx.fillStyle = canAfford ? "#ffd700" : "#444";
+            ctx.fillText(atk.cost + "g", btnX + btnW - 6, btnY + 20);
+          });
+
+          ctx.textAlign = "left";
+          currentY += attackPanelH + 8;
+        }
+
+        // ===== TOTAL RUN DPS PANEL =====
+        const playerCount = lastSnap.players.filter(p => p.slot >= 0).length;
+        const totalDmgPanelH = 44 + playerCount * 30;
+        drawSectionPanel(panelX, currentY, panelW, totalDmgPanelH, "rgba(145,255,122,0.4)", "📊 TOTAL DAMAGE", "#91ff7a");
+        
+        // Calculate totals for run
+        const totalDamage = lastSnap.players.reduce((sum, p) => sum + (p.damageDealt || 0), 0);
+        const maxDamage = Math.max(...lastSnap.players.map(p => p.damageDealt || 0), 1);
+        
+        // Total damage number (centered, big)
+        ctx.font = "bold 14px 'Orbitron', sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#91ff7a";
+        ctx.shadowColor = "#91ff7a";
+        ctx.shadowBlur = 10;
+        ctx.fillText(Math.round(totalDamage).toLocaleString(), panelX + panelW / 2, currentY + 38);
+        ctx.shadowBlur = 0;
+        
+        // Sort and draw players
+        const sortedByTotal = [...lastSnap.players]
+          .filter(p => p.slot >= 0)
+          .sort((a, b) => (b.damageDealt || 0) - (a.damageDealt || 0));
+        
+        sortedByTotal.forEach((p, i) => {
+          const rowY = currentY + 48 + i * 30;
+          drawPlayerDamageRow(p, rowY, p.damageDealt || 0, maxDamage, totalDamage, i === 0, panelX, panelW);
+        });
+        
+        currentY += totalDmgPanelH + 8;
+
+        // ===== CURRENT WAVE DPS PANEL =====
+        const waveDmgPanelH = 44 + playerCount * 30;
+        drawSectionPanel(panelX, currentY, panelW, waveDmgPanelH, "rgba(122,224,255,0.4)", "🌊 WAVE " + wave + " DAMAGE", "#7ae0ff");
+        
+        // Calculate totals for wave
+        const totalWaveDamage = lastSnap.players.reduce((sum, p) => sum + (p.waveDamage || 0), 0);
+        const maxWaveDamage = Math.max(...lastSnap.players.map(p => p.waveDamage || 0), 1);
+        
+        // Wave damage number (centered, big)
+        ctx.font = "bold 14px 'Orbitron', sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#7ae0ff";
+        ctx.shadowColor = "#7ae0ff";
+        ctx.shadowBlur = 10;
+        ctx.fillText(Math.round(totalWaveDamage).toLocaleString(), panelX + panelW / 2, currentY + 38);
+        ctx.shadowBlur = 0;
+        
+        // Sort and draw players by wave damage
+        const sortedByWave = [...lastSnap.players]
+          .filter(p => p.slot >= 0)
+          .sort((a, b) => (b.waveDamage || 0) - (a.waveDamage || 0));
+        
+        sortedByWave.forEach((p, i) => {
+          const rowY = currentY + 48 + i * 30;
+          drawPlayerDamageRow(p, rowY, p.waveDamage || 0, maxWaveDamage, totalWaveDamage, i === 0, panelX, panelW);
         });
         
         ctx.textAlign = "left";
