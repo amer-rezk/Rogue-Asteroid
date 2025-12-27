@@ -85,6 +85,7 @@
 
   let lobbyPlayers = [];
   let allReady = false;
+  let readyCount = 0;
   let leaderboard = [];
   let lastSnap = null;
   let upgradeOptions = [];
@@ -249,9 +250,20 @@
         }
         break;
 
+      case "kicked":
+        if (statusText) {
+          statusText.textContent = msg.reason?.toUpperCase() || "KICKED";
+          statusText.className = "status-text";
+        }
+        if (statusLED) statusLED.className = "led red";
+        forcedDisconnect = true;
+        connected = false;
+        break;
+
       case "lobby":
         lobbyPlayers = msg.players;
         allReady = msg.allReady;
+        readyCount = msg.readyCount || 0;
         leaderboard = msg.leaderboard || [];
         isHost = msg.hostId === myId;
         if (phase === "playing" || phase === "upgrades" || phase === "gameover") {
@@ -283,8 +295,7 @@
 
       case "wave":
         wave = msg.wave;
-        upgradeOptions = [];
-        upgradePicked = false;
+        // Don't clear upgradeOptions - continuous wave system keeps cards visible
         buildMenuOpen = null;
         incomingAttacks = [];
         screenShake = 10;
@@ -399,10 +410,22 @@
     const me = lobbyPlayers.find(p => p.id === myId);
     readyBtn.textContent = me?.ready ? "✓ READY" : "READY UP";
     readyBtn.className = "btn" + (me?.ready ? " ready" : "");
-    // Any ready player can launch the game when all are ready
+    
+    // Launch button: show if ready, enable force start if some players ready
+    const canForceStart = readyCount >= 1 && !allReady && me?.ready;
     launchBtn.style.display = me?.ready ? "block" : "none";
-    launchBtn.disabled = !allReady;
-    launchBtn.className = "btn launch" + (allReady ? "" : " disabled");
+    launchBtn.disabled = !allReady && !canForceStart;
+    
+    if (allReady) {
+      launchBtn.textContent = "▶ BATTLE";
+      launchBtn.className = "btn launch";
+    } else if (canForceStart) {
+      launchBtn.textContent = `⚡ FORCE (${readyCount}/${lobbyPlayers.length})`;
+      launchBtn.className = "btn launch force";
+    } else {
+      launchBtn.textContent = "▶ BATTLE";
+      launchBtn.className = "btn launch disabled";
+    }
     
     // Update leaderboard
     updateLeaderboardUI();
@@ -2248,8 +2271,14 @@
 
   readyBtn.onclick = () => { send({ t: "ready" }); };
   launchBtn.onclick = () => { 
-    // Any ready player can start when all are ready
     const me = lobbyPlayers.find(p => p.id === myId);
-    if (allReady && me?.ready) send({ t: "start" }); 
+    if (!me?.ready) return;
+    
+    if (allReady) {
+      send({ t: "start" });
+    } else if (readyCount >= 1) {
+      // Force start - kicks idle players
+      send({ t: "forceStart" });
+    }
   };
 })();
