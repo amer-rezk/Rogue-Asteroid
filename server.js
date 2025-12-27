@@ -120,6 +120,7 @@ const players = new Map();
 
 let hostId = null;
 let phase = "lobby";
+let soloMode = false; // Track if game is solo vs PvP
 
 let lockedSlots = null;
 let worldW = SEGMENT_W;
@@ -418,7 +419,9 @@ function spawnWave() {
 
   // Queue natural wave asteroids - EQUAL distribution per player
   const playerCount = lockedSlots.length;
-  const totalCount = WAVE_BASE_COUNT + Math.floor(wave * WAVE_COUNT_SCALE * 0.5);
+  // Solo mode gets full asteroid count, PvP splits between players
+  const baseTotal = WAVE_BASE_COUNT + Math.floor(wave * WAVE_COUNT_SCALE);
+  const totalCount = soloMode ? baseTotal : Math.floor(baseTotal * 0.5);
   const asteroidsPerPlayer = Math.max(1, Math.floor(totalCount / playerCount));
   
   // Spawn equal asteroids for each player
@@ -490,12 +493,13 @@ function spawnWave() {
 }
 
 // ===== Game phases =====
-function startGame() {
+function startGame(solo = false) {
   if (phase !== "lobby") return;
 
   const ids = Array.from(players.keys()).sort((a, b) => slotForPlayer(a) - slotForPlayer(b));
   if (ids.length < 1) return;
 
+  soloMode = solo;
   lockedSlots = ids.slice(0, MAX_PLAYERS);
   recomputeWorld();
 
@@ -510,7 +514,7 @@ function startGame() {
     if (p) {
       p.upgrades = {};
       p.towers = [null, null, null, null];
-      p.gold = 30; // Starting gold for PvP
+      p.gold = solo ? 50 : 30; // More starting gold for solo
       p.cooldown = 0;
       p.targetX = null;
       p.targetY = null;
@@ -520,14 +524,14 @@ function startGame() {
       p.kills = 0;
       p.damageDealt = 0;
       p.waveDamage = 0;
-      p.hp = BASE_HP_PER_PLAYER;
-      p.maxHp = BASE_HP_PER_PLAYER;
+      p.hp = solo ? 10 : BASE_HP_PER_PLAYER; // More HP for solo
+      p.maxHp = solo ? 10 : BASE_HP_PER_PLAYER;
       p.ready = false;
     }
   }
 
   spawnWave();
-  broadcast({ t: "started", world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, wave });
+  broadcast({ t: "started", world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, wave, solo: soloMode });
 }
 
 function beginUpgradePhase() {
@@ -571,6 +575,7 @@ function maybeEndUpgradePhase() {
 function resetToLobby() {
   try {
     phase = "lobby";
+    soloMode = false;
     lockedSlots = null;
     missiles = [];
     bullets = [];
@@ -603,6 +608,16 @@ function checkGameOver() {
     return p && p.hp > 0;
   });
 
+  // Solo mode: game over when player dies
+  if (soloMode) {
+    if (alivePlayers.length === 0) {
+      endGame(null);
+      return true;
+    }
+    return false;
+  }
+
+  // PvP mode: game over when 1 or fewer players remain
   if (alivePlayers.length <= 1) {
     endGame(alivePlayers[0] || null);
     return true;
@@ -620,7 +635,7 @@ function endGame(winnerId) {
       score: p?.score || 0, 
       slot: p?.slot || 0,
       kills: p?.kills || 0,
-      isWinner: id === winnerId
+      isWinner: !soloMode && id === winnerId // No winner in solo mode
     };
   }).sort((a, b) => b.score - a.score);
 
@@ -632,7 +647,8 @@ function endGame(winnerId) {
         score: s.score,
         kills: s.kills,
         wave: wave,
-        date: Date.now()
+        date: Date.now(),
+        solo: soloMode
       });
     }
   }
@@ -641,7 +657,7 @@ function endGame(winnerId) {
   leaderboard = leaderboard.slice(0, MAX_LEADERBOARD_ENTRIES);
   saveLeaderboard();
 
-  broadcast({ t: "gameOver", wave, scores, winnerId });
+  broadcast({ t: "gameOver", wave, scores, winnerId, solo: soloMode });
 
   setTimeout(() => {
     if (phase === "gameover") resetToLobby();
@@ -1284,6 +1300,13 @@ wss.on("connection", (ws) => {
       if (phase === "lobby" && p.ready) {
         const snap = lobbySnapshot();
         if (snap.allReady) startGame();
+      }
+      return;
+    }
+    if (msg.t === "startSolo") {
+      // Start solo game immediately (no need for ready)
+      if (phase === "lobby") {
+        startGame(true); // Pass true for solo mode
       }
       return;
     }
