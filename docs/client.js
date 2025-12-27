@@ -65,6 +65,7 @@
   const lobbyEl = document.getElementById("lobby");
   const playersEl = document.getElementById("players");
   const readyBtn = document.getElementById("readyBtn");
+  const soloBtn = document.getElementById("soloBtn");
   const launchBtn = document.getElementById("launchBtn");
   const statusLED = document.getElementById("statusLED");
   const statusText = document.getElementById("statusText");
@@ -78,6 +79,7 @@
   let mySlot = 0;
   let isHost = false;
   let connected = false;
+  let isSolo = false; // Track if we're in solo mode
 
   let phase = "menu";
   let world = { width: 360, height: 600, segmentWidth: 360 };
@@ -253,6 +255,7 @@
           wave = 0;
           buildMenuOpen = null;
           hoveredAttack = null;
+          isSolo = false;
           showMenu();
         }
         phase = "lobby";
@@ -264,6 +267,7 @@
         phase = "playing";
         world = msg.world;
         wave = msg.wave;
+        isSolo = msg.solo || false;
         upgradeOptions = [];
         upgradePicked = false;
         buildMenuOpen = null;
@@ -531,7 +535,7 @@
     
     // Reserve space for the right panel in multiplayer (when panel would be shown)
     const playerCount = lastSnap?.players?.length || 1;
-    const panelReserve = playerCount > 1 ? 195 : 0; // 175 panel + 20 margin
+    const panelReserve = (!isSolo && playerCount > 1) ? 195 : 0; // 175 panel + 20 margin
     const availableWidth = sw - panelReserve;
     
     const scale = Math.min(availableWidth / ww, sh / wh);
@@ -1222,8 +1226,8 @@
       }
       ctx.textAlign = "left";
 
-      // ===== UNIFIED RIGHT PANEL (Attacks + DPS Meters) =====
-      if (phase === "playing" && lastSnap && lastSnap.players.length > 1) {
+      // ===== UNIFIED RIGHT PANEL (Attacks + DPS Meters) - PvP Only =====
+      if (phase === "playing" && lastSnap && lastSnap.players.length > 1 && !isSolo) {
         hoveredAttack = null;
         const panelW = 175;
         const panelX = canvas.width - panelW - 12;
@@ -1884,26 +1888,40 @@
         ctx.fillStyle = "rgba(0,0,0,0.85)";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         
-        const winner = gameOverData.scores.find(s => s.isWinner);
-        if (winner) {
-          const winnerColor = PLAYER_COLORS[winner.slot]?.main || "#fff";
-          drawNeonText("🏆 WINNER 🏆", canvas.width / 2, 80, "#ffd700", 28, "center");
-          drawNeonText(winner.name.toUpperCase(), canvas.width / 2, 120, winnerColor, 36, "center");
+        if (gameOverData.solo) {
+          // Solo mode game over
+          const player = gameOverData.scores[0];
+          drawNeonText("GAME OVER", canvas.width / 2, 80, "#f44", 36, "center");
+          drawNeonText(`Wave ${gameOverData.wave}`, canvas.width / 2, 130, "#0ff", 24, "center");
+          
+          ctx.font = "bold 18px 'Courier New', monospace";
+          ctx.textAlign = "center";
+          ctx.fillStyle = "#fff";
+          ctx.fillText(`Score: ${player?.score || 0}`, canvas.width / 2, 180);
+          ctx.fillText(`Kills: ${player?.kills || 0}`, canvas.width / 2, 210);
         } else {
-          drawNeonText("GAME OVER", canvas.width / 2, 100, "#f44", 36, "center");
-        }
+          // PvP mode game over
+          const winner = gameOverData.scores.find(s => s.isWinner);
+          if (winner) {
+            const winnerColor = PLAYER_COLORS[winner.slot]?.main || "#fff";
+            drawNeonText("🏆 WINNER 🏆", canvas.width / 2, 80, "#ffd700", 28, "center");
+            drawNeonText(winner.name.toUpperCase(), canvas.width / 2, 120, winnerColor, 36, "center");
+          } else {
+            drawNeonText("GAME OVER", canvas.width / 2, 100, "#f44", 36, "center");
+          }
 
-        drawNeonText(`Wave ${gameOverData.wave}`, canvas.width / 2, 160, "#0ff", 18, "center");
-        
-        // Final standings
-        ctx.font = "bold 14px 'Courier New', monospace";
-        ctx.textAlign = "center";
-        gameOverData.scores.forEach((s, i) => {
-          const color = PLAYER_COLORS[s.slot]?.main || "#fff";
-          const y = 200 + i * 30;
-          ctx.fillStyle = s.isWinner ? "#ffd700" : color;
-          ctx.fillText(`${i + 1}. ${s.name} - ${s.score} pts (${s.kills} kills)`, canvas.width / 2, y);
-        });
+          drawNeonText(`Wave ${gameOverData.wave}`, canvas.width / 2, 160, "#0ff", 18, "center");
+          
+          // Final standings
+          ctx.font = "bold 14px 'Courier New', monospace";
+          ctx.textAlign = "center";
+          gameOverData.scores.forEach((s, i) => {
+            const color = PLAYER_COLORS[s.slot]?.main || "#fff";
+            const y = 200 + i * 30;
+            ctx.fillStyle = s.isWinner ? "#ffd700" : color;
+            ctx.fillText(`${i + 1}. ${s.name} - ${s.score} pts (${s.kills} kills)`, canvas.width / 2, y);
+          });
+        }
 
         // Return to Menu button
         const btnW = 200;
@@ -1949,6 +1967,10 @@
   }, 300));
 
   readyBtn.onclick = () => { send({ t: "ready" }); };
+  soloBtn.onclick = () => { 
+    isSolo = true;
+    send({ t: "startSolo" }); 
+  };
   launchBtn.onclick = () => { 
     // Any ready player can start when all are ready
     const me = lobbyPlayers.find(p => p.id === myId);
