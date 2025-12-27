@@ -93,6 +93,15 @@
   let waitingFor = [];
   let gameOverData = null;
 
+  // Chat system
+  let chatMessages = [];
+  let chatOpen = false; // In-game chat popup state
+  let chatUnread = 0; // Unread message count
+  let chatInput = ""; // Current input text
+  let chatInputFocused = false;
+  let lastReadTimestamp = 0; // Track when chat was last viewed
+  let gameChatInputText = ""; // In-game chat input
+
   // Input
   let mouseX = 0;
   let mouseY = 0;
@@ -327,6 +336,28 @@
         gameOverData = msg;
         buildMenuOpen = null;
         break;
+
+      case "chatHistory":
+        chatMessages = msg.messages || [];
+        lastReadTimestamp = Date.now();
+        chatUnread = 0;
+        updateChatUI();
+        break;
+
+      case "chatMsg":
+        chatMessages.push({
+          id: msg.id,
+          from: msg.from,
+          text: msg.text,
+          timestamp: msg.timestamp
+        });
+        if (chatMessages.length > 50) chatMessages.shift();
+        // Count as unread if chat is closed (in game) or we're in game
+        if (phase !== "lobby" && phase !== "menu" && !chatOpen) {
+          chatUnread++;
+        }
+        updateChatUI();
+        break;
     }
   }
 
@@ -406,6 +437,66 @@
     });
   }
 
+  // ===== Chat System =====
+  function updateChatUI() {
+    const lobbyChatContainer = document.getElementById("lobbyChatContainer");
+    const lobbyChatMessages = document.getElementById("lobbyChatMessages");
+    
+    if (lobbyChatMessages) {
+      lobbyChatMessages.innerHTML = "";
+      for (const msg of chatMessages) {
+        const div = document.createElement("div");
+        div.className = "chat-message";
+        const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        div.innerHTML = `<span class="chat-time">${time}</span> <span class="chat-name">${escapeHtml(msg.from)}:</span> <span class="chat-text">${escapeHtml(msg.text)}</span>`;
+        lobbyChatMessages.appendChild(div);
+      }
+      lobbyChatMessages.scrollTop = lobbyChatMessages.scrollHeight;
+    }
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  function sendChatMessage(text) {
+    if (!text.trim() || !connected) return;
+    send({ t: "chat", text: text.trim() });
+  }
+
+  function toggleGameChat() {
+    chatOpen = !chatOpen;
+    if (chatOpen) {
+      chatUnread = 0;
+      lastReadTimestamp = Date.now();
+    }
+  }
+
+  // Setup lobby chat input
+  const lobbyChatInput = document.getElementById("lobbyChatInput");
+  const lobbyChatSend = document.getElementById("lobbyChatSend");
+  
+  if (lobbyChatInput) {
+    lobbyChatInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendChatMessage(lobbyChatInput.value);
+        lobbyChatInput.value = "";
+      }
+    });
+    lobbyChatInput.addEventListener("focus", () => { chatInputFocused = true; });
+    lobbyChatInput.addEventListener("blur", () => { chatInputFocused = false; });
+  }
+  
+  if (lobbyChatSend) {
+    lobbyChatSend.addEventListener("click", () => {
+      sendChatMessage(lobbyChatInput.value);
+      lobbyChatInput.value = "";
+    });
+  }
+
   // ===== Canvas =====
   function resizeCanvas() {
     canvas.width = window.innerWidth;
@@ -422,7 +513,77 @@
   canvas.addEventListener("touchmove", (e) => { e.preventDefault(); if (e.touches[0]) { mouseX = e.touches[0].clientX; mouseY = e.touches[0].clientY; } });
   canvas.addEventListener("touchend", (e) => { e.preventDefault(); mouseDown = false; });
 
+  // Keyboard handling for in-game chat
+  let gameChatTyping = false;
+  
+  document.addEventListener("keydown", (e) => {
+    // Don't handle if in lobby chat input
+    if (chatInputFocused) return;
+    
+    // Only handle in-game
+    if (phase !== "playing" && phase !== "upgrades") return;
+    
+    // Escape to close chat
+    if (e.key === "Escape" && chatOpen) {
+      chatOpen = false;
+      gameChatTyping = false;
+      gameChatInputText = "";
+      return;
+    }
+    
+    // T to open chat and start typing
+    if (e.key === "t" || e.key === "T") {
+      if (!chatOpen) {
+        chatOpen = true;
+        chatUnread = 0;
+      }
+      gameChatTyping = true;
+      e.preventDefault();
+      return;
+    }
+    
+    // Enter to send message when typing
+    if (e.key === "Enter" && gameChatTyping && gameChatInputText.trim()) {
+      sendChatMessage(gameChatInputText);
+      gameChatInputText = "";
+      e.preventDefault();
+      return;
+    }
+    
+    // Backspace when typing
+    if (e.key === "Backspace" && gameChatTyping) {
+      gameChatInputText = gameChatInputText.slice(0, -1);
+      e.preventDefault();
+      return;
+    }
+    
+    // Regular characters when typing
+    if (gameChatTyping && e.key.length === 1 && gameChatInputText.length < 200) {
+      gameChatInputText += e.key;
+      e.preventDefault();
+      return;
+    }
+  });
+
   function handleClick() {
+    // Handle in-game chat button click
+    if ((phase === "playing" || phase === "upgrades") && window.gameChatBtnBounds) {
+      const btn = window.gameChatBtnBounds;
+      if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) {
+        toggleGameChat();
+        return;
+      }
+    }
+    
+    // Handle chat close button
+    if (chatOpen && window.gameChatCloseBounds) {
+      const btn = window.gameChatCloseBounds;
+      if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) {
+        chatOpen = false;
+        return;
+      }
+    }
+    
     // Handle game over return to menu button
     if (phase === "gameover" && gameOverData && gameOverData.menuBtnBounds) {
       const btn = gameOverData.menuBtnBounds;
@@ -1945,6 +2106,139 @@
         
         // Store button bounds for click handling
         gameOverData.menuBtnBounds = { x: btnX, y: btnY, w: btnW, h: btnH };
+      }
+
+      // ===== In-Game Chat UI =====
+      if (phase === "playing" || phase === "upgrades") {
+        const chatBtnSize = 40;
+        const chatBtnX = 15;
+        const chatBtnY = canvas.height - chatBtnSize - 15;
+        
+        // Draw chat toggle button
+        ctx.fillStyle = chatOpen ? "rgba(0,255,255,0.3)" : "rgba(30,30,50,0.8)";
+        ctx.strokeStyle = chatUnread > 0 && !chatOpen ? "#ff0" : "#0ff";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(chatBtnX, chatBtnY, chatBtnSize, chatBtnSize, 8);
+        ctx.fill();
+        ctx.stroke();
+        
+        // Chat icon
+        ctx.fillStyle = chatUnread > 0 && !chatOpen ? "#ff0" : "#fff";
+        ctx.font = "bold 20px Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("💬", chatBtnX + chatBtnSize/2, chatBtnY + chatBtnSize/2);
+        
+        // Unread badge
+        if (chatUnread > 0 && !chatOpen) {
+          ctx.fillStyle = "#f44";
+          ctx.beginPath();
+          ctx.arc(chatBtnX + chatBtnSize - 5, chatBtnY + 8, 10, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#fff";
+          ctx.font = "bold 11px Arial";
+          ctx.fillText(chatUnread > 9 ? "9+" : chatUnread, chatBtnX + chatBtnSize - 5, chatBtnY + 9);
+          
+          // Pulse animation for unread
+          const pulse = Math.sin(time * 5) * 0.3 + 0.7;
+          ctx.strokeStyle = `rgba(255,255,0,${pulse})`;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.roundRect(chatBtnX - 2, chatBtnY - 2, chatBtnSize + 4, chatBtnSize + 4, 10);
+          ctx.stroke();
+        }
+        
+        // Store chat button bounds
+        window.gameChatBtnBounds = { x: chatBtnX, y: chatBtnY, w: chatBtnSize, h: chatBtnSize };
+        
+        // Draw chat popup if open
+        if (chatOpen) {
+          const chatW = 280;
+          const chatH = 250;
+          const chatX = 15;
+          const chatY = canvas.height - chatH - chatBtnSize - 25;
+          
+          // Chat window background
+          ctx.fillStyle = "rgba(10,10,30,0.95)";
+          ctx.strokeStyle = "#0ff";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.roundRect(chatX, chatY, chatW, chatH, 10);
+          ctx.fill();
+          ctx.stroke();
+          
+          // Chat header
+          ctx.fillStyle = "rgba(0,255,255,0.15)";
+          ctx.beginPath();
+          ctx.roundRect(chatX, chatY, chatW, 30, [10, 10, 0, 0]);
+          ctx.fill();
+          
+          ctx.fillStyle = "#0ff";
+          ctx.font = "bold 12px Orbitron, sans-serif";
+          ctx.textAlign = "left";
+          ctx.textBaseline = "middle";
+          ctx.fillText("💬 CHAT", chatX + 12, chatY + 15);
+          
+          // Close button
+          ctx.fillStyle = "#f44";
+          ctx.font = "bold 16px Arial";
+          ctx.textAlign = "center";
+          ctx.fillText("✕", chatX + chatW - 18, chatY + 15);
+          window.gameChatCloseBounds = { x: chatX + chatW - 30, y: chatY, w: 30, h: 30 };
+          
+          // Messages area
+          const msgAreaY = chatY + 35;
+          const msgAreaH = chatH - 75;
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(chatX + 5, msgAreaY, chatW - 10, msgAreaH);
+          ctx.clip();
+          
+          ctx.font = "13px Rajdhani, sans-serif";
+          ctx.textAlign = "left";
+          ctx.textBaseline = "top";
+          
+          const lineHeight = 18;
+          const maxLines = Math.floor(msgAreaH / lineHeight);
+          const recentMessages = chatMessages.slice(-maxLines);
+          
+          for (let i = 0; i < recentMessages.length; i++) {
+            const msg = recentMessages[i];
+            const y = msgAreaY + i * lineHeight + 5;
+            const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            
+            ctx.fillStyle = "#666";
+            ctx.fillText(time, chatX + 8, y);
+            
+            ctx.fillStyle = "#0ff";
+            const nameText = msg.from + ":";
+            ctx.fillText(nameText, chatX + 48, y);
+            
+            ctx.fillStyle = "#fff";
+            const nameWidth = ctx.measureText(nameText).width;
+            ctx.fillText(msg.text.slice(0, 30), chatX + 52 + nameWidth, y);
+          }
+          ctx.restore();
+          
+          // Input area hint
+          ctx.fillStyle = "rgba(0,0,0,0.5)";
+          ctx.beginPath();
+          ctx.roundRect(chatX + 5, chatY + chatH - 35, chatW - 10, 28, 5);
+          ctx.fill();
+          ctx.strokeStyle = "#444";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          
+          ctx.fillStyle = "#888";
+          ctx.font = "12px Rajdhani, sans-serif";
+          ctx.textAlign = "left";
+          ctx.textBaseline = "middle";
+          ctx.fillText(gameChatInputText || "Press T to type...", chatX + 12, chatY + chatH - 21);
+          
+          window.gameChatInputBounds = { x: chatX + 5, y: chatY + chatH - 35, w: chatW - 10, h: 28 };
+          window.gameChatBounds = { x: chatX, y: chatY, w: chatW, h: chatH };
+        }
       }
     } catch (err) {
       console.error('Draw error:', err);
