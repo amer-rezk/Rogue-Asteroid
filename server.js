@@ -460,6 +460,7 @@ function startGame() {
       p.turretAngle = -Math.PI / 2;
       p.score = 0;
       p.kills = 0;
+      p.damageDealt = 0;
       p.hp = BASE_HP_PER_PLAYER;
       p.maxHp = BASE_HP_PER_PLAYER;
       p.ready = false;
@@ -1001,6 +1002,11 @@ function tick() {
           addDamageNumber(m.x, m.y - m.r, b.dmg, b.isCrit);
           const owner = players.get(b.ownerId);
           
+          // Track damage dealt
+          if (owner) {
+            owner.damageDealt = (owner.damageDealt || 0) + b.dmg;
+          }
+          
           if (m.hp <= 0) {
             m.dead = true;
             createExplosion(m.x, m.y, 25, ATTACK_TYPES[m.attackType]?.color || "#fa0");
@@ -1106,6 +1112,7 @@ function tick() {
           isManual: !!p.manualShooting,
           towers: p.towers,
           kills: p.kills || 0,
+          damageDealt: p.damageDealt || 0,
           upgrades: {
             shieldActive: p.upgrades?.shieldActive ?? 0,
             slowfield: !!p.upgrades?.slowfield,
@@ -1151,7 +1158,7 @@ wss.on("connection", (ws) => {
     manualShooting: false,
     upgrades: {},
     towers: [null, null, null, null],
-    gold: 0, cooldown: 0, score: 0, ready: false,
+    gold: 0, cooldown: 0, score: 0, ready: false, damageDealt: 0,
     hp: BASE_HP_PER_PLAYER,
     maxHp: BASE_HP_PER_PLAYER,
     kills: 0,
