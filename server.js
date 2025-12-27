@@ -255,8 +255,9 @@ function lobbySnapshot() {
       name: p.name || `Player ${p.slot + 1}`,
       ready: !!p.ready
     }));
+  const readyCount = list.filter(p => p.ready).length;
   const allReady = list.length > 0 && list.every(p => p.ready);
-  return { players: list, hostId, allReady, leaderboard };
+  return { players: list, hostId, allReady, readyCount, leaderboard };
 }
 
 // ===== Roguelike Upgrades System =====
@@ -1336,6 +1337,31 @@ wss.on("connection", (ws) => {
       if (phase === "lobby" && p.ready) {
         const snap = lobbySnapshot();
         if (snap.allReady) startGame();
+      }
+      return;
+    }
+    if (msg.t === "forceStart") {
+      // Force start with only ready players (kick idle ones)
+      if (phase === "lobby" && p.ready) {
+        const readyPlayers = Array.from(players.entries()).filter(([_, pl]) => pl.ready);
+        if (readyPlayers.length >= 1) {
+          // Kick non-ready players
+          const idlePlayers = Array.from(players.entries()).filter(([_, pl]) => !pl.ready);
+          for (const [idleId, idlePlayer] of idlePlayers) {
+            safeSend(idlePlayer.ws, { t: "kicked", reason: "Game started without you (idle)" });
+            idlePlayer.ws.close();
+            players.delete(idleId);
+          }
+          // Reassign slots for remaining players
+          const remaining = Array.from(players.values()).sort((a, b) => a.slot - b.slot);
+          remaining.forEach((pl, i) => { pl.slot = i; });
+          // Update host if needed
+          if (!players.has(hostId)) {
+            hostId = players.size > 0 ? Array.from(players.keys())[0] : null;
+          }
+          recomputeWorld();
+          startGame();
+        }
       }
       return;
     }
