@@ -158,11 +158,23 @@
     if (statusText) statusText.textContent = "CONNECTING...";
     if (statusLED) statusLED.className = "led";
 
-    if (ws) try { ws.close(); } catch { }
+    console.log("[CLIENT] Attempting to connect to:", DEFAULT_SERVER);
 
-    ws = new WebSocket(DEFAULT_SERVER);
+    if (ws) {
+      console.log("[CLIENT] Closing existing WebSocket");
+      try { ws.close(); } catch { }
+    }
+
+    try {
+      ws = new WebSocket(DEFAULT_SERVER);
+      console.log("[CLIENT] WebSocket created, readyState:", ws.readyState);
+    } catch (err) {
+      console.error("[CLIENT] WebSocket creation failed:", err);
+      return;
+    }
 
     ws.onopen = () => {
+      console.log("[CLIENT] WebSocket OPEN, readyState:", ws.readyState);
       connected = true;
       if (statusText) {
         statusText.textContent = "ONLINE";
@@ -173,10 +185,12 @@
       lobbyEl.style.display = "block";
 
       const name = nameInput.value.trim() || `Player`;
+      console.log("[CLIENT] Sending setName:", name);
       if (name) ws.send(JSON.stringify({ t: "setName", name }));
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+      console.log("[CLIENT] WebSocket CLOSED, code:", event.code, "reason:", event.reason, "wasClean:", event.wasClean);
       connected = false;
       const currentStatus = statusText?.textContent || "";
       const wasRejected = currentStatus.includes("PROGRESS") || currentStatus.includes("FULL");
@@ -200,19 +214,27 @@
       }
     };
 
-    ws.onerror = () => {
+    ws.onerror = (err) => {
+      console.error("[CLIENT] WebSocket ERROR:", err);
       if (statusText) statusText.textContent = "ERROR";
       if (statusLED) statusLED.className = "led red";
     };
 
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
+      if (msg.t !== "state") {
+        console.log("[CLIENT] Received message:", msg.t, msg);
+      }
       handleMessage(msg);
     };
   }
 
   function send(obj) {
-    if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify(obj));
+    } else {
+      console.warn("[CLIENT] Cannot send, WebSocket not ready. readyState:", ws?.readyState);
+    }
   }
 
   function handleMessage(msg) {
