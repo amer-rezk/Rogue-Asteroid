@@ -45,34 +45,38 @@ const ATTACK_TYPES = {
   swarm: { 
     name: "Swarm", 
     cost: 15, 
-    count: 3, 
-    hp: 2, // 50% more HP
+    count: 4, // Increased from 3
+    baseHp: 1,
+    hpScale: 1.2, // Scales 20% faster than wave
     size: "small", 
-    speed: 1.2,
-    desc: "3 fast weak asteroids",
+    speed: 1.3,
+    desc: "4 fast weak asteroids",
     color: "#ffcc00",
     icon: "🐝"
   },
   bruiser: { 
     name: "Bruiser", 
-    cost: 40, 
+    cost: 45, 
     count: 1, 
-    hp: 9, // 50% more HP
+    baseHp: 5,
+    hpScale: 1.5, // Scales 50% faster than wave - very tanky
     size: "large", 
-    speed: 0.7,
-    desc: "Tanky asteroid",
+    speed: 0.6,
+    desc: "Very tanky asteroid",
     color: "#ff4444",
     icon: "🪨"
   },
   bomber: { 
     name: "Bomber", 
-    cost: 60, 
+    cost: 55, 
     count: 1, 
-    hp: 5, // 50% more HP
+    baseHp: 3,
+    hpScale: 1.0, // Normal scaling
     size: "medium", 
-    speed: 0.9,
+    speed: 1.0,
     explosive: true,
-    desc: "Explodes on death",
+    explosionDamage: 2, // Damage dealt when exploding
+    desc: "Explodes dealing damage",
     color: "#ff00ff",
     icon: "💣"
   },
@@ -80,23 +84,25 @@ const ATTACK_TYPES = {
     name: "Splitter", 
     cost: 50, 
     count: 1, 
-    hp: 6, // 50% more HP
+    baseHp: 4,
+    hpScale: 1.3, // Scales 30% faster
     size: "large", 
-    speed: 0.8,
-    splits: 3,
-    desc: "Splits into 3 on death",
+    speed: 0.75,
+    splits: 4, // Now splits into 4
+    desc: "Splits into 4 on death",
     color: "#00ffff",
     icon: "💎"
   },
   ghost: {
     name: "Ghost",
-    cost: 35,
+    cost: 40,
     count: 2,
-    hp: 3, // 50% more HP
+    baseHp: 2,
+    hpScale: 1.2,
     size: "medium",
-    speed: 1.0,
+    speed: 1.1,
     phasing: true,
-    desc: "Phases through some hits",
+    desc: "Phases through hits",
     color: "#8800ff",
     icon: "👻"
   }
@@ -130,6 +136,11 @@ let upgradePhaseStart = 0; // Timestamp when upgrade phase started
 const UPGRADE_TIMEOUT = 10; // Seconds to choose upgrade
 let waveClearedTime = 0; // Timestamp when last asteroid was destroyed
 const WAVE_CLEAR_DELAY = 1000; // 1 second delay before upgrade phase
+
+// Staggered spawn system
+let spawnQueue = []; // Asteroids waiting to spawn
+let spawnTimer = 0; // Time until next spawn
+const SPAWN_INTERVAL = 0.3; // Seconds between spawns (300ms)
 
 // Leaderboard - persists to file (survives server restarts)
 let leaderboard = []; // { name, score, kills, wave, date }
@@ -356,8 +367,10 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null) {
   const r = sizeMap[type] || 12;
   const speedMult = attackType ? (ATTACK_TYPES[attackType]?.speed || 1) : 1;
   
+  // Speed increases 2% per wave starting from wave 5
+  const waveSpeedBonus = wave >= 5 ? 1 + (wave - 5) * 0.02 : 1;
   const baseVy = rand(25, 40) * speedMult;
-  const vy = baseVy * (1 + wave * 0.015);
+  const vy = baseVy * waveSpeedBonus;
   const vx = rand(-15, 15);
 
   // FTL entry - asteroids start in hyperspace mode
@@ -374,7 +387,7 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null) {
     targetSlot: targetSlot,
     attackType: attackType,
     phaseTimer: attackType === "ghost" ? 0 : null,
-    splits: attackType === "splitter" ? 3 : 0,
+    splits: attackType === "splitter" ? (ATTACK_TYPES.splitter?.splits || 4) : 0,
     explosive: attackType === "bomber",
     // FTL state
     inFTL: true,
@@ -388,6 +401,8 @@ function spawnWave() {
   bullets = [];
   particles = [];
   damageNumbers = [];
+  spawnQueue = []; // Reset spawn queue
+  spawnTimer = 0;
 
   // Reset shields
   for (const id of lockedSlots) {
@@ -397,7 +412,10 @@ function spawnWave() {
     }
   }
 
-  // Spawn natural wave asteroids (fewer in PvP mode)
+  // Calculate wave HP bonus for natural asteroids (used for attack scaling reference)
+  const waveHpScale = wave * 0.8;
+
+  // Queue natural wave asteroids (fewer in PvP mode)
   const playerCount = lockedSlots.length;
   const baseCount = WAVE_BASE_COUNT + Math.floor(wave * WAVE_COUNT_SCALE * 0.5);
   
@@ -406,8 +424,6 @@ function spawnWave() {
     const { x0, x1 } = segmentBounds(targetSlot);
     
     // Weighted size selection - large asteroids are rarer, especially early
-    // Base chances: small 50%, medium 35%, large 15%
-    // Large chance increases slightly with wave (up to ~30% by wave 10)
     const largeChance = Math.min(0.15 + wave * 0.015, 0.30);
     const mediumChance = 0.35;
     const sizeRoll = Math.random();
@@ -424,17 +440,17 @@ function spawnWave() {
     }
     
     const x = rand(x0 + r + 20, x1 - r - 20);
-    // Spawn at top of screen (y=0 to slight negative) - FTL will handle entry
     const y = rand(-r - 10, -r);
 
-    // Reduced base HP by 25%, but faster scaling (0.5 -> 0.8)
+    // Natural asteroid HP
     const baseHpVal = type === "large" ? 3 : type === "medium" ? 1.5 : 0.75;
-    const waveHpBonus = Math.floor(wave * 0.8);
+    const hp = Math.ceil(baseHpVal + waveHpScale);
 
-    missiles.push(createAsteroid(x, y, type, Math.ceil(baseHpVal + waveHpBonus), targetSlot, null));
+    // Queue for staggered spawning
+    spawnQueue.push({ x, y, type, hp, targetSlot, attackType: null });
   }
 
-  // Spawn player-purchased attack asteroids
+  // Queue player-purchased attack asteroids (spawn slightly after natural ones)
   for (const [targetSlot, attacks] of attackQueue.entries()) {
     const { x0, x1 } = segmentBounds(targetSlot);
     
@@ -446,13 +462,22 @@ function spawnWave() {
         const sizeMap = { small: 10, medium: 13, large: 17 };
         const r = sizeMap[attackDef.size] || 12;
         const x = rand(x0 + r + 30, x1 - r - 30);
-        // Spawn at top of screen
         const y = rand(-r - 20, -r);
 
-        // Player attacks also scale faster (0.3 -> 0.5)
-        missiles.push(createAsteroid(x, y, attackDef.size, attackDef.hp + Math.floor(wave * 0.5), targetSlot, attack.type));
+        // Attack HP: base HP + (wave * hpScale)
+        // hpScale > 1.0 means attack scales FASTER than natural asteroids
+        const attackHp = Math.ceil(attackDef.baseHp + (wave * attackDef.hpScale));
+
+        // Queue for staggered spawning
+        spawnQueue.push({ x, y, type: attackDef.size, hp: attackHp, targetSlot, attackType: attack.type });
       }
     }
+  }
+
+  // Shuffle the spawn queue for variety
+  for (let i = spawnQueue.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [spawnQueue[i], spawnQueue[j]] = [spawnQueue[j], spawnQueue[i]];
   }
 
   // Clear attack queue
@@ -774,6 +799,20 @@ function tick() {
   if (phase !== "playing") return;
 
   try {
+    // Process spawn queue (staggered asteroid spawning)
+    if (spawnQueue.length > 0) {
+      spawnTimer -= DT;
+      if (spawnTimer <= 0) {
+        // Spawn 1-2 asteroids at a time for variety
+        const spawnCount = Math.min(spawnQueue.length, Math.random() < 0.7 ? 1 : 2);
+        for (let i = 0; i < spawnCount && spawnQueue.length > 0; i++) {
+          const queued = spawnQueue.shift();
+          missiles.push(createAsteroid(queued.x, queued.y, queued.type, queued.hp, queued.targetSlot, queued.attackType));
+        }
+        spawnTimer = SPAWN_INTERVAL + rand(-0.1, 0.1); // Add slight randomness
+      }
+    }
+
     particles = particles.filter(p => {
       p.x += p.vx * DT;
       p.y += p.vy * DT;
@@ -1053,10 +1092,12 @@ function tick() {
             
             // Handle splitter
             if (m.splits > 0) {
+              // Split children HP scales with wave (weaker than parent)
+              const splitHp = Math.ceil(1 + wave * 0.4);
               for (let s = 0; s < m.splits; s++) {
                 const nx = m.x + rand(-30, 30);
                 const ny = m.y + rand(-20, 20);
-                missiles.push(createAsteroid(nx, ny, "small", 1, m.targetSlot, null));
+                missiles.push(createAsteroid(nx, ny, "small", splitHp, m.targetSlot, null));
               }
             }
           } else {
@@ -1096,8 +1137,8 @@ function tick() {
     // Check for game over (PvP: last player standing)
     if (checkGameOver()) return;
 
-    // Check if wave is complete (with 1 second delay for visual clarity)
-    if (missiles.length === 0) {
+    // Check if wave is complete (all asteroids destroyed AND spawn queue empty)
+    if (missiles.length === 0 && spawnQueue.length === 0) {
       if (waveClearedTime === 0) {
         waveClearedTime = Date.now();
       } else if (Date.now() - waveClearedTime >= WAVE_CLEAR_DELAY) {
@@ -1106,7 +1147,7 @@ function tick() {
         return;
       }
     } else {
-      waveClearedTime = 0; // Reset if new asteroids appear
+      waveClearedTime = 0; // Reset if new asteroids appear or queue not empty
     }
 
     broadcast({
