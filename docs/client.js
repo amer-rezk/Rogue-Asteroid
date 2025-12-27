@@ -108,6 +108,12 @@
   let hoveredAttack = null;
   let incomingAttacks = [];
   let recentAttackSent = null; // For feedback animation
+  let attackQuantityMode = 1; // 1, 10, or "max"
+  let hoveredQuantityBtn = null; // Track which quantity button is hovered
+
+  // Upgrade reroll
+  let currentRerollCost = 10;
+  let hoveredReroll = false;
 
   // Visual
   let stars = [];
@@ -279,6 +285,7 @@
         upgradePicked = false;
         buildMenuOpen = null;
         if (msg.deadline) upgradeDeadline = msg.deadline;
+        if (msg.rerollCost !== undefined) currentRerollCost = msg.rerollCost;
         break;
 
       case "upgradePhase":
@@ -431,13 +438,28 @@
       return;
     }
 
+    // Handle reroll button click
+    if (phase === "upgrades" && hoveredReroll && !upgradePicked) {
+      const myPlayer = lastSnap?.players.find(p => p.id === myId);
+      if (myPlayer && myPlayer.gold >= currentRerollCost) {
+        send({ t: "rerollUpgrades" });
+      }
+      return;
+    }
+
+    // Handle quantity mode button clicks
+    if (hoveredQuantityBtn && phase === "playing") {
+      attackQuantityMode = hoveredQuantityBtn;
+      return;
+    }
+
     // Handle attack panel clicks (always visible, no popup)
     if (hoveredAttack && phase === "playing" && lastSnap && lastSnap.players.length > 1) {
       const myPlayer = lastSnap.players.find(p => p.id === myId);
       const atkDef = ATTACK_TYPES[hoveredAttack];
       if (myPlayer && atkDef && myPlayer.gold >= atkDef.cost) {
-        send({ t: "buyAttack", attackType: hoveredAttack });
-        recentAttackSent = { type: hoveredAttack, time: Date.now() };
+        send({ t: "buyAttack", attackType: hoveredAttack, quantity: attackQuantityMode });
+        recentAttackSent = { type: hoveredAttack, time: Date.now(), quantity: attackQuantityMode };
       }
       return;
     }
@@ -506,12 +528,18 @@
     const sh = canvas.height;
     const ww = world.width;
     const wh = world.height;
-    const scale = Math.min(sw / ww, sh / wh);
+    
+    // Reserve space for the right panel in multiplayer (when panel would be shown)
+    const playerCount = lastSnap?.players?.length || 1;
+    const panelReserve = playerCount > 1 ? 195 : 0; // 175 panel + 20 margin
+    const availableWidth = sw - panelReserve;
+    
+    const scale = Math.min(availableWidth / ww, sh / wh);
     const renderW = ww * scale;
     const renderH = wh * scale;
-    const offsetX = (sw - renderW) / 2;
+    const offsetX = (availableWidth - renderW) / 2;
     const offsetY = (sh - renderH) / 2;
-    return { sx: scale, sy: scale, offsetX, offsetY, renderW, renderH };
+    return { sx: scale, sy: scale, offsetX, offsetY, renderW, renderH, panelReserve };
   }
 
   function drawNeonText(text, x, y, color, size, align = "left") {
@@ -1320,26 +1348,66 @@
 
         // ===== ATTACK SPAWN PANEL =====
         if (isAlive) {
-          const attackPanelH = 255;
+          const attackPanelH = 295; // Increased for quantity buttons
           drawSectionPanel(panelX, currentY, panelW, attackPanelH, "rgba(255,68,68,0.5)", "⚔️ SEND ATTACKS", "#ff6666");
           
-          // Subtitle
-          ctx.font = "8px 'Courier New', monospace";
-          ctx.fillStyle = "#666";
-          ctx.textAlign = "center";
-          ctx.fillText("Targets random enemy", panelX + panelW / 2, currentY + 38);
+          // Quantity mode buttons (1x, 10x, MAX)
+          const qBtnW = (panelW - 24) / 3;
+          const qBtnH = 22;
+          const qBtnY = currentY + 32;
+          hoveredQuantityBtn = null;
+          
+          const quantityModes = [1, 10, "max"];
+          const quantityLabels = ["1x", "10x", "MAX"];
+          
+          quantityModes.forEach((mode, i) => {
+            const qBtnX = panelX + 6 + i * (qBtnW + 3);
+            const isSelected = attackQuantityMode === mode;
+            const isHovered = mouseX >= qBtnX && mouseX <= qBtnX + qBtnW && mouseY >= qBtnY && mouseY <= qBtnY + qBtnH;
+            
+            if (isHovered) hoveredQuantityBtn = mode;
+            
+            // Button background
+            ctx.fillStyle = isSelected ? "rgba(255,100,100,0.4)" : 
+                            isHovered ? "rgba(255,100,100,0.25)" : "rgba(40,40,60,0.6)";
+            ctx.strokeStyle = isSelected ? "#ff6666" : isHovered ? "#ff8888" : "#444";
+            ctx.lineWidth = isSelected ? 2 : 1;
+            ctx.beginPath();
+            ctx.roundRect(qBtnX, qBtnY, qBtnW, qBtnH, 4);
+            ctx.fill();
+            ctx.stroke();
+            
+            // Label
+            ctx.font = "bold 10px 'Courier New', monospace";
+            ctx.textAlign = "center";
+            ctx.fillStyle = isSelected ? "#fff" : "#999";
+            ctx.fillText(quantityLabels[i], qBtnX + qBtnW / 2, qBtnY + 15);
+          });
 
           // Attack buttons
           const attacks = Object.entries(ATTACK_TYPES);
           const btnH = 36;
           const btnGap = 3;
-          const startY = currentY + 46;
+          const startY = currentY + 62;
 
           attacks.forEach(([key, atk], i) => {
             const btnY = startY + i * (btnH + btnGap);
             const btnX = panelX + 6;
             const btnW = panelW - 12;
-            const canAfford = myGold >= atk.cost;
+            
+            // Calculate cost based on quantity mode
+            let displayCost = atk.cost;
+            let canAfford = myGold >= atk.cost;
+            let affordCount = Math.floor(myGold / atk.cost);
+            
+            if (attackQuantityMode === 10) {
+              displayCost = atk.cost * Math.min(10, affordCount);
+              canAfford = affordCount >= 1;
+            } else if (attackQuantityMode === "max") {
+              displayCost = atk.cost * affordCount;
+              canAfford = affordCount >= 1;
+            }
+            
             const isHovered = mouseX >= btnX && mouseX <= btnX + btnW && mouseY >= btnY && mouseY <= btnY + btnH;
 
             if (isHovered && canAfford) hoveredAttack = key;
@@ -1365,16 +1433,23 @@
             ctx.fillStyle = canAfford ? atk.color : "#444";
             ctx.fillText(atk.name.toUpperCase(), btnX + 28, btnY + 13);
 
-            // Description
+            // Description with count hint
             ctx.font = "8px 'Courier New', monospace";
             ctx.fillStyle = canAfford ? "rgba(255,255,255,0.5)" : "#333";
-            ctx.fillText(atk.desc, btnX + 28, btnY + 24);
+            let descText = atk.desc;
+            if (attackQuantityMode === 10 && affordCount > 0) {
+              descText = `×${Math.min(10, affordCount)}`;
+            } else if (attackQuantityMode === "max" && affordCount > 0) {
+              descText = `×${affordCount}`;
+            }
+            ctx.fillText(descText, btnX + 28, btnY + 24);
 
-            // Cost
+            // Cost (shows total for multi-buy)
             ctx.font = "bold 10px 'Courier New', monospace";
             ctx.textAlign = "right";
             ctx.fillStyle = canAfford ? "#ffd700" : "#444";
-            ctx.fillText(atk.cost + "g", btnX + btnW - 6, btnY + 20);
+            const costText = attackQuantityMode === 1 ? `${atk.cost}g` : `${displayCost}g`;
+            ctx.fillText(costText, btnX + btnW - 6, btnY + 20);
           });
 
           ctx.textAlign = "left";
@@ -1758,6 +1833,37 @@
               ctx.fillText("CLICK TO SELECT", cardX + cardW / 2, cardY + cardH - 30);
             }
           }
+          
+          // Reroll button below cards
+          const myPlayer = lastSnap?.players.find(p => p.id === myId);
+          const myGold = myPlayer?.gold || 0;
+          const canAffordReroll = myGold >= currentRerollCost;
+          
+          const rerollBtnW = 160;
+          const rerollBtnH = 36;
+          const rerollBtnX = canvas.width / 2 - rerollBtnW / 2;
+          const rerollBtnY = cardY + cardH + 25;
+          
+          const isRerollHovered = mouseX >= rerollBtnX && mouseX <= rerollBtnX + rerollBtnW && 
+                                  mouseY >= rerollBtnY && mouseY <= rerollBtnY + rerollBtnH;
+          hoveredReroll = isRerollHovered;
+          
+          // Reroll button background
+          ctx.fillStyle = isRerollHovered && canAffordReroll ? "rgba(100,180,255,0.35)" : 
+                          canAffordReroll ? "rgba(60,120,200,0.2)" : "rgba(40,40,60,0.3)";
+          ctx.strokeStyle = isRerollHovered && canAffordReroll ? "#7ae0ff" : 
+                            canAffordReroll ? "rgba(122,224,255,0.5)" : "#333";
+          ctx.lineWidth = isRerollHovered && canAffordReroll ? 2 : 1;
+          ctx.beginPath();
+          ctx.roundRect(rerollBtnX, rerollBtnY, rerollBtnW, rerollBtnH, 8);
+          ctx.fill();
+          ctx.stroke();
+          
+          // Reroll button text
+          ctx.font = "bold 12px 'Courier New', monospace";
+          ctx.textAlign = "center";
+          ctx.fillStyle = canAffordReroll ? "#7ae0ff" : "#555";
+          ctx.fillText(`🎲 REROLL (${currentRerollCost}g)`, canvas.width / 2, rerollBtnY + 23);
           
           ctx.textAlign = "left";
         } else {
