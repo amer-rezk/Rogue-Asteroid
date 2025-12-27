@@ -65,7 +65,6 @@
   const lobbyEl = document.getElementById("lobby");
   const playersEl = document.getElementById("players");
   const readyBtn = document.getElementById("readyBtn");
-  const soloBtn = document.getElementById("soloBtn");
   const launchBtn = document.getElementById("launchBtn");
   const statusLED = document.getElementById("statusLED");
   const statusText = document.getElementById("statusText");
@@ -79,7 +78,6 @@
   let mySlot = 0;
   let isHost = false;
   let connected = false;
-  let isSolo = false; // Track if we're in solo mode
 
   let phase = "menu";
   let world = { width: 360, height: 600, segmentWidth: 360 };
@@ -121,38 +119,6 @@
   let stars = [];
   let screenShake = 0;
   let time = 0;
-
-  // ===== SOLO MODE =====
-  // Solo mode uses LocalServer (from local-server.js) which runs the exact same
-  // game logic as the real server, just locally in the browser.
-  
-  function initSoloGame() {
-    isSolo = true;
-    myId = "solo";
-    mySlot = 0;
-    
-    // Start the local server - it will send messages via handleMessage
-    LocalServer.init(nameInput.value.trim() || "Player", handleMessage);
-  }
-  
-  function stopSoloGame() {
-    if (isSolo && LocalServer.tickInterval) {
-      LocalServer.stop();
-    }
-    isSolo = false;
-  }
-  
-  function soloReturnToMenu() {
-    stopSoloGame();
-    phase = "menu";
-    lastSnap = null;
-    upgradeOptions = [];
-    upgradePicked = false;
-    gameOverData = null;
-    wave = 0;
-    showMenu();
-    updateLobbyUI();
-  }
 
   // ===== Utilities =====
   function hexToRgba(hex, alpha) {
@@ -204,8 +170,7 @@
       }
       if (statusLED) statusLED.className = "led green";
 
-      // Show multiplayer buttons when connected
-      readyBtn.style.display = "inline-block";
+      lobbyEl.style.display = "block";
 
       const name = nameInput.value.trim() || `Player`;
       if (name) ws.send(JSON.stringify({ t: "setName", name }));
@@ -226,9 +191,7 @@
         if (statusText) statusText.textContent = "GAME IN PROGRESS - RETRYING...";
       }
 
-      // Hide multiplayer buttons when disconnected (solo still works)
-      readyBtn.style.display = "none";
-      launchBtn.style.display = "none";
+      lobbyEl.style.display = "none";
 
       if (!forcedDisconnect) {
         setTimeout(connect, 3000);
@@ -249,12 +212,7 @@
   }
 
   function send(obj) {
-    if (isSolo) {
-      // Route to local server
-      LocalServer.handleMessage(obj);
-    } else if (ws && ws.readyState === 1) {
-      ws.send(JSON.stringify(obj));
-    }
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
   }
 
   function handleMessage(msg) {
@@ -295,11 +253,10 @@
           wave = 0;
           buildMenuOpen = null;
           hoveredAttack = null;
-          isSolo = false;
           showMenu();
         }
         phase = "lobby";
-        readyBtn.style.display = connected ? "inline-block" : "none";
+        lobbyEl.style.display = "block";
         updateLobbyUI();
         break;
 
@@ -307,7 +264,6 @@
         phase = "playing";
         world = msg.world;
         wave = msg.wave;
-        isSolo = msg.solo || false;
         upgradeOptions = [];
         upgradePicked = false;
         buildMenuOpen = null;
@@ -389,23 +345,6 @@
 
   function updateLobbyUI() {
     playersEl.innerHTML = "";
-    
-    if (!connected) {
-      // Show offline message
-      const div = document.createElement("div");
-      div.className = "player-card";
-      div.innerHTML = `
-        <div class="player-info" style="text-align:center;width:100%">
-          <div class="player-name" style="color:#888">Not connected</div>
-          <div class="player-status">Play Solo or wait for server</div>
-        </div>
-      `;
-      playersEl.appendChild(div);
-      readyBtn.style.display = "none";
-      launchBtn.style.display = "none";
-      return;
-    }
-    
     for (const p of lobbyPlayers) {
       const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
       const isMe = p.id === myId;
@@ -421,11 +360,10 @@
       playersEl.appendChild(div);
     }
     const me = lobbyPlayers.find(p => p.id === myId);
-    readyBtn.style.display = "inline-block";
     readyBtn.textContent = me?.ready ? "✓ READY" : "READY UP";
     readyBtn.className = "btn" + (me?.ready ? " ready" : "");
     // Any ready player can launch the game when all are ready
-    launchBtn.style.display = me?.ready ? "inline-block" : "none";
+    launchBtn.style.display = me?.ready ? "block" : "none";
     launchBtn.disabled = !allReady;
     launchBtn.className = "btn launch" + (allReady ? "" : " disabled");
     
@@ -489,11 +427,7 @@
     if (phase === "gameover" && gameOverData && gameOverData.menuBtnBounds) {
       const btn = gameOverData.menuBtnBounds;
       if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) {
-        if (isSolo) {
-          soloReturnToMenu();
-        } else {
-          send({ t: "returnToLobby" });
-        }
+        send({ t: "returnToLobby" });
         return;
       }
     }
@@ -519,8 +453,8 @@
       return;
     }
 
-    // Handle attack panel clicks (always visible, no popup) - PvP only
-    if (!isSolo && hoveredAttack && phase === "playing" && lastSnap && lastSnap.players.length > 1) {
+    // Handle attack panel clicks (always visible, no popup)
+    if (hoveredAttack && phase === "playing" && lastSnap && lastSnap.players.length > 1) {
       const myPlayer = lastSnap.players.find(p => p.id === myId);
       const atkDef = ATTACK_TYPES[hoveredAttack];
       if (myPlayer && atkDef && myPlayer.gold >= atkDef.cost) {
@@ -597,7 +531,7 @@
     
     // Reserve space for the right panel in multiplayer (when panel would be shown)
     const playerCount = lastSnap?.players?.length || 1;
-    const panelReserve = (!isSolo && playerCount > 1) ? 195 : 0; // 175 panel + 20 margin
+    const panelReserve = (playerCount > 1) ? 195 : 0; // 175 panel + 20 margin
     const availableWidth = sw - panelReserve;
     
     const scale = Math.min(availableWidth / ww, sh / wh);
@@ -1288,8 +1222,8 @@
       }
       ctx.textAlign = "left";
 
-      // ===== UNIFIED RIGHT PANEL (Attacks + DPS Meters) - PvP Only =====
-      if (phase === "playing" && lastSnap && lastSnap.players.length > 1 && !isSolo) {
+      // ===== UNIFIED RIGHT PANEL (Attacks + DPS Meters) =====
+      if (phase === "playing" && lastSnap && lastSnap.players.length > 1) {
         hoveredAttack = null;
         const panelW = 175;
         const panelX = canvas.width - panelW - 12;
@@ -2018,7 +1952,6 @@
   }
 
   // Auto-connect
-  updateLobbyUI(); // Show initial state
   connect();
   draw();
 
@@ -2030,10 +1963,6 @@
   }, 300));
 
   readyBtn.onclick = () => { send({ t: "ready" }); };
-  soloBtn.onclick = () => { 
-    // Solo mode runs entirely locally - no server needed
-    initSoloGame();
-  };
   launchBtn.onclick = () => { 
     // Any ready player can start when all are ready
     const me = lobbyPlayers.find(p => p.id === myId);
