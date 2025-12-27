@@ -116,6 +116,7 @@ app.get("/health", (_, res) => res.json({ ok: true }));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 
+// Single room for now - players see when room is full
 const players = new Map();
 
 let hostId = null;
@@ -133,10 +134,9 @@ let damageNumbers = [];
 
 let upgradePicks = new Map();
 let attackQueue = new Map(); // Queued attacks for next wave: Map<targetSlot, attacks[]>
-let upgradePhaseStart = 0; // Timestamp when upgrade phase started
-const UPGRADE_TIMEOUT = 10; // Seconds to choose upgrade
+let pendingUpgrades = new Map(); // Per-player upgrade queue: Map<playerId, upgradeOptions[][]>
 let waveClearedTime = 0; // Timestamp when last asteroid was destroyed
-const WAVE_CLEAR_DELAY = 1000; // 1 second delay before upgrade phase
+const WAVE_CLEAR_DELAY = 500; // 0.5 second delay before next wave starts
 
 // Staggered spawn system
 let spawnQueue = []; // Asteroids waiting to spawn
@@ -278,7 +278,7 @@ const UPGRADE_DEFS = [
   { id: "rico", name: "Ricochet", cat: "utility", icon: "🎱", desc: "Bounces {val} times", stat: "ricochet", base: 1, type: "add" },
   { id: "pierce", name: "Railgun", cat: "utility", icon: "📌", desc: "Pierces {val} enemies", stat: "pierce", base: 1, type: "add" },
   { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "Chain Lightning", stat: "chain", base: 1, type: "bool" },
-  { id: "shield", name: "Shield Gen", cat: "defense", icon: "🛡️", desc: "Block {val} Hits/Wave", stat: "shield", base: 1, type: "add" },
+  { id: "shield", name: "Shield Gen", cat: "defense", icon: "🛡️", desc: "+{val} Shield (one-time)", stat: "shield", base: 1, type: "add" },
   { id: "slow", name: "Grav Field", cat: "defense", icon: "🌀", desc: "Slow Enemies", stat: "slowfield", base: 1, type: "bool" },
   // PvP specific upgrades
   { id: "income", name: "War Profiteer", cat: "economy", icon: "💰", desc: "+{val}% Gold Gain", stat: "goldMult", base: 0.12, type: "mult" },
@@ -363,7 +363,8 @@ function applyUpgrade(player, card) {
     u.multishotDmgMult = (u.multishotDmgMult || 1) * (1 - eff.penalty);
   }
   if (eff.stat === "shield") {
-    u.shieldActive = u.shield;
+    // Add shields to active count (they don't regenerate)
+    u.shieldActive = (u.shieldActive || 0) + eff.val;
   }
 }
 
@@ -379,13 +380,17 @@ function generateAsteroidShape(baseRadius) {
   return points;
 }
 
-function createAsteroid(x, y, type, hp, targetSlot, attackType = null) {
+function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId = null) {
   const sizeMap = { small: 10, medium: 13, large: 17 };
   const r = sizeMap[type] || 12;
   const speedMult = attackType ? (ATTACK_TYPES[attackType]?.speed || 1) : 1;
   
   // Speed increases 2% per wave starting from wave 5
-  const waveSpeedBonus = wave >= 5 ? 1 + (wave - 5) * 0.02 : 1;
+  // After wave 20: additional 3% per wave for more pressure
+  let waveSpeedBonus = wave >= 5 ? 1 + (wave - 5) * 0.02 : 1;
+  if (wave >= 20) {
+    waveSpeedBonus += (wave - 19) * 0.03; // Extra 3% per wave past 20
+  }
   const baseVy = rand(25, 40) * speedMult;
   const vy = baseVy * waveSpeedBonus;
   const vx = rand(-15, 15);
@@ -403,6 +408,7 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null) {
     vertices: generateAsteroidShape(r),
     targetSlot: targetSlot,
     attackType: attackType,
+    senderId: senderId, // Track who sent this attack for gold reward
     phaseTimer: attackType === "ghost" ? 0 : null,
     splits: attackType === "splitter" ? (ATTACK_TYPES.splitter?.splits || 4) : 0,
     explosive: attackType === "bomber",
@@ -421,25 +427,30 @@ function spawnWave() {
   spawnQueue = []; // Reset spawn queue
   spawnTimer = 0;
 
-  // Reset shields and wave damage
+  // Reset wave damage for each player (shields NO LONGER reset)
   for (const id of lockedSlots) {
     const p = players.get(id);
     if (p) {
-      if (p.upgrades?.shield) {
-        p.upgrades.shieldActive = p.upgrades.shield;
-      }
       p.waveDamage = 0; // Reset wave damage for each new wave
     }
   }
 
-  // Calculate wave HP bonus for natural asteroids (used for attack scaling reference)
-  const waveHpScale = wave * 0.8;
+  // Calculate extreme scaling multiplier for waves 20+
+  // Waves 1-19: normal, Waves 20+: exponential growth
+  const extremeScaleMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
+  
+  // Calculate wave HP bonus for natural asteroids
+  const baseWaveHp = wave * 0.8;
+  const waveHpScale = baseWaveHp * extremeScaleMult;
 
   // Queue natural wave asteroids - EQUAL distribution per player
   const playerCount = lockedSlots.length;
   // Solo mode or single player gets full asteroid count, PvP splits between players
   const baseTotal = WAVE_BASE_COUNT + Math.floor(wave * WAVE_COUNT_SCALE);
-  const totalCount = (soloMode || playerCount === 1) ? baseTotal : Math.floor(baseTotal * 0.5);
+  // Increase asteroid count after wave 20 (10% more per wave past 20)
+  const countMult = wave >= 20 ? 1 + (wave - 19) * 0.1 : 1;
+  const scaledTotal = Math.floor(baseTotal * countMult);
+  const totalCount = (soloMode || playerCount === 1) ? scaledTotal : Math.floor(scaledTotal * 0.5);
   const asteroidsPerPlayer = Math.max(1, Math.floor(totalCount / playerCount));
   
   // Spawn equal asteroids for each player
@@ -449,8 +460,12 @@ function spawnWave() {
     
     for (let i = 0; i < asteroidsPerPlayer; i++) {
       // Weighted size selection - large asteroids are rarer, especially early
-      const largeChance = Math.min(0.15 + wave * 0.015, 0.30);
-      const mediumChance = 0.35;
+      // After wave 20: significantly more large asteroids
+      let largeChance = Math.min(0.15 + wave * 0.015, 0.30);
+      if (wave >= 20) {
+        largeChance = Math.min(0.30 + (wave - 19) * 0.02, 0.60); // Up to 60% large
+      }
+      const mediumChance = wave >= 20 ? 0.25 : 0.35; // Less medium, more large
       const sizeRoll = Math.random();
       let type, r;
       if (sizeRoll < largeChance) {
@@ -490,12 +505,13 @@ function spawnWave() {
         const x = rand(x0 + r + 30, x1 - r - 30);
         const y = rand(-r - 20, -r);
 
-        // Attack HP: base HP + (wave * hpScale)
+        // Attack HP: base HP + (wave * hpScale) * extreme scaling
         // hpScale > 1.0 means attack scales FASTER than natural asteroids
-        const attackHp = Math.ceil(attackDef.baseHp + (wave * attackDef.hpScale));
+        const baseAttackHp = attackDef.baseHp + (wave * attackDef.hpScale);
+        const attackHp = Math.ceil(baseAttackHp * extremeScaleMult);
 
-        // Queue for staggered spawning
-        spawnQueue.push({ x, y, type: attackDef.size, hp: attackHp, targetSlot, attackType: attack.type });
+        // Queue for staggered spawning - include senderId for gold reward
+        spawnQueue.push({ x, y, type: attackDef.size, hp: attackHp, targetSlot, attackType: attack.type, senderId: attack.senderId });
       }
     }
   }
@@ -526,6 +542,7 @@ function startGame(solo = false) {
 
   upgradePicks = new Map();
   attackQueue = new Map();
+  pendingUpgrades = new Map(); // Reset pending upgrade queues
 
   for (const id of lockedSlots) {
     const p = players.get(id);
@@ -552,22 +569,37 @@ function startGame(solo = false) {
   broadcast({ t: "started", world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, wave, solo: soloMode });
 }
 
-function beginUpgradePhase() {
-  phase = "upgrades";
-  upgradePicks = new Map();
-  upgradePhaseStart = Date.now();
-
+function queueUpgradesAndNextWave() {
+  // Queue upgrade options for each alive player (they can pick at their leisure)
   for (const id of lockedSlots) {
     const p = players.get(id);
     if (!p || p.hp <= 0) continue;
+    
     const options = makeUpgradeOptions(p);
-    // Track reroll count per wave (resets each wave)
-    const rerollCount = 0;
-    const rerollCost = getRerollCost(rerollCount);
-    upgradePicks.set(id, { options, pickedKey: null, rerollCount });
-    safeSend(p.ws, { t: "upgrade", options, deadline: upgradePhaseStart + UPGRADE_TIMEOUT * 1000, rerollCost });
+    
+    // Initialize pending queue if needed
+    if (!pendingUpgrades.has(id)) {
+      pendingUpgrades.set(id, []);
+    }
+    
+    // Add this wave's options to player's queue
+    const queue = pendingUpgrades.get(id);
+    queue.push({ wave: wave, options, rerollCount: 0 });
+    
+    // If this is their first pending upgrade, send it to them
+    if (queue.length === 1) {
+      const rerollCost = getRerollCost(0);
+      safeSend(p.ws, { t: "upgrade", options, wave: wave, rerollCost, queueSize: queue.length });
+    } else {
+      // Just notify them they have more pending
+      safeSend(p.ws, { t: "upgradeQueued", queueSize: queue.length });
+    }
   }
-  broadcast({ t: "upgradePhase", deadline: upgradePhaseStart + UPGRADE_TIMEOUT * 1000 });
+  
+  // Immediately start next wave - no waiting!
+  wave += 1;
+  spawnWave();
+  broadcast({ t: "wave", wave });
 }
 
 // Calculate reroll cost: base 10 gold, +50% per reroll
@@ -576,18 +608,17 @@ function getRerollCost(rerollCount) {
   return Math.floor(baseCost * Math.pow(1.5, rerollCount));
 }
 
-function maybeEndUpgradePhase() {
-  for (const id of lockedSlots) {
-    const p = players.get(id);
-    if (!p || p.hp <= 0) continue;
-    const pickObj = upgradePicks.get(id);
-    if (!pickObj || !pickObj.pickedKey) return;
-  }
-  wave += 1;
-  phase = "playing";
-  upgradePhaseStart = 0;
-  spawnWave();
-  broadcast({ t: "wave", wave });
+// Send next upgrade from queue to player (if any)
+function sendNextPendingUpgrade(playerId) {
+  const queue = pendingUpgrades.get(playerId);
+  if (!queue || queue.length === 0) return;
+  
+  const p = players.get(playerId);
+  if (!p) return;
+  
+  const next = queue[0];
+  const rerollCost = getRerollCost(next.rerollCount);
+  safeSend(p.ws, { t: "upgrade", options: next.options, wave: next.wave, rerollCost, queueSize: queue.length });
 }
 
 function resetToLobby() {
@@ -601,6 +632,7 @@ function resetToLobby() {
     damageNumbers = [];
     upgradePicks = new Map();
     attackQueue = new Map();
+    pendingUpgrades = new Map(); // Clear pending upgrade queues
     wave = 0;
 
     const arr = Array.from(players.values()).sort((a, b) => a.slot - b.slot);
@@ -818,33 +850,7 @@ function addDamageNumber(x, y, amount, isCrit) {
 }
 
 function tick() {
-  // Check upgrade phase timeout
-  if (phase === "upgrades" && upgradePhaseStart > 0) {
-    const elapsed = Date.now() - upgradePhaseStart;
-    if (elapsed >= UPGRADE_TIMEOUT * 1000) {
-      // Auto-pick for players who haven't chosen
-      for (const id of lockedSlots) {
-        const p = players.get(id);
-        if (!p || p.hp <= 0) continue;
-        const pickObj = upgradePicks.get(id);
-        if (pickObj && !pickObj.pickedKey && pickObj.options.length > 0) {
-          // Pick random upgrade
-          const randomOpt = pickObj.options[Math.floor(Math.random() * pickObj.options.length)];
-          pickObj.pickedKey = randomOpt.key;
-          applyUpgrade(p, randomOpt);
-          safeSend(p.ws, { t: "picked", key: randomOpt.key, auto: true });
-        }
-      }
-      // Move to next wave
-      wave += 1;
-      phase = "playing";
-      upgradePhaseStart = 0;
-      spawnWave();
-      broadcast({ t: "wave", wave });
-      return;
-    }
-  }
-  
+  // Continuous wave system - no upgrade phase interruption
   if (phase !== "playing") return;
 
   try {
@@ -856,7 +862,7 @@ function tick() {
         const spawnCount = Math.min(spawnQueue.length, Math.random() < 0.7 ? 1 : 2);
         for (let i = 0; i < spawnCount && spawnQueue.length > 0; i++) {
           const queued = spawnQueue.shift();
-          missiles.push(createAsteroid(queued.x, queued.y, queued.type, queued.hp, queued.targetSlot, queued.attackType));
+          missiles.push(createAsteroid(queued.x, queued.y, queued.type, queued.hp, queued.targetSlot, queued.attackType, queued.senderId));
         }
         spawnTimer = SPAWN_INTERVAL + rand(-0.1, 0.1); // Add slight randomness
       }
@@ -1023,6 +1029,16 @@ function tick() {
               p.hp = Math.max(0, p.hp - damage);
               createExplosion(m.x, GROUND_Y - 5, m.explosive ? 60 : 40, m.explosive ? "#ff00ff" : "#f44");
               
+              // Reward sender with gold for successful attack hit
+              if (m.senderId && m.attackType) {
+                const sender = players.get(m.senderId);
+                if (sender && sender.hp > 0) {
+                  const goldReward = Math.ceil(5 + wave * 0.5); // 5 base + 0.5 per wave
+                  sender.gold += goldReward;
+                  safeSend(sender.ws, { t: "attackHit", gold: goldReward, target: p.name });
+                }
+              }
+              
               if (m.explosive) {
                 // Bomber explosion damages nearby asteroids too
                 for (const m2 of missiles) {
@@ -1142,8 +1158,9 @@ function tick() {
             
             // Handle splitter
             if (m.splits > 0) {
-              // Split children HP scales with wave (weaker than parent)
-              const splitHp = Math.ceil(1 + wave * 0.4);
+              // Split children HP scales with wave (weaker than parent) + extreme scaling
+              const extremeMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
+              const splitHp = Math.ceil((1 + wave * 0.4) * extremeMult);
               for (let s = 0; s < m.splits; s++) {
                 const nx = m.x + rand(-30, 30);
                 const ny = m.y + rand(-20, 20);
@@ -1193,8 +1210,7 @@ function tick() {
         waveClearedTime = Date.now();
       } else if (Date.now() - waveClearedTime >= WAVE_CLEAR_DELAY) {
         waveClearedTime = 0; // Reset for next wave
-        beginUpgradePhase();
-        return;
+        queueUpgradesAndNextWave(); // Queue upgrades and immediately start next wave
       }
     } else {
       waveClearedTime = 0; // Reset if new asteroids appear or queue not empty
@@ -1337,32 +1353,42 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    if (msg.t === "pickUpgrade" && phase === "upgrades") {
+    // Pick upgrade from queue (works during gameplay now)
+    if (msg.t === "pickUpgrade" && phase === "playing") {
       const pickKey = (msg.key || "").toString();
-      const pickObj = upgradePicks.get(id);
-      if (!pickObj || pickObj.pickedKey) return;
-      const opt = pickObj.options.find((o) => o.key === pickKey);
+      const queue = pendingUpgrades.get(id);
+      if (!queue || queue.length === 0) return;
+      
+      const current = queue[0];
+      const opt = current.options.find((o) => o.key === pickKey);
       if (!opt) return;
-      pickObj.pickedKey = pickKey;
+      
+      // Apply the upgrade
       applyUpgrade(p, opt);
       safeSend(p.ws, { t: "picked", key: pickKey });
-      const waiting = [];
-      for (const pid of lockedSlots) {
-        const po = upgradePicks.get(pid);
-        const pl = players.get(pid);
-        if (!po || !po.pickedKey) { if (pl && pl.hp > 0) waiting.push(pl.name); }
+      
+      // Remove this upgrade set from queue
+      queue.shift();
+      
+      // If more upgrades pending, send the next one
+      if (queue.length > 0) {
+        const next = queue[0];
+        const rerollCost = getRerollCost(next.rerollCount);
+        safeSend(p.ws, { t: "upgrade", options: next.options, wave: next.wave, rerollCost, queueSize: queue.length });
+      } else {
+        safeSend(p.ws, { t: "upgradeQueueEmpty" });
       }
-      broadcast({ t: "upgradeWaiting", waiting });
-      maybeEndUpgradePhase();
       return;
     }
 
-    // Reroll upgrade cards
-    if (msg.t === "rerollUpgrades" && phase === "upgrades") {
-      const pickObj = upgradePicks.get(id);
-      if (!pickObj || pickObj.pickedKey) return; // Can't reroll if already picked
+    // Reroll upgrade cards (works during gameplay now)
+    if (msg.t === "rerollUpgrades" && phase === "playing") {
+      const queue = pendingUpgrades.get(id);
+      if (!queue || queue.length === 0) return;
       
-      const rerollCost = getRerollCost(pickObj.rerollCount);
+      const current = queue[0];
+      const rerollCost = getRerollCost(current.rerollCount);
+      
       if (p.gold < rerollCost) {
         safeSend(p.ws, { t: "rerollFailed", reason: "Not enough gold" });
         return;
@@ -1370,21 +1396,22 @@ wss.on("connection", (ws) => {
       
       // Deduct gold and increment reroll count
       p.gold -= rerollCost;
-      pickObj.rerollCount++;
+      current.rerollCount++;
       
       // Generate new options
       const newOptions = makeUpgradeOptions(p);
-      pickObj.options = newOptions;
+      current.options = newOptions;
       
       // Calculate next reroll cost
-      const nextRerollCost = getRerollCost(pickObj.rerollCount);
+      const nextRerollCost = getRerollCost(current.rerollCount);
       
       safeSend(p.ws, { 
         t: "upgrade", 
         options: newOptions, 
-        deadline: upgradePhaseStart + UPGRADE_TIMEOUT * 1000,
+        wave: current.wave,
         rerollCost: nextRerollCost,
-        goldSpent: rerollCost
+        goldSpent: rerollCost,
+        queueSize: queue.length
       });
       return;
     }
