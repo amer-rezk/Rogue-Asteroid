@@ -174,6 +174,24 @@ function saveLeaderboard() {
 // Load leaderboard on startup
 loadLeaderboard();
 
+// Chat system - server-wide chat history
+let chatHistory = []; // { id, from, text, timestamp }
+const MAX_CHAT_HISTORY = 50;
+
+function addChatMessage(fromName, text) {
+  const msg = {
+    id: uid(),
+    from: fromName,
+    text: text.slice(0, 200), // Limit message length
+    timestamp: Date.now()
+  };
+  chatHistory.push(msg);
+  if (chatHistory.length > MAX_CHAT_HISTORY) {
+    chatHistory.shift();
+  }
+  return msg;
+}
+
 // ===== Utilities =====
 function uid() {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(2);
@@ -1277,6 +1295,8 @@ wss.on("connection", (ws) => {
     phase,
     attackTypes: ATTACK_TYPES
   });
+  // Send chat history to new player
+  safeSend(ws, { t: "chatHistory", messages: chatHistory });
   broadcast({ t: "lobby", ...lobbySnapshot() });
 
   ws.on("message", (data) => {
@@ -1372,6 +1392,15 @@ wss.on("connection", (ws) => {
     // Return to lobby from game over screen
     if (msg.t === "returnToLobby" && phase === "gameover") {
       resetLobby();
+      return;
+    }
+
+    // Chat message
+    if (msg.t === "chat") {
+      const text = (msg.text || "").toString().trim();
+      if (text.length === 0 || text.length > 200) return;
+      const chatMsg = addChatMessage(p.name, text);
+      broadcast({ t: "chatMsg", ...chatMsg });
       return;
     }
 
