@@ -4,6 +4,7 @@
 const express = require("express");
 const http = require("http");
 const path = require("path");
+const fs = require("fs");
 const { WebSocketServer } = require("ws");
 
 // ===== Game constants =====
@@ -130,9 +131,36 @@ const UPGRADE_TIMEOUT = 10; // Seconds to choose upgrade
 let waveClearedTime = 0; // Timestamp when last asteroid was destroyed
 const WAVE_CLEAR_DELAY = 1000; // 1 second delay before upgrade phase
 
-// Leaderboard - persists across games (in memory, resets on server restart)
+// Leaderboard - persists to file (survives server restarts)
 let leaderboard = []; // { name, score, kills, wave, date }
 const MAX_LEADERBOARD_ENTRIES = 10;
+const LEADERBOARD_FILE = path.join(__dirname, "leaderboard.json");
+
+// Load leaderboard from file
+function loadLeaderboard() {
+  try {
+    if (fs.existsSync(LEADERBOARD_FILE)) {
+      const data = fs.readFileSync(LEADERBOARD_FILE, "utf8");
+      leaderboard = JSON.parse(data);
+      console.log(`Loaded ${leaderboard.length} leaderboard entries`);
+    }
+  } catch (err) {
+    console.error("Failed to load leaderboard:", err);
+    leaderboard = [];
+  }
+}
+
+// Save leaderboard to file
+function saveLeaderboard() {
+  try {
+    fs.writeFileSync(LEADERBOARD_FILE, JSON.stringify(leaderboard, null, 2));
+  } catch (err) {
+    console.error("Failed to save leaderboard:", err);
+  }
+}
+
+// Load leaderboard on startup
+loadLeaderboard();
 
 // ===== Utilities =====
 function uid() {
@@ -571,6 +599,7 @@ function endGame(winnerId) {
   // Sort and keep top entries
   leaderboard.sort((a, b) => b.score - a.score);
   leaderboard = leaderboard.slice(0, MAX_LEADERBOARD_ENTRIES);
+  saveLeaderboard();
 
   broadcast({ t: "gameOver", wave, scores, winnerId });
 
@@ -1237,6 +1266,7 @@ wss.on("connection", (ws) => {
     if (msg.t === "clearLeaderboard") {
       if (msg.password === "1122") {
         leaderboard = [];
+        saveLeaderboard();
         broadcast({ t: "lobby", ...lobbySnapshot() });
       }
       return;
