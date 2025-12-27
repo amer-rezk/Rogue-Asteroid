@@ -113,33 +113,9 @@ const app = express();
 app.use(express.static(path.join(__dirname, "docs")));
 app.get("/health", (_, res) => res.json({ ok: true, phase, players: players.size }));
 
-// Test endpoint for WebSocket debugging
-app.get("/ws-test", (_, res) => res.json({ ws: "endpoint exists", upgrade: "needed" }));
-
 const server = http.createServer(app);
-console.log("[SERVER] HTTP server created");
-
-// Log ALL incoming requests at HTTP level
-server.on('request', (req, res) => {
-  console.log("[SERVER] HTTP Request:", req.method, req.url, "upgrade:", req.headers.upgrade);
-});
-
-const wss = new WebSocketServer({ noServer: true });
-console.log("[SERVER] WebSocket server created (noServer mode)");
-
-// Handle upgrade explicitly for Render compatibility
-server.on('upgrade', (request, socket, head) => {
-  const pathname = request.url;
-  console.log("[SERVER] === UPGRADE REQUEST ===");
-  console.log("[SERVER] Path:", pathname);
-  console.log("[SERVER] Headers:", JSON.stringify(request.headers));
-  
-  // Accept upgrade on any path (Render proxy compatibility)
-  wss.handleUpgrade(request, socket, head, (ws) => {
-    console.log("[SERVER] WebSocket upgrade successful");
-    wss.emit('connection', ws, request);
-  });
-});
+const wss = new WebSocketServer({ server, path: "/ws" });
+console.log("[SERVER] Server started with WebSocket on /ws");
 
 const players = new Map();
 
@@ -1299,34 +1275,15 @@ const interval = setInterval(() => {
 
 wss.on("close", () => { clearInterval(interval); });
 
-wss.on("error", (err) => {
-  console.error("[SERVER] WebSocket server error:", err);
-});
-
-wss.on("connection", (ws, req) => {
-  console.log("[SERVER] New WebSocket connection from:", req.socket.remoteAddress);
-  console.log("[SERVER] Current phase:", phase, "Players:", players.size);
-  
+wss.on("connection", (ws) => {
   if (phase === "gameover") resetToLobby();
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
-  if (phase !== "lobby") { 
-    console.log("[SERVER] Rejecting - game in progress");
-    safeSend(ws, { t: "reject", reason: "Game in progress" }); 
-    ws.close(); 
-    return; 
-  }
+  if (phase !== "lobby") { safeSend(ws, { t: "reject", reason: "Game in progress" }); ws.close(); return; }
   const slot = assignSlot();
-  if (slot < 0) { 
-    console.log("[SERVER] Rejecting - game full");
-    safeSend(ws, { t: "reject", reason: "Game full (max 4)" }); 
-    ws.close(); 
-    return; 
-  }
+  if (slot < 0) { safeSend(ws, { t: "reject", reason: "Game full (max 4)" }); ws.close(); return; }
 
   const id = uid();
-  console.log("[SERVER] Player connected, id:", id, "slot:", slot);
-  
   const player = {
     id, ws, slot,
     name: `Player ${slot + 1}`,
@@ -1582,12 +1539,6 @@ wss.on("connection", (ws, req) => {
 });
 
 setInterval(() => { tick(); }, 1000 / TICK_RATE);
-console.log("[SERVER] Game tick interval started at", TICK_RATE, "TPS");
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => { 
-  console.log(`[SERVER] Rogue Asteroid PvP server started`);
-  console.log(`[SERVER] HTTP: http://localhost:${PORT}`);
-  console.log(`[SERVER] WebSocket: ws://localhost:${PORT}/ws`);
-  console.log(`[SERVER] Health check: http://localhost:${PORT}/health`);
-});
+server.listen(PORT, () => { console.log(`Rogue Asteroid server running on port ${PORT}`); });
