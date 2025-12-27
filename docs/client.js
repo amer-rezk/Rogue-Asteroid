@@ -89,8 +89,9 @@
   let lastSnap = null;
   let upgradeOptions = [];
   let upgradePicked = false;
-  let upgradeDeadline = 0;
-  let waitingFor = [];
+  let upgradeQueueSize = 0; // How many upgrades are pending
+  let upgradeWaveNum = 0; // Which wave this upgrade is from
+  let attackHitFeedback = null; // Feedback when attack hits opponent
   let gameOverData = null;
 
   // Chat system
@@ -293,24 +294,29 @@
         upgradeOptions = msg.options;
         upgradePicked = false;
         buildMenuOpen = null;
-        if (msg.deadline) upgradeDeadline = msg.deadline;
         if (msg.rerollCost !== undefined) currentRerollCost = msg.rerollCost;
+        if (msg.queueSize !== undefined) upgradeQueueSize = msg.queueSize;
+        if (msg.wave !== undefined) upgradeWaveNum = msg.wave;
         break;
 
-      case "upgradePhase":
-        phase = "upgrades";
-        if (msg.deadline) upgradeDeadline = msg.deadline;
+      case "upgradeQueued":
+        // More upgrades pending - show indicator
+        if (msg.queueSize !== undefined) upgradeQueueSize = msg.queueSize;
+        break;
+
+      case "upgradeQueueEmpty":
+        upgradeOptions = [];
+        upgradePicked = true;
+        upgradeQueueSize = 0;
         break;
 
       case "picked":
         upgradePicked = true;
-        if (msg.auto) {
-          // Show feedback that upgrade was auto-picked
-        }
         break;
 
-      case "upgradeWaiting":
-        waitingFor = msg.waiting;
+      case "attackHit":
+        // Show gold earned from attack hitting opponent
+        attackHitFeedback = { gold: msg.gold, target: msg.target, time: Date.now() };
         break;
 
       case "state":
@@ -593,14 +599,14 @@
       }
     }
     
-    if (phase === "upgrades" && hoveredUpgrade >= 0 && !upgradePicked) {
+    if (phase === "playing" && hoveredUpgrade >= 0 && !upgradePicked && upgradeOptions.length > 0) {
       const opt = upgradeOptions[hoveredUpgrade];
       if (opt) send({ t: "pickUpgrade", key: opt.key });
       return;
     }
 
     // Handle reroll button click
-    if (phase === "upgrades" && hoveredReroll && !upgradePicked) {
+    if (phase === "playing" && hoveredReroll && !upgradePicked && upgradeOptions.length > 0) {
       const myPlayer = lastSnap?.players.find(p => p.id === myId);
       if (myPlayer && myPlayer.gold >= currentRerollCost) {
         send({ t: "rerollUpgrades" });
@@ -1870,174 +1876,158 @@
         ctx.textAlign = "left";
       }
 
-      // Upgrade phase
-      if (phase === "upgrades" && upgradeOptions.length > 0) {
-        // Darker overlay with subtle gradient
-        const overlayGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-        overlayGrad.addColorStop(0, "rgba(5,5,15,0.9)");
-        overlayGrad.addColorStop(0.5, "rgba(10,10,25,0.85)");
-        overlayGrad.addColorStop(1, "rgba(5,5,15,0.9)");
-        ctx.fillStyle = overlayGrad;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // Upgrade cards at top of screen (during gameplay)
+      if (phase === "playing" && upgradeOptions.length > 0 && !upgradePicked) {
+        // Semi-transparent header bar at top
+        const headerH = 200;
+        const headerGrad = ctx.createLinearGradient(0, 0, 0, headerH);
+        headerGrad.addColorStop(0, "rgba(10,10,30,0.95)");
+        headerGrad.addColorStop(0.8, "rgba(10,10,30,0.85)");
+        headerGrad.addColorStop(1, "rgba(10,10,30,0)");
+        ctx.fillStyle = headerGrad;
+        ctx.fillRect(0, 0, canvas.width, headerH);
         
-        if (!upgradePicked) {
-          // Header with wave info
-          ctx.font = "bold 14px 'Courier New', monospace";
-          ctx.textAlign = "center";
-          ctx.fillStyle = "rgba(255,255,255,0.5)";
-          ctx.fillText(`WAVE ${lastSnap?.wave || 1} COMPLETE`, canvas.width / 2, 50);
+        // Wave indicator and queue
+        ctx.font = "bold 11px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "rgba(255,255,255,0.6)";
+        const queueText = upgradeQueueSize > 1 ? ` (+${upgradeQueueSize - 1} pending)` : "";
+        ctx.fillText(`WAVE ${upgradeWaveNum} UPGRADE${queueText}`, canvas.width / 2, 18);
+        
+        // Cards - compact horizontal design at top
+        const cardW = 140;
+        const cardH = 150;
+        const gap = 15;
+        const totalW = upgradeOptions.length * cardW + (upgradeOptions.length - 1) * gap;
+        const startX = canvas.width / 2 - totalW / 2;
+        const cardY = 28;
+        
+        hoveredUpgrade = -1;
+        
+        for (let i = 0; i < upgradeOptions.length; i++) {
+          const opt = upgradeOptions[i];
+          const cardX = startX + i * (cardW + gap);
+          const isHovered = mouseX >= cardX && mouseX <= cardX + cardW && mouseY >= cardY && mouseY <= cardY + cardH;
+          if (isHovered) hoveredUpgrade = i;
           
-          // Main title
-          ctx.font = "bold 28px 'Courier New', monospace";
-          ctx.fillStyle = "#fff";
-          ctx.fillText("SELECT UPGRADE", canvas.width / 2, 85);
+          const rarityColor = opt.rarityColor || "#fff";
           
-          // Countdown timer - minimal style
-          const timeLeft = Math.max(0, Math.ceil((upgradeDeadline - Date.now()) / 1000));
-          const timerColor = timeLeft <= 3 ? "#ff4466" : timeLeft <= 5 ? "#ffaa00" : "#44ff88";
-          ctx.font = "bold 16px 'Courier New', monospace";
-          ctx.fillStyle = timerColor;
-          const timerAlpha = timeLeft <= 3 ? (0.7 + Math.sin(Date.now() / 80) * 0.3) : 1;
-          ctx.globalAlpha = timerAlpha;
-          ctx.fillText(`${timeLeft}s`, canvas.width / 2, 115);
-          ctx.globalAlpha = 1;
-          
-          // Cards - sleeker horizontal design
-          const cardW = 180;
-          const cardH = 220;
-          const gap = 25;
-          const totalW = upgradeOptions.length * cardW + (upgradeOptions.length - 1) * gap;
-          const startX = canvas.width / 2 - totalW / 2;
-          const cardY = canvas.height / 2 - cardH / 2 + 20;
-          
-          hoveredUpgrade = -1;
-          
-          for (let i = 0; i < upgradeOptions.length; i++) {
-            const opt = upgradeOptions[i];
-            const cardX = startX + i * (cardW + gap);
-            const isHovered = mouseX >= cardX && mouseX <= cardX + cardW && mouseY >= cardY && mouseY <= cardY + cardH;
-            if (isHovered) hoveredUpgrade = i;
-            
-            const rarityColor = opt.rarityColor || "#fff";
-            
-            // Card background
-            ctx.save();
-            if (isHovered) {
-              ctx.shadowColor = rarityColor;
-              ctx.shadowBlur = 30;
-            }
-            
-            // Main card body
-            const cardGrad = ctx.createLinearGradient(cardX, cardY, cardX, cardY + cardH);
-            cardGrad.addColorStop(0, isHovered ? "rgba(40,40,60,0.95)" : "rgba(20,20,35,0.9)");
-            cardGrad.addColorStop(1, isHovered ? "rgba(30,30,50,0.95)" : "rgba(15,15,25,0.9)");
-            ctx.fillStyle = cardGrad;
-            
-            ctx.beginPath();
-            ctx.roundRect(cardX, cardY, cardW, cardH, 8);
-            ctx.fill();
-            
-            // Border with rarity color
-            ctx.strokeStyle = isHovered ? rarityColor : hexToRgba(rarityColor, 0.4);
-            ctx.lineWidth = isHovered ? 2 : 1;
-            ctx.stroke();
-            ctx.restore();
-            
-            // Rarity indicator bar at top
-            ctx.fillStyle = rarityColor;
-            ctx.beginPath();
-            ctx.roundRect(cardX + 10, cardY + 8, cardW - 20, 3, 2);
-            ctx.fill();
-            
-            // Rarity label
-            ctx.font = "bold 9px 'Courier New', monospace";
-            ctx.textAlign = "center";
-            ctx.fillStyle = hexToRgba(rarityColor, 0.8);
-            ctx.fillText(opt.rarityLabel, cardX + cardW / 2, cardY + 28);
-            
-            // Icon - larger and centered
-            ctx.font = "42px sans-serif";
-            ctx.fillStyle = "#fff";
-            ctx.fillText(opt.icon, cardX + cardW / 2, cardY + 85);
-            
-            // Title
-            ctx.font = "bold 13px 'Courier New', monospace";
-            ctx.fillStyle = "#fff";
-            ctx.fillText(opt.title, cardX + cardW / 2, cardY + 120);
-            
-            // Description - wrapped if needed
-            ctx.font = "11px 'Courier New', monospace";
-            ctx.fillStyle = "rgba(255,255,255,0.7)";
-            const desc = opt.desc;
-            if (desc.length > 22) {
-              // Split into two lines
-              const mid = desc.lastIndexOf(' ', 22);
-              if (mid > 0) {
-                ctx.fillText(desc.substring(0, mid), cardX + cardW / 2, cardY + 150);
-                ctx.fillText(desc.substring(mid + 1), cardX + cardW / 2, cardY + 165);
-              } else {
-                ctx.fillText(desc, cardX + cardW / 2, cardY + 155);
-              }
-            } else {
-              ctx.fillText(desc, cardX + cardW / 2, cardY + 155);
-            }
-            
-            // Category tag at bottom
-            ctx.fillStyle = "rgba(255,255,255,0.3)";
-            ctx.font = "8px 'Courier New', monospace";
-            ctx.fillText(opt.category.toUpperCase(), cardX + cardW / 2, cardY + cardH - 15);
-            
-            // Hover hint
-            if (isHovered) {
-              ctx.fillStyle = hexToRgba(rarityColor, 0.9);
-              ctx.font = "bold 10px 'Courier New', monospace";
-              ctx.fillText("CLICK TO SELECT", cardX + cardW / 2, cardY + cardH - 30);
-            }
+          // Card background
+          ctx.save();
+          if (isHovered) {
+            ctx.shadowColor = rarityColor;
+            ctx.shadowBlur = 20;
           }
           
-          // Reroll button below cards
-          const myPlayer = lastSnap?.players.find(p => p.id === myId);
-          const myGold = myPlayer?.gold || 0;
-          const canAffordReroll = myGold >= currentRerollCost;
+          // Main card body
+          const cardGrad = ctx.createLinearGradient(cardX, cardY, cardX, cardY + cardH);
+          cardGrad.addColorStop(0, isHovered ? "rgba(50,50,70,0.98)" : "rgba(25,25,40,0.95)");
+          cardGrad.addColorStop(1, isHovered ? "rgba(40,40,60,0.98)" : "rgba(20,20,30,0.95)");
+          ctx.fillStyle = cardGrad;
           
-          const rerollBtnW = 160;
-          const rerollBtnH = 36;
-          const rerollBtnX = canvas.width / 2 - rerollBtnW / 2;
-          const rerollBtnY = cardY + cardH + 25;
-          
-          const isRerollHovered = mouseX >= rerollBtnX && mouseX <= rerollBtnX + rerollBtnW && 
-                                  mouseY >= rerollBtnY && mouseY <= rerollBtnY + rerollBtnH;
-          hoveredReroll = isRerollHovered;
-          
-          // Reroll button background
-          ctx.fillStyle = isRerollHovered && canAffordReroll ? "rgba(100,180,255,0.35)" : 
-                          canAffordReroll ? "rgba(60,120,200,0.2)" : "rgba(40,40,60,0.3)";
-          ctx.strokeStyle = isRerollHovered && canAffordReroll ? "#7ae0ff" : 
-                            canAffordReroll ? "rgba(122,224,255,0.5)" : "#333";
-          ctx.lineWidth = isRerollHovered && canAffordReroll ? 2 : 1;
           ctx.beginPath();
-          ctx.roundRect(rerollBtnX, rerollBtnY, rerollBtnW, rerollBtnH, 8);
+          ctx.roundRect(cardX, cardY, cardW, cardH, 6);
           ctx.fill();
+          
+          // Border with rarity color
+          ctx.strokeStyle = isHovered ? rarityColor : hexToRgba(rarityColor, 0.5);
+          ctx.lineWidth = isHovered ? 2 : 1;
           ctx.stroke();
+          ctx.restore();
           
-          // Reroll button text
-          ctx.font = "bold 12px 'Courier New', monospace";
-          ctx.textAlign = "center";
-          ctx.fillStyle = canAffordReroll ? "#7ae0ff" : "#555";
-          ctx.fillText(`🎲 REROLL (${currentRerollCost}g)`, canvas.width / 2, rerollBtnY + 23);
+          // Rarity indicator bar at top
+          ctx.fillStyle = rarityColor;
+          ctx.beginPath();
+          ctx.roundRect(cardX + 8, cardY + 6, cardW - 16, 2, 1);
+          ctx.fill();
           
-          ctx.textAlign = "left";
-        } else {
-          // Selection confirmation
-          ctx.font = "bold 24px 'Courier New', monospace";
+          // Rarity label
+          ctx.font = "bold 8px 'Courier New', monospace";
           ctx.textAlign = "center";
-          ctx.fillStyle = "#44ff88";
-          ctx.fillText("✓ UPGRADE SELECTED", canvas.width / 2, canvas.height / 2 - 10);
-          ctx.font = "14px 'Courier New', monospace";
-          ctx.fillStyle = "rgba(255,255,255,0.5)";
-          ctx.fillText("Waiting for other players...", canvas.width / 2, canvas.height / 2 + 20);
-          ctx.textAlign = "left";
+          ctx.fillStyle = hexToRgba(rarityColor, 0.8);
+          ctx.fillText(opt.rarityLabel, cardX + cardW / 2, cardY + 20);
+          
+          // Icon
+          ctx.font = "32px sans-serif";
+          ctx.fillStyle = "#fff";
+          ctx.fillText(opt.icon, cardX + cardW / 2, cardY + 58);
+          
+          // Title
+          ctx.font = "bold 11px 'Courier New', monospace";
+          ctx.fillStyle = "#fff";
+          ctx.fillText(opt.title, cardX + cardW / 2, cardY + 82);
+          
+          // Description - compact
+          ctx.font = "9px 'Courier New', monospace";
+          ctx.fillStyle = "rgba(255,255,255,0.7)";
+          const desc = opt.desc;
+          if (desc.length > 20) {
+            const mid = desc.lastIndexOf(' ', 20);
+            if (mid > 0) {
+              ctx.fillText(desc.substring(0, mid), cardX + cardW / 2, cardY + 102);
+              ctx.fillText(desc.substring(mid + 1), cardX + cardW / 2, cardY + 114);
+            } else {
+              ctx.fillText(desc.slice(0, 20), cardX + cardW / 2, cardY + 108);
+            }
+          } else {
+            ctx.fillText(desc, cardX + cardW / 2, cardY + 108);
+          }
+          
+          // Hover hint
+          if (isHovered) {
+            ctx.fillStyle = hexToRgba(rarityColor, 0.9);
+            ctx.font = "bold 9px 'Courier New', monospace";
+            ctx.fillText("CLICK", cardX + cardW / 2, cardY + cardH - 12);
+          }
         }
+        
+        // Reroll button to the right of cards
+        const myPlayer = lastSnap?.players.find(p => p.id === myId);
+        const myGold = myPlayer?.gold || 0;
+        const canAffordReroll = myGold >= currentRerollCost;
+        
+        const rerollBtnW = 70;
+        const rerollBtnH = 50;
+        const rerollBtnX = startX + totalW + 20;
+        const rerollBtnY = cardY + cardH / 2 - rerollBtnH / 2;
+        
+        const isRerollHovered = mouseX >= rerollBtnX && mouseX <= rerollBtnX + rerollBtnW && 
+                                mouseY >= rerollBtnY && mouseY <= rerollBtnY + rerollBtnH;
+        hoveredReroll = isRerollHovered;
+        
+        // Reroll button background
+        ctx.fillStyle = isRerollHovered && canAffordReroll ? "rgba(100,180,255,0.4)" : 
+                        canAffordReroll ? "rgba(60,120,200,0.25)" : "rgba(40,40,60,0.4)";
+        ctx.strokeStyle = isRerollHovered && canAffordReroll ? "#7ae0ff" : 
+                          canAffordReroll ? "rgba(122,224,255,0.5)" : "#444";
+        ctx.lineWidth = isRerollHovered && canAffordReroll ? 2 : 1;
+        ctx.beginPath();
+        ctx.roundRect(rerollBtnX, rerollBtnY, rerollBtnW, rerollBtnH, 6);
+        ctx.fill();
+        ctx.stroke();
+        
+        // Reroll button text
+        ctx.font = "18px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillStyle = canAffordReroll ? "#7ae0ff" : "#555";
+        ctx.fillText("🎲", rerollBtnX + rerollBtnW / 2, rerollBtnY + 25);
+        ctx.font = "bold 10px 'Courier New', monospace";
+        ctx.fillText(`${currentRerollCost}g`, rerollBtnX + rerollBtnW / 2, rerollBtnY + 42);
+        
+        ctx.textAlign = "left";
+      }
+
+      // Attack hit feedback
+      if (attackHitFeedback && Date.now() - attackHitFeedback.time < 2000) {
+        const fadeAlpha = 1 - (Date.now() - attackHitFeedback.time) / 2000;
+        ctx.save();
+        ctx.globalAlpha = fadeAlpha;
+        ctx.font = "bold 16px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#0f0";
+        ctx.fillText(`+${attackHitFeedback.gold}g HIT ${attackHitFeedback.target}!`, canvas.width / 2, 60);
+        ctx.restore();
+        ctx.textAlign = "left";
       }
 
       // Game over
@@ -2154,8 +2144,8 @@
         
         // Draw chat popup if open
         if (chatOpen) {
-          const chatW = 280;
-          const chatH = 250;
+          const chatW = 340;
+          const chatH = 320;
           const chatX = 15;
           const chatY = canvas.height - chatH - chatBtnSize - 25;
           
