@@ -31,12 +31,11 @@
           <input type="text" id="nameInput" maxlength="16" placeholder="Enter your name">
         </div>
 
-        <div id="lobby" class="section">
+        <div id="lobby" class="section" style="display:none;">
           <label>COMBATANTS</label>
           <div id="players" class="players"></div>
           <div class="button-row">
-            <button id="readyBtn" class="btn" style="display:none;">READY UP</button>
-            <button id="soloBtn" class="btn solo">🎮 SOLO</button>
+            <button id="readyBtn" class="btn">READY UP</button>
             <button id="launchBtn" class="btn launch" style="display:none;">▶ BATTLE</button>
           </div>
         </div>
@@ -69,7 +68,6 @@
     <canvas id="game"></canvas>
   </div>
 
-  <script src="local-server.js"></script>
   <script src="client.js"></script>
 </body>
 </html>
