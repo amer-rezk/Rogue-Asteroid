@@ -117,6 +117,10 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 console.log("[SERVER] Server started with WebSocket on /ws");
 
+wss.on("error", (err) => {
+  console.error("[WSS ERROR]", err);
+});
+
 const players = new Map();
 
 let hostId = null;
@@ -1276,6 +1280,7 @@ const interval = setInterval(() => {
 wss.on("close", () => { clearInterval(interval); });
 
 wss.on("connection", (ws) => {
+  console.log("[SERVER] WebSocket connection received!");
   if (phase === "gameover") resetToLobby();
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
