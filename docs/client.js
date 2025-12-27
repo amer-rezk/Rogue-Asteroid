@@ -568,146 +568,95 @@
     const fadeStart = 0.5;
     const alpha = b.lifespan < fadeStart ? Math.max(0.2, b.lifespan / fadeStart) : 1.0;
 
-    ctx.save();
-
     switch (b.bulletType) {
       case "gatling":
-        // Gatling: Small rapid yellow tracers with short trail
-        const gatlingTrail = 10 * sx;
-        ctx.strokeStyle = hexToRgba("#ffff00", 0.5 * alpha);
+        // Gatling: Small yellow tracer
+        const gatlingTrail = 8 * sx;
+        ctx.strokeStyle = `rgba(255,255,0,${0.6 * alpha})`;
         ctx.lineWidth = r * 1.5;
         ctx.lineCap = "round";
         ctx.beginPath();
         ctx.moveTo(x, y);
         ctx.lineTo(x - Math.cos(angle) * gatlingTrail, y - Math.sin(angle) * gatlingTrail);
         ctx.stroke();
-
-        // Bullet core
-        ctx.fillStyle = hexToRgba("#ffff00", alpha);
-        ctx.shadowColor = "#ffff00";
-        ctx.shadowBlur = 6 * alpha;
+        ctx.fillStyle = `rgba(255,255,100,${alpha})`;
         ctx.beginPath();
-        ctx.arc(x, y, r * 0.7, 0, Math.PI * 2);
+        ctx.arc(x, y, r * 0.6, 0, Math.PI * 2);
         ctx.fill();
         break;
 
       case "sniper":
-        // Sniper: Long green laser beam with afterglow
-        const laserLen = 35 * sx;
-        const laserWidth = r * 0.6;
-
-        // Outer glow
-        ctx.strokeStyle = hexToRgba("#00ff00", 0.2 * alpha);
-        ctx.lineWidth = laserWidth * 4;
+        // Sniper: Green laser beam
+        const laserLen = 30 * sx;
+        ctx.strokeStyle = `rgba(0,255,0,${0.3 * alpha})`;
+        ctx.lineWidth = r * 2;
         ctx.lineCap = "round";
         ctx.beginPath();
-        ctx.moveTo(x + Math.cos(angle) * 5, y + Math.sin(angle) * 5);
+        ctx.moveTo(x, y);
         ctx.lineTo(x - Math.cos(angle) * laserLen, y - Math.sin(angle) * laserLen);
         ctx.stroke();
-
-        // Inner beam
-        ctx.strokeStyle = hexToRgba("#00ff00", 0.8 * alpha);
-        ctx.lineWidth = laserWidth * 2;
+        ctx.strokeStyle = `rgba(150,255,150,${0.9 * alpha})`;
+        ctx.lineWidth = r * 0.8;
         ctx.beginPath();
-        ctx.moveTo(x + Math.cos(angle) * 5, y + Math.sin(angle) * 5);
+        ctx.moveTo(x, y);
         ctx.lineTo(x - Math.cos(angle) * laserLen, y - Math.sin(angle) * laserLen);
         ctx.stroke();
-
-        // Core line
-        ctx.strokeStyle = hexToRgba("#aaffaa", alpha);
-        ctx.lineWidth = laserWidth;
-        ctx.shadowColor = "#00ff00";
-        ctx.shadowBlur = 10 * alpha;
-        ctx.beginPath();
-        ctx.moveTo(x + Math.cos(angle) * 5, y + Math.sin(angle) * 5);
-        ctx.lineTo(x - Math.cos(angle) * laserLen, y - Math.sin(angle) * laserLen);
-        ctx.stroke();
-
-        // Bright tip
-        ctx.fillStyle = "#ffffff";
-        ctx.beginPath();
-        ctx.arc(x, y, r * 0.5, 0, Math.PI * 2);
-        ctx.fill();
         break;
 
       case "missile":
-        // Missile: Red rocket with fire/smoke trail
-        const missileLen = 12 * sx;
+        // Missile: Red rocket with simple fire trail
+        const missileLen = 10 * sx;
         const missileWidth = r * 1.2;
 
-        // Smoke trail
-        for (let i = 0; i < 5; i++) {
-          const smokeX = x - Math.cos(angle) * (8 + i * 6) * sx + (Math.random() - 0.5) * 4;
-          const smokeY = y - Math.sin(angle) * (8 + i * 6) * sx + (Math.random() - 0.5) * 4;
-          const smokeAlpha = (1 - i / 5) * 0.3 * alpha;
-          ctx.fillStyle = hexToRgba("#666666", smokeAlpha);
-          ctx.beginPath();
-          ctx.arc(smokeX, smokeY, (3 + i) * sx, 0, Math.PI * 2);
-          ctx.fill();
-        }
-
-        // Fire trail
-        ctx.fillStyle = hexToRgba("#ff6600", 0.7 * alpha);
+        // Simple fire trail (2 particles instead of 5 smoke)
+        ctx.fillStyle = `rgba(255,100,0,${0.5 * alpha})`;
         ctx.beginPath();
-        ctx.moveTo(x - Math.cos(angle) * missileLen * 0.5, y - Math.sin(angle) * missileLen * 0.5);
-        ctx.lineTo(x - Math.cos(angle) * missileLen * 1.5 + Math.cos(angle + 0.5) * 4 * sx, 
-                   y - Math.sin(angle) * missileLen * 1.5 + Math.sin(angle + 0.5) * 4 * sx);
-        ctx.lineTo(x - Math.cos(angle) * missileLen * 2, y - Math.sin(angle) * missileLen * 2);
-        ctx.lineTo(x - Math.cos(angle) * missileLen * 1.5 + Math.cos(angle - 0.5) * 4 * sx,
-                   y - Math.sin(angle) * missileLen * 1.5 + Math.sin(angle - 0.5) * 4 * sx);
-        ctx.closePath();
+        ctx.arc(x - Math.cos(angle) * missileLen, y - Math.sin(angle) * missileLen, r * 1.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = `rgba(255,200,0,${0.4 * alpha})`;
+        ctx.beginPath();
+        ctx.arc(x - Math.cos(angle) * missileLen * 1.5, y - Math.sin(angle) * missileLen * 1.5, r, 0, Math.PI * 2);
         ctx.fill();
 
-        // Missile body
+        // Missile body - simple ellipse
         ctx.save();
         ctx.translate(x, y);
         ctx.rotate(angle);
-        ctx.fillStyle = hexToRgba("#ff4444", alpha);
-        ctx.shadowColor = "#ff0000";
-        ctx.shadowBlur = 8 * alpha;
+        ctx.fillStyle = `rgba(255,80,80,${alpha})`;
         ctx.beginPath();
         ctx.ellipse(0, 0, missileLen, missileWidth, 0, 0, Math.PI * 2);
         ctx.fill();
-
-        // Nose cone
-        ctx.fillStyle = hexToRgba("#ffaaaa", alpha);
+        ctx.fillStyle = `rgba(255,200,200,${alpha})`;
         ctx.beginPath();
-        ctx.ellipse(missileLen * 0.7, 0, missileLen * 0.4, missileWidth * 0.6, 0, 0, Math.PI * 2);
+        ctx.arc(missileLen * 0.6, 0, missileWidth * 0.5, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
         break;
 
       default:
         // Main turret: Player-colored energy bolt
-        const trail = 12 * sx;
+        const trail = 10 * sx;
         const color = b.isCrit ? "#ffffff" : baseColor;
-        const glowColor = b.isCrit ? "#ffff00" : baseColor;
 
-        // Trail gradient
-        const gradient = ctx.createLinearGradient(
-          x, y,
-          x - Math.cos(angle) * trail, y - Math.sin(angle) * trail
-        );
-        gradient.addColorStop(0, hexToRgba(color, 0.8 * alpha));
-        gradient.addColorStop(1, hexToRgba(color, 0));
-
-        ctx.strokeStyle = gradient;
-        ctx.lineWidth = r * 1.8;
+        // Simple trail
+        ctx.strokeStyle = hexToRgba(color, 0.4 * alpha);
+        ctx.lineWidth = r * 1.5;
         ctx.lineCap = "round";
         ctx.beginPath();
         ctx.moveTo(x, y);
         ctx.lineTo(x - Math.cos(angle) * trail, y - Math.sin(angle) * trail);
         ctx.stroke();
 
-        // Bullet body
+        // Bullet body with glow effect (layered circles instead of shadow)
+        ctx.fillStyle = hexToRgba(color, 0.3 * alpha);
+        ctx.beginPath();
+        ctx.arc(x, y, r * 2, 0, Math.PI * 2);
+        ctx.fill();
         ctx.fillStyle = hexToRgba(color, alpha);
-        ctx.shadowColor = glowColor;
-        ctx.shadowBlur = (b.isCrit ? 15 : 10) * alpha;
         ctx.beginPath();
         ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fill();
 
-        // Bright core
         if (b.isCrit) {
           ctx.fillStyle = "#ffffff";
           ctx.beginPath();
@@ -716,8 +665,6 @@
         }
         break;
     }
-
-    ctx.restore();
   }
 
   function draw() {
@@ -838,10 +785,35 @@
         }
       }
 
-      // Particles
+      // Particles - batch by type for performance
       if (lastSnap.particles) {
+        // First pass: explosion rings (draw these prominently)
         for (const p of lastSnap.particles) {
-          ctx.fillStyle = hexToRgba(p.color, p.life / (p.maxLife || 0.5));
+          if (!p.isExplosionRing) continue;
+          const alpha = p.life / (p.maxLife || 0.5);
+          const radius = (p.size || 30) * sx * (1 + (1 - alpha) * 0.5);
+          // Filled transparent circle
+          ctx.fillStyle = `rgba(255,100,0,${alpha * 0.25})`;
+          ctx.beginPath();
+          ctx.arc(p.x * sx, p.y * sy, radius, 0, Math.PI * 2);
+          ctx.fill();
+          // Bright ring outline
+          ctx.strokeStyle = `rgba(255,150,50,${alpha * 0.9})`;
+          ctx.lineWidth = 3 * sx;
+          ctx.stroke();
+          // Inner bright ring
+          ctx.strokeStyle = `rgba(255,220,100,${alpha * 0.7})`;
+          ctx.lineWidth = 1.5 * sx;
+          ctx.beginPath();
+          ctx.arc(p.x * sx, p.y * sy, radius * 0.7, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        // Second pass: regular particles
+        ctx.lineCap = "round";
+        for (const p of lastSnap.particles) {
+          if (p.isExplosionRing) continue;
+          const alpha = p.life / (p.maxLife || 0.5);
+          ctx.fillStyle = hexToRgba(p.color, alpha);
           ctx.beginPath();
           ctx.arc(p.x * sx, p.y * sy, (p.size || 2) * sx, 0, Math.PI * 2);
           ctx.fill();
@@ -860,73 +832,37 @@
           baseColor = ATTACK_TYPES[m.attackType].color;
         }
 
-        // FTL entry effect - Star Wars hyperspace exit style
+        // FTL entry effect - simplified
         if (m.inFTL) {
-          ctx.save();
-          
-          // Draw streak lines (motion trails)
-          const streakLength = 80 * sy;
-          const numStreaks = 5;
-          
-          for (let i = 0; i < numStreaks; i++) {
-            const offsetX = (Math.random() - 0.5) * r * 1.5;
-            const alpha = 0.3 + Math.random() * 0.4;
-            
-            const grad = ctx.createLinearGradient(x + offsetX, y - streakLength, x + offsetX, y);
-            grad.addColorStop(0, "rgba(150, 180, 255, 0)");
-            grad.addColorStop(0.5, `rgba(180, 200, 255, ${alpha})`);
-            grad.addColorStop(1, `rgba(255, 255, 255, ${alpha + 0.2})`);
-            
-            ctx.strokeStyle = grad;
-            ctx.lineWidth = 1 + Math.random() * 2;
-            ctx.beginPath();
-            ctx.moveTo(x + offsetX, y - streakLength);
-            ctx.lineTo(x + offsetX, y);
-            ctx.stroke();
-          }
-          
-          // Main FTL glow around asteroid
-          ctx.shadowColor = "#aaccff";
-          ctx.shadowBlur = 25;
-          
-          // Draw elongated asteroid (stretched during FTL)
-          ctx.translate(x, y);
-          ctx.scale(1, 2.5); // Stretch vertically
-          ctx.rotate(m.rotation || 0);
-          
-          const ftlGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
-          ftlGrad.addColorStop(0, "#ffffff");
-          ftlGrad.addColorStop(0.4, baseColor);
-          ftlGrad.addColorStop(1, hexToRgba(baseColor, 0.5));
-          ctx.fillStyle = ftlGrad;
-          
+          ctx.strokeStyle = "rgba(180, 200, 255, 0.5)";
+          ctx.lineWidth = 2;
           ctx.beginPath();
-          ctx.arc(0, 0, r, 0, Math.PI * 2);
+          ctx.moveTo(x, y - 50 * sy);
+          ctx.lineTo(x, y);
+          ctx.stroke();
+          ctx.fillStyle = "#aaccff";
+          ctx.beginPath();
+          ctx.ellipse(x, y, r * 0.8, r * 1.8, 0, 0, Math.PI * 2);
           ctx.fill();
-          
-          ctx.restore();
-          ctx.shadowBlur = 0;
-          continue; // Skip normal rendering for FTL asteroids
+          continue;
         }
 
         // Ghost phasing effect
-        const phaseAlpha = m.isPhased ? 0.3 : 0.7;
+        const phaseAlpha = m.isPhased ? 0.3 : 0.85;
+        const fillColor = hexToRgba(baseColor, phaseAlpha);
 
-        ctx.save();
-        ctx.translate(x, y);
-        ctx.rotate(m.rotation || 0);
-        ctx.fillStyle = hexToRgba(baseColor, phaseAlpha);
-        ctx.strokeStyle = baseColor;
-        ctx.lineWidth = 1.5;
-        ctx.shadowColor = baseColor;
-        ctx.shadowBlur = 8;
-
+        // Draw asteroid - simplified without save/restore for most cases
         if (m.vertices && m.vertices.length > 0) {
+          ctx.fillStyle = fillColor;
+          ctx.strokeStyle = baseColor;
+          ctx.lineWidth = 1.5;
           ctx.beginPath();
+          const rot = m.rotation || 0;
           for (let i = 0; i <= m.vertices.length; i++) {
             const v = m.vertices[i % m.vertices.length];
-            const px = Math.cos(v.angle) * r * v.dist;
-            const py = Math.sin(v.angle) * r * v.dist;
+            const vAngle = v.angle + rot;
+            const px = x + Math.cos(vAngle) * r * v.dist;
+            const py = y + Math.sin(vAngle) * r * v.dist;
             if (i === 0) ctx.moveTo(px, py);
             else ctx.lineTo(px, py);
           }
@@ -934,15 +870,16 @@
           ctx.fill();
           ctx.stroke();
         } else {
+          ctx.fillStyle = fillColor;
+          ctx.strokeStyle = baseColor;
+          ctx.lineWidth = 1.5;
           ctx.beginPath();
-          ctx.arc(0, 0, r, 0, Math.PI * 2);
+          ctx.arc(x, y, r, 0, Math.PI * 2);
           ctx.fill();
           ctx.stroke();
         }
-        ctx.restore();
-        ctx.shadowBlur = 0;
 
-        // HP bar
+        // HP bar - only if damaged
         if (m.hp < m.maxHp) {
           const bw = r * 2, bh = 3 * sy, bx = x - bw / 2, by = y - r - 8 * sy;
           ctx.fillStyle = "rgba(0,0,0,0.6)";
@@ -951,7 +888,7 @@
           ctx.fillRect(bx, by, bw * (m.hp / m.maxHp), bh);
         }
 
-        // Attack type indicator
+        // Attack type indicator - only for attack asteroids
         if (m.attackType && ATTACK_TYPES[m.attackType]) {
           ctx.font = `${10 * sx}px sans-serif`;
           ctx.textAlign = "center";
@@ -1016,9 +953,7 @@
         const baseH = 14 * sy;
         ctx.fillStyle = hexToRgba(color.main, turretAlpha);
         ctx.strokeStyle = color.main;
-        ctx.lineWidth = 1.5;
-        ctx.shadowColor = isDead ? "transparent" : color.main;
-        ctx.shadowBlur = isDead ? 0 : 15;
+        ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.roundRect(cx - baseW / 2, 560 * sy - baseH, baseW, baseH, 3);
         ctx.fill();
@@ -1029,7 +964,6 @@
         ctx.fillStyle = hexToRgba(color.main, turretAlpha);
         ctx.fillRect(-2.5 * sx, -22 * sy, 5 * sx, 22 * sy);
         ctx.restore();
-        ctx.shadowBlur = 0;
 
         // Tower slots
         const offsets = [-110, -50, 50, 110];
@@ -1056,9 +990,6 @@
               ctx.roundRect(tx - platformW / 2, ty - platformH, platformW, platformH, 2);
               ctx.fill();
               ctx.stroke();
-
-              ctx.shadowColor = isDead ? "transparent" : tColor;
-              ctx.shadowBlur = isDead ? 0 : 8 + level * 2;
 
               // Rotating turret part
               ctx.save();
@@ -1124,7 +1055,6 @@
                 }
               }
               ctx.restore();
-              ctx.shadowBlur = 0;
 
               // Level stars
               if (level > 1) {
