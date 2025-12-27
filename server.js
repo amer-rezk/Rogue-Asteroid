@@ -419,9 +419,9 @@ function spawnWave() {
 
   // Queue natural wave asteroids - EQUAL distribution per player
   const playerCount = lockedSlots.length;
-  // Solo mode gets full asteroid count, PvP splits between players
+  // Solo mode or single player gets full asteroid count, PvP splits between players
   const baseTotal = WAVE_BASE_COUNT + Math.floor(wave * WAVE_COUNT_SCALE);
-  const totalCount = soloMode ? baseTotal : Math.floor(baseTotal * 0.5);
+  const totalCount = (soloMode || playerCount === 1) ? baseTotal : Math.floor(baseTotal * 0.5);
   const asteroidsPerPlayer = Math.max(1, Math.floor(totalCount / playerCount));
   
   // Spawn equal asteroids for each player
@@ -608,8 +608,8 @@ function checkGameOver() {
     return p && p.hp > 0;
   });
 
-  // Solo mode: game over when player dies
-  if (soloMode) {
+  // Single player or solo mode: game over only when player dies
+  if (soloMode || lockedSlots.length === 1) {
     if (alivePlayers.length === 0) {
       endGame(null);
       return true;
@@ -617,7 +617,7 @@ function checkGameOver() {
     return false;
   }
 
-  // PvP mode: game over when 1 or fewer players remain
+  // PvP mode (2+ players): game over when 1 or fewer players remain
   if (alivePlayers.length <= 1) {
     endGame(alivePlayers[0] || null);
     return true;
