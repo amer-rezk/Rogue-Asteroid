@@ -263,7 +263,6 @@ const UPGRADE_DEFS = [
   { id: "slow", name: "Grav Field", cat: "defense", icon: "🌀", desc: "Slow Enemies", stat: "slowfield", base: 1, type: "bool" },
   // PvP specific upgrades
   { id: "income", name: "War Profiteer", cat: "economy", icon: "💰", desc: "+{val}% Gold Gain", stat: "goldMult", base: 0.12, type: "mult" },
-  { id: "discount", name: "Arms Dealer", cat: "economy", icon: "🏷️", desc: "-{val}% Attack Cost", stat: "attackDiscount", base: 0.08, type: "add_cap", cap: 0.5 },
 ];
 
 function rollRarity() {
@@ -282,7 +281,6 @@ function makeUpgradeOptions(player) {
     if (opts.find(o => o.defId === def.id)) { i--; continue; }
     if (def.type === "bool" && player.upgrades[def.stat]) { i--; continue; }
     if (def.stat === "critChance" && (player.upgrades.critChance || 0) >= 1) { i--; continue; }
-    if (def.stat === "attackDiscount" && (player.upgrades.attackDiscount || 0) >= 0.5) { i--; continue; }
 
     const rarityKey = rollRarity();
     const rarity = RARITY_CONFIG[rarityKey];
@@ -303,13 +301,13 @@ function makeUpgradeOptions(player) {
       val = def.base * rarity.scale;
       if (def.stat === "shield" || def.stat === "ricochet" || def.stat === "pierce") {
         val = Math.max(1, Math.round(val));
-      } else if (def.type === "mult" || def.stat === "critChance" || def.stat === "attackDiscount") {
+      } else if (def.type === "mult" || def.stat === "critChance") {
         val = Math.round(val * 100);
       } else {
         val = Math.round(val * 10) / 10;
       }
       desc = def.desc.replace("{val}", val);
-      effect.val = def.type === "mult" || def.stat === "critChance" || def.stat === "attackDiscount" ? val / 100 : val;
+      effect.val = def.type === "mult" || def.stat === "critChance" ? val / 100 : val;
     }
 
     opts.push({
@@ -418,39 +416,43 @@ function spawnWave() {
   // Calculate wave HP bonus for natural asteroids (used for attack scaling reference)
   const waveHpScale = wave * 0.8;
 
-  // Queue natural wave asteroids (fewer in PvP mode)
+  // Queue natural wave asteroids - EQUAL distribution per player
   const playerCount = lockedSlots.length;
-  const baseCount = WAVE_BASE_COUNT + Math.floor(wave * WAVE_COUNT_SCALE * 0.5);
+  const totalCount = WAVE_BASE_COUNT + Math.floor(wave * WAVE_COUNT_SCALE * 0.5);
+  const asteroidsPerPlayer = Math.max(1, Math.floor(totalCount / playerCount));
   
-  for (let i = 0; i < baseCount; i++) {
-    const targetSlot = Math.floor(Math.random() * playerCount);
+  // Spawn equal asteroids for each player
+  for (let playerIdx = 0; playerIdx < playerCount; playerIdx++) {
+    const targetSlot = playerIdx;
     const { x0, x1 } = segmentBounds(targetSlot);
     
-    // Weighted size selection - large asteroids are rarer, especially early
-    const largeChance = Math.min(0.15 + wave * 0.015, 0.30);
-    const mediumChance = 0.35;
-    const sizeRoll = Math.random();
-    let type, r;
-    if (sizeRoll < largeChance) {
-      type = "large";
-      r = rand(15, ASTEROID_R_MAX);
-    } else if (sizeRoll < largeChance + mediumChance) {
-      type = "medium";
-      r = rand(11, 14);
-    } else {
-      type = "small";
-      r = rand(ASTEROID_R_MIN, 10);
+    for (let i = 0; i < asteroidsPerPlayer; i++) {
+      // Weighted size selection - large asteroids are rarer, especially early
+      const largeChance = Math.min(0.15 + wave * 0.015, 0.30);
+      const mediumChance = 0.35;
+      const sizeRoll = Math.random();
+      let type, r;
+      if (sizeRoll < largeChance) {
+        type = "large";
+        r = rand(15, ASTEROID_R_MAX);
+      } else if (sizeRoll < largeChance + mediumChance) {
+        type = "medium";
+        r = rand(11, 14);
+      } else {
+        type = "small";
+        r = rand(ASTEROID_R_MIN, 10);
+      }
+      
+      const x = rand(x0 + r + 20, x1 - r - 20);
+      const y = rand(-r - 10, -r);
+
+      // Natural asteroid HP
+      const baseHpVal = type === "large" ? 3 : type === "medium" ? 1.5 : 0.75;
+      const hp = Math.ceil(baseHpVal + waveHpScale);
+
+      // Queue for staggered spawning
+      spawnQueue.push({ x, y, type, hp, targetSlot, attackType: null });
     }
-    
-    const x = rand(x0 + r + 20, x1 - r - 20);
-    const y = rand(-r - 10, -r);
-
-    // Natural asteroid HP
-    const baseHpVal = type === "large" ? 3 : type === "medium" ? 1.5 : 0.75;
-    const hp = Math.ceil(baseHpVal + waveHpScale);
-
-    // Queue for staggered spawning
-    spawnQueue.push({ x, y, type, hp, targetSlot, attackType: null });
   }
 
   // Queue player-purchased attack asteroids (spawn slightly after natural ones)
@@ -537,10 +539,19 @@ function beginUpgradePhase() {
     const p = players.get(id);
     if (!p || p.hp <= 0) continue;
     const options = makeUpgradeOptions(p);
-    upgradePicks.set(id, { options, pickedKey: null });
-    safeSend(p.ws, { t: "upgrade", options, deadline: upgradePhaseStart + UPGRADE_TIMEOUT * 1000 });
+    // Track reroll count per wave (resets each wave)
+    const rerollCount = 0;
+    const rerollCost = getRerollCost(rerollCount);
+    upgradePicks.set(id, { options, pickedKey: null, rerollCount });
+    safeSend(p.ws, { t: "upgrade", options, deadline: upgradePhaseStart + UPGRADE_TIMEOUT * 1000, rerollCost });
   }
   broadcast({ t: "upgradePhase", deadline: upgradePhaseStart + UPGRADE_TIMEOUT * 1000 });
+}
+
+// Calculate reroll cost: base 10 gold, +50% per reroll
+function getRerollCost(rerollCount) {
+  const baseCost = 10;
+  return Math.floor(baseCost * Math.pow(1.5, rerollCount));
 }
 
 function maybeEndUpgradePhase() {
@@ -1303,6 +1314,38 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    // Reroll upgrade cards
+    if (msg.t === "rerollUpgrades" && phase === "upgrades") {
+      const pickObj = upgradePicks.get(id);
+      if (!pickObj || pickObj.pickedKey) return; // Can't reroll if already picked
+      
+      const rerollCost = getRerollCost(pickObj.rerollCount);
+      if (p.gold < rerollCost) {
+        safeSend(p.ws, { t: "rerollFailed", reason: "Not enough gold" });
+        return;
+      }
+      
+      // Deduct gold and increment reroll count
+      p.gold -= rerollCost;
+      pickObj.rerollCount++;
+      
+      // Generate new options
+      const newOptions = makeUpgradeOptions(p);
+      pickObj.options = newOptions;
+      
+      // Calculate next reroll cost
+      const nextRerollCost = getRerollCost(pickObj.rerollCount);
+      
+      safeSend(p.ws, { 
+        t: "upgrade", 
+        options: newOptions, 
+        deadline: upgradePhaseStart + UPGRADE_TIMEOUT * 1000,
+        rerollCost: nextRerollCost,
+        goldSpent: rerollCost
+      });
+      return;
+    }
+
     // Return to lobby from game over screen
     if (msg.t === "returnToLobby" && phase === "gameover") {
       resetLobby();
@@ -1319,9 +1362,9 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    // PvP: Buy attack to send at random opponent
+    // PvP: Buy attack to send at random opponent (supports quantity: 1, 10, or "max")
     if (msg.t === "buyAttack" && (phase === "playing" || phase === "upgrades")) {
-      const { attackType } = msg;
+      const { attackType, quantity } = msg;
       if (!ATTACK_TYPES[attackType]) return;
       
       // Get list of valid targets (alive players that aren't the buyer)
@@ -1333,30 +1376,41 @@ wss.on("connection", (ws) => {
       
       if (validTargets.length === 0) return; // No valid targets
       
-      // Randomly select a target
-      const targetId = validTargets[Math.floor(Math.random() * validTargets.length)];
-      const targetPlayer = players.get(targetId);
-      const targetSlot = targetPlayer.slot;
+      const unitCost = ATTACK_TYPES[attackType].cost;
       
-      let cost = ATTACK_TYPES[attackType].cost;
-      const discount = p.upgrades?.attackDiscount || 0;
-      cost = Math.round(cost * (1 - discount));
+      // Calculate how many to buy based on quantity mode
+      let toBuy = 1;
+      if (quantity === "max") {
+        toBuy = Math.floor(p.gold / unitCost);
+      } else if (quantity === 10) {
+        toBuy = Math.min(10, Math.floor(p.gold / unitCost));
+      } else {
+        toBuy = p.gold >= unitCost ? 1 : 0;
+      }
       
-      if (p.gold >= cost) {
-        p.gold -= cost;
+      if (toBuy <= 0) return; // Can't afford any
+      
+      const totalCost = unitCost * toBuy;
+      p.gold -= totalCost;
+      
+      // Queue attacks, distributing among random targets
+      for (let i = 0; i < toBuy; i++) {
+        const targetId = validTargets[Math.floor(Math.random() * validTargets.length)];
+        const targetPlayer = players.get(targetId);
+        const targetSlot = targetPlayer.slot;
         
         if (!attackQueue.has(targetSlot)) {
           attackQueue.set(targetSlot, []);
         }
         attackQueue.get(targetSlot).push({ type: attackType, senderId: id });
         
-        safeSend(ws, { t: "attackQueued", attackType, targetSlot, targetName: targetPlayer.name, cost });
-        
-        // Notify target
-        if (targetPlayer.ws) {
-          safeSend(targetPlayer.ws, { t: "incomingAttack", attackType, from: p.name });
+        // Notify target (only first one to avoid spam)
+        if (i === 0 && targetPlayer.ws) {
+          safeSend(targetPlayer.ws, { t: "incomingAttack", attackType, from: p.name, count: toBuy });
         }
       }
+      
+      safeSend(ws, { t: "attackQueued", attackType, count: toBuy, totalCost });
       return;
     }
 
