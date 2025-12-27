@@ -1,6 +1,6 @@
 (() => {
   // ===== Configuration =====
-  const DEFAULT_SERVER = "wss://rogue-asteroid.onrender.com/ws";
+  const DEFAULT_SERVER = "wss://rogue-asteroid.onrender.com";
 
   // Polyfill for roundRect
   if (!CanvasRenderingContext2D.prototype.roundRect) {
