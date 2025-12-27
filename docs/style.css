@@ -275,6 +275,22 @@ input[type="text"]:focus {
   box-shadow: 0 0 25px rgba(255, 68, 68, 0.8);
 }
 
+.btn.launch.force {
+  background: linear-gradient(90deg, #ff8800, #ffaa00);
+  box-shadow: 0 0 15px rgba(255, 170, 0, 0.4);
+  animation: pulse-force 1.5s ease-in-out infinite;
+}
+
+.btn.launch.force:hover {
+  filter: brightness(1.2);
+  box-shadow: 0 0 25px rgba(255, 170, 0, 0.8);
+}
+
+@keyframes pulse-force {
+  0%, 100% { box-shadow: 0 0 15px rgba(255, 170, 0, 0.4); }
+  50% { box-shadow: 0 0 25px rgba(255, 170, 0, 0.7); }
+}
+
 .btn:disabled {
   opacity: 0.3;
   pointer-events: none;
