@@ -35,11 +35,11 @@
 
   // PvP Attack Types
   const ATTACK_TYPES = {
-    swarm: { name: "Swarm", cost: 15, desc: "3 fast weak", color: "#ffcc00", icon: "🐝" },
-    bruiser: { name: "Bruiser", cost: 40, desc: "1 tanky", color: "#ff4444", icon: "🪨" },
-    bomber: { name: "Bomber", cost: 60, desc: "Explodes!", color: "#ff00ff", icon: "💣" },
-    splitter: { name: "Splitter", cost: 50, desc: "Splits x3", color: "#00ffff", icon: "💎" },
-    ghost: { name: "Ghost", cost: 35, desc: "Phases", color: "#8800ff", icon: "👻" }
+    swarm: { name: "Swarm", cost: 15, desc: "4 fast weak", color: "#ffcc00", icon: "🐝" },
+    bruiser: { name: "Bruiser", cost: 45, desc: "Very tanky", color: "#ff4444", icon: "🪨" },
+    bomber: { name: "Bomber", cost: 55, desc: "Explodes!", color: "#ff00ff", icon: "💣" },
+    splitter: { name: "Splitter", cost: 50, desc: "Splits x4", color: "#00ffff", icon: "💎" },
+    ghost: { name: "Ghost", cost: 40, desc: "Phases", color: "#8800ff", icon: "👻" }
   };
 
   // ===== DOM Elements =====
