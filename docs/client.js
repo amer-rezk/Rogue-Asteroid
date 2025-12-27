@@ -1287,6 +1287,139 @@
         ctx.textAlign = "left";
       }
 
+      // ===== DAMAGE METER PANEL =====
+      if (lastSnap && lastSnap.players.length > 1) {
+        const dmgPanelW = 155;
+        const playerCount = lastSnap.players.filter(p => p.slot >= 0).length;
+        const dmgPanelH = 50 + playerCount * 44;
+        const dmgPanelX = canvas.width - dmgPanelW - 10;
+        const dmgPanelY = 330; // Below attack panel
+        
+        // Calculate total and max damage
+        const totalDamage = lastSnap.players.reduce((sum, p) => sum + (p.damageDealt || 0), 0);
+        const maxDamage = Math.max(...lastSnap.players.map(p => p.damageDealt || 0), 1);
+        
+        // Panel background with gradient
+        const panelGrad = ctx.createLinearGradient(dmgPanelX, dmgPanelY, dmgPanelX, dmgPanelY + dmgPanelH);
+        panelGrad.addColorStop(0, "rgba(26,36,66,0.92)");
+        panelGrad.addColorStop(1, "rgba(15,20,40,0.95)");
+        ctx.fillStyle = panelGrad;
+        ctx.strokeStyle = "rgba(122,224,255,0.25)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(dmgPanelX, dmgPanelY, dmgPanelW, dmgPanelH, 10);
+        ctx.fill();
+        ctx.stroke();
+        
+        // Header with icon
+        ctx.font = "bold 11px 'Courier New', monospace";
+        ctx.textAlign = "left";
+        ctx.fillStyle = "#7ae0ff";
+        ctx.fillText("⚔️ DPS TRACKER", dmgPanelX + 10, dmgPanelY + 16);
+        
+        // Total damage display
+        ctx.font = "bold 9px 'Courier New', monospace";
+        ctx.textAlign = "right";
+        ctx.fillStyle = "#91ff7a";
+        ctx.fillText(Math.round(totalDamage).toLocaleString(), dmgPanelX + dmgPanelW - 10, dmgPanelY + 16);
+        
+        // Separator line with glow
+        ctx.strokeStyle = "rgba(122,224,255,0.3)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(dmgPanelX + 8, dmgPanelY + 26);
+        ctx.lineTo(dmgPanelX + dmgPanelW - 8, dmgPanelY + 26);
+        ctx.stroke();
+        
+        // Sort players by damage (highest first)
+        const sortedPlayers = [...lastSnap.players]
+          .filter(p => p.slot >= 0)
+          .sort((a, b) => (b.damageDealt || 0) - (a.damageDealt || 0));
+        
+        // Player damage bars
+        sortedPlayers.forEach((p, i) => {
+          const rowY = dmgPanelY + 34 + i * 44;
+          const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
+          const damage = p.damageDealt || 0;
+          const barWidth = maxDamage > 0 ? (damage / maxDamage) * (dmgPanelW - 20) : 0;
+          const percent = totalDamage > 0 ? ((damage / totalDamage) * 100).toFixed(1) : "0.0";
+          const isLeader = i === 0 && damage > 0;
+          const isMe = p.id === myId;
+          
+          // Row background for current player
+          if (isMe) {
+            ctx.fillStyle = "rgba(255,255,255,0.05)";
+            ctx.beginPath();
+            ctx.roundRect(dmgPanelX + 4, rowY - 4, dmgPanelW - 8, 40, 6);
+            ctx.fill();
+          }
+          
+          // Rank indicator
+          ctx.font = "bold 10px sans-serif";
+          ctx.textAlign = "center";
+          if (isLeader) {
+            ctx.fillStyle = "#ffd700";
+            ctx.fillText("👑", dmgPanelX + 14, rowY + 10);
+          } else {
+            ctx.fillStyle = "#666";
+            ctx.fillText(`${i + 1}`, dmgPanelX + 14, rowY + 10);
+          }
+          
+          // Player name
+          ctx.font = "bold 10px 'Courier New', monospace";
+          ctx.textAlign = "left";
+          ctx.fillStyle = isLeader ? "#ffd700" : color.main;
+          const displayName = p.name.length > 10 ? p.name.substring(0, 9) + "…" : p.name;
+          ctx.fillText(displayName, dmgPanelX + 26, rowY + 10);
+          
+          // Damage amount
+          ctx.font = "bold 10px 'Courier New', monospace";
+          ctx.textAlign = "right";
+          ctx.fillStyle = "#7ae0ff";
+          ctx.fillText(Math.round(damage).toLocaleString(), dmgPanelX + dmgPanelW - 10, rowY + 10);
+          
+          // Damage bar background
+          ctx.fillStyle = "rgba(255,255,255,0.08)";
+          ctx.beginPath();
+          ctx.roundRect(dmgPanelX + 10, rowY + 16, dmgPanelW - 20, 10, 4);
+          ctx.fill();
+          
+          // Damage bar fill with gradient
+          if (barWidth > 2) {
+            const barGrad = ctx.createLinearGradient(dmgPanelX + 10, 0, dmgPanelX + 10 + barWidth, 0);
+            barGrad.addColorStop(0, hexToRgba(color.main, 0.5));
+            barGrad.addColorStop(0.5, hexToRgba(color.main, 0.8));
+            barGrad.addColorStop(1, color.main);
+            ctx.fillStyle = barGrad;
+            ctx.beginPath();
+            ctx.roundRect(dmgPanelX + 10, rowY + 16, barWidth, 10, 4);
+            ctx.fill();
+            
+            // Leader glow
+            if (isLeader) {
+              ctx.shadowColor = color.main;
+              ctx.shadowBlur = 10;
+              ctx.fill();
+              ctx.shadowBlur = 0;
+            }
+            
+            // Bar end glow pip
+            ctx.fillStyle = "rgba(255,255,255,0.9)";
+            ctx.beginPath();
+            ctx.roundRect(dmgPanelX + 8 + barWidth, rowY + 17, 3, 8, 2);
+            ctx.fill();
+          }
+          
+          // Percentage label
+          ctx.font = "bold 8px 'Courier New', monospace";
+          ctx.textAlign = "right";
+          ctx.fillStyle = isLeader ? "#ffd700" : "rgba(255,255,255,0.6)";
+          ctx.fillText(`${percent}%`, dmgPanelX + dmgPanelW - 10, rowY + 34);
+        });
+        
+        ctx.textAlign = "left";
+      }
+
       // Recent attack sent feedback
       if (recentAttackSent && Date.now() - recentAttackSent.time < 2000) {
         const age = (Date.now() - recentAttackSent.time) / 2000;
