@@ -113,11 +113,33 @@ const app = express();
 app.use(express.static(path.join(__dirname, "docs")));
 app.get("/health", (_, res) => res.json({ ok: true, phase, players: players.size }));
 
+// Test endpoint for WebSocket debugging
+app.get("/ws-test", (_, res) => res.json({ ws: "endpoint exists", upgrade: "needed" }));
+
 const server = http.createServer(app);
 console.log("[SERVER] HTTP server created");
 
-const wss = new WebSocketServer({ server, path: "/ws" });
-console.log("[SERVER] WebSocket server created on path /ws");
+// Log ALL incoming requests at HTTP level
+server.on('request', (req, res) => {
+  console.log("[SERVER] HTTP Request:", req.method, req.url, "upgrade:", req.headers.upgrade);
+});
+
+const wss = new WebSocketServer({ noServer: true });
+console.log("[SERVER] WebSocket server created (noServer mode)");
+
+// Handle upgrade explicitly for Render compatibility
+server.on('upgrade', (request, socket, head) => {
+  const pathname = request.url;
+  console.log("[SERVER] === UPGRADE REQUEST ===");
+  console.log("[SERVER] Path:", pathname);
+  console.log("[SERVER] Headers:", JSON.stringify(request.headers));
+  
+  // Accept upgrade on any path (Render proxy compatibility)
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    console.log("[SERVER] WebSocket upgrade successful");
+    wss.emit('connection', ws, request);
+  });
+});
 
 const players = new Map();
 
