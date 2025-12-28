@@ -1951,10 +1951,17 @@
       if (phase === "playing" && myPlayer) {
         const canAffordBuy = myPlayer.gold >= buyUpgradeCost;
         
-        // Position: Top Right corner (or wherever you prefer)
+        // Logic to dodge the Attack Panel
         const buyW = 140;
         const buyH = 40;
-        const buyX = canvas.width - buyW - 15;
+        
+        // The attack panel is 220px wide + 12px margin. 
+        // We check if we are in PvP (more than 1 player) to apply this offset.
+        const isPvP = lastSnap && lastSnap.players && lastSnap.players.length > 1;
+        const panelOffset = isPvP ? 232 : 15; // 232 = 220 (panel) + 12 (margin)
+        
+        // Position: Screen Width - Panel Space - Button Width - Extra Spacing
+        const buyX = canvas.width - panelOffset - buyW - 10;
         const buyY = 60; // Below the score/wave HUD
 
         const isBuyHovered = mouseX >= buyX && mouseX <= buyX + buyW && 
