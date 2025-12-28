@@ -1,7 +1,7 @@
 (() => {
   // ===== Configuration =====
   // Updated to new Netlify address
-  const DEFAULT_SERVER = "wss://iridescent-boba-20d032.netlify.app/ws";
+  const DEFAULT_SERVER = "wss://mute-lungfish-no-name-orgs-aef98851.koyeb.app/ws";
 
   // Polyfill for roundRect
   if (!CanvasRenderingContext2D.prototype.roundRect) {
