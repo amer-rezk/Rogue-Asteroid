@@ -1,10 +1,10 @@
 // server.js - Rogue Asteroid PvP (OPTIMIZED)
 // Competitive asteroid defense with attack purchasing
+// 
 // OPTIMIZATIONS:
 // - Broadcast at 10Hz instead of 30Hz (3x less network traffic)
-// - Particles/damage numbers are client-side only
-// - Asteroid shapes sent once on creation
-// - Events for visual effects instead of state
+// - Visual effects sent as lightweight events instead of full particle arrays
+// - Clients generate their own particles based on events
 
 const express = require("express");
 const http = require("http");
@@ -14,10 +14,10 @@ const { WebSocketServer } = require("ws");
 
 // ===== Game constants =====
 const MAX_PLAYERS = 4;
-const TICK_RATE = 30;          // Physics still at 30Hz
-const BROADCAST_RATE = 10;      // Network at 10Hz (OPTIMIZED)
+const TICK_RATE = 30;          // Physics at 30Hz
+const BROADCAST_RATE = 10;     // Network at 10Hz (OPTIMIZED - 3x less traffic)
 const DT = 1 / TICK_RATE;
-const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE);
+const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 3 ticks
 
 const WORLD_H = 600;
 const GROUND_Y = 560;
@@ -76,7 +76,8 @@ let wave = 0;
 
 let missiles = [];
 let bullets = [];
-// REMOVED: particles and damageNumbers - now client-side only
+let particles = [];
+let damageNumbers = [];
 
 let upgradePicks = new Map();
 let attackQueue = new Map();
@@ -89,7 +90,7 @@ let spawnQueue = [];
 let spawnTimer = 0;
 const SPAWN_INTERVAL = 0.3;
 
-// Event queue for client-side effects (OPTIMIZED)
+// OPTIMIZED: Event queue for client-side effects
 let eventQueue = [];
 
 // Tick counter for broadcast throttling
@@ -159,7 +160,7 @@ function broadcast(obj) {
   for (const p of players.values()) safeSend(p.ws, obj);
 }
 
-// Queue an event for client-side effects (OPTIMIZED)
+// OPTIMIZED: Queue an event for client-side visual effects
 function queueEvent(type, data) {
   eventQueue.push({ t: type, ...data });
 }
@@ -212,8 +213,7 @@ function redistributeAsteroids(deadSlot) {
       const { x0, x1 } = segmentBounds(newSlot);
       m.targetSlot = newSlot;
       m.x = x0 + Math.random() * (x1 - x0);
-      // Queue visual effect (client-side)
-      queueEvent("fx", { type: "warp", x: m.x, y: m.y, color: "#ff00ff" });
+      createExplosion(m.x, m.y, 20, "#ff00ff");
     }
   }
   
@@ -384,35 +384,32 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
   const vx = rand(-15, 15);
 
   const ftlThreshold = GROUND_Y * 0.1;
-  const id = uid();
-  const vertices = generateAsteroidShape(r);
-
-  // OPTIMIZED: Send asteroid creation event with vertices (once, not every frame)
-  queueEvent("spawn", { 
-    id, x, y, r, type, attackType, vertices,
-    color: ATTACK_TYPES[attackType]?.color || null
-  });
 
   return {
-    id, x, y, vx, vy, r, type,
-    hp, maxHp: hp,
+    id: uid(),
+    x, y, vx, vy, r, type,
+    hp: hp,
+    maxHp: hp,
     rotation: rand(0, Math.PI * 2),
     rotSpeed: rand(-3, 3),
-    vertices,
-    targetSlot,
-    attackType,
-    senderId,
+    vertices: generateAsteroidShape(r),
+    targetSlot: targetSlot,
+    attackType: attackType,
+    senderId: senderId,
     phaseTimer: attackType === "ghost" ? 0 : null,
     splits: attackType === "splitter" ? (ATTACK_TYPES.splitter?.splits || 4) : 0,
     explosive: attackType === "bomber",
     inFTL: true,
-    ftlThreshold,
+    ftlThreshold: ftlThreshold,
+    ftlTrail: [],
   };
 }
 
 function spawnWave() {
   missiles = [];
   bullets = [];
+  particles = [];
+  damageNumbers = [];
   spawnQueue = [];
   spawnTimer = 0;
 
@@ -451,17 +448,22 @@ function spawnWave() {
       const sizeRoll = Math.random();
       let type, r;
       if (sizeRoll < largeChance) {
-        type = "large"; r = rand(15, ASTEROID_R_MAX);
+        type = "large";
+        r = rand(15, ASTEROID_R_MAX);
       } else if (sizeRoll < largeChance + mediumChance) {
-        type = "medium"; r = rand(11, 14);
+        type = "medium";
+        r = rand(11, 14);
       } else {
-        type = "small"; r = rand(ASTEROID_R_MIN, 10);
+        type = "small";
+        r = rand(ASTEROID_R_MIN, 10);
       }
       
       const x = rand(x0 + r + 20, x1 - r - 20);
       const y = rand(-r - 10, -r);
+
       const baseHpVal = type === "large" ? 3 : type === "medium" ? 1.5 : 0.75;
       const hp = Math.ceil(baseHpVal + waveHpScale);
+
       spawnQueue.push({ x, y, type, hp, targetSlot, attackType: null });
     }
   }
@@ -490,14 +492,15 @@ function spawnWave() {
         const r = sizeMap[attackDef.size] || 12;
         const x = rand(x0 + r + 30, x1 - r - 30);
         const y = rand(-r - 20, -r);
+
         const baseAttackHp = attackDef.baseHp + (wave * attackDef.hpScale);
         const attackHp = Math.ceil(baseAttackHp * extremeScaleMult);
+
         spawnQueue.push({ x, y, type: attackDef.size, hp: attackHp, targetSlot, attackType: attack.type, senderId: attack.senderId });
       }
     }
   }
 
-  // Shuffle spawn queue
   for (let i = spawnQueue.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [spawnQueue[i], spawnQueue[j]] = [spawnQueue[j], spawnQueue[i]];
@@ -614,6 +617,8 @@ function resetToLobby() {
     lockedSlots = null;
     missiles = [];
     bullets = [];
+    particles = [];
+    damageNumbers = [];
     upgradePicks = new Map();
     attackQueue = new Map();
     pendingUpgrades = new Map();
@@ -827,7 +832,35 @@ function clampAimAngle(turretX, turretY, targetX, targetY) {
   };
 }
 
-// Unified wall bounce
+// OPTIMIZED: Create explosion - now also queues event for client
+function createExplosion(x, y, radius, color) {
+  // Queue event for client-side rendering
+  queueEvent("explosion", { x, y, radius, color });
+  
+  // Still create server-side particles for backwards compatibility
+  for (let i = 0; i < 8; i++) {
+    const angle = (i / 8) * Math.PI * 2 + Math.random() * 0.5;
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * rand(60, 120),
+      vy: Math.sin(angle) * rand(60, 120),
+      life: rand(0.3, 0.5),
+      maxLife: 0.5,
+      color: color || "#f80",
+      size: rand(2, 4),
+    });
+  }
+}
+
+// OPTIMIZED: Add damage number - now also queues event for client
+function addDamageNumber(x, y, amount, isCrit) {
+  // Queue event for client-side rendering
+  queueEvent("damage", { x, y, amount, isCrit });
+  
+  // Still create server-side for backwards compatibility
+  damageNumbers.push({ x, y, amount, isCrit, life: 1.0, vy: -60 });
+}
+
 function bounceOffWalls(m) {
   const { x0, x1 } = segmentBounds(m.targetSlot);
   if (m.x - m.r < x0) { m.x = x0 + m.r; m.vx = Math.abs(m.vx); }
@@ -839,7 +872,7 @@ function tick() {
 
   try {
     tickCount++;
-
+    
     // Process spawn queue
     if (spawnQueue.length > 0) {
       spawnTimer -= DT;
@@ -853,7 +886,22 @@ function tick() {
       }
     }
 
-    // Player shooting & towers
+    // Update particles
+    particles = particles.filter(p => {
+      p.x += p.vx * DT;
+      p.y += p.vy * DT;
+      p.life -= DT;
+      p.vx *= 0.95;
+      p.vy *= 0.95;
+      return p.life > 0;
+    });
+    damageNumbers = damageNumbers.filter(d => {
+      d.y += d.vy * DT;
+      d.life -= DT * 1.5;
+      return d.life > 0;
+    });
+
+    // Player shooting
     for (const id of lockedSlots) {
       const p = players.get(id);
       if (!p || p.hp <= 0) continue;
@@ -887,6 +935,7 @@ function tick() {
         fireWithMultishot(p, pos.main.x, pos.main.y, clamped.x, clamped.y);
       }
 
+      // Tower shooting
       if (p.towers) {
         p.towers.forEach((tower, idx) => {
           if (!tower) return;
@@ -948,7 +997,7 @@ function tick() {
         
         if (m.y >= m.ftlThreshold) {
           m.inFTL = false;
-          queueEvent("fx", { type: "ftl_exit", x: m.x, y: m.y });
+          createExplosion(m.x, m.y, 15, "#88f");
         }
         continue;
       }
@@ -964,9 +1013,9 @@ function tick() {
       m.x += m.vx * DT * speedMult;
       m.y += m.vy * DT * speedMult;
       m.rotation += m.rotSpeed * DT;
+      
       bounceOffWalls(m);
       
-      // Hit ground
       if (m.y + m.r >= GROUND_Y) {
         let blocked = false;
         const targetSlot = m.targetSlot;
@@ -978,7 +1027,7 @@ function tick() {
             if (p.upgrades.shieldActive > 0) {
               p.upgrades.shieldActive--;
               blocked = true;
-              queueEvent("fx", { type: "shield", x: m.x, y: GROUND_Y - 5 });
+              createExplosion(m.x, GROUND_Y - 5, 30, "#0ff");
               break;
             }
           }
@@ -992,7 +1041,7 @@ function tick() {
                 const damage = m.explosive ? 2 : 1;
                 const wasAlive = p.hp > 0;
                 p.hp = Math.max(0, p.hp - damage);
-                queueEvent("fx", { type: m.explosive ? "bomb_hit" : "ground_hit", x: m.x, y: GROUND_Y - 5 });
+                createExplosion(m.x, GROUND_Y - 5, m.explosive ? 60 : 40, m.explosive ? "#ff00ff" : "#f44");
                 
                 if (wasAlive && p.hp <= 0) {
                   redistributeAsteroids(targetSlot);
@@ -1094,11 +1143,9 @@ function tick() {
           if (!b.hitList) b.hitList = [];
           b.hitList.push(m.id);
           if (b.pierce > 0) { b.pierce--; } else { b.dead = true; }
-          
-          // OPTIMIZED: Queue damage number event instead of server-side tracking
-          queueEvent("dmg", { x: m.x, y: m.y - m.r, amt: b.dmg, crit: b.isCrit });
-          
+          addDamageNumber(m.x, m.y - m.r, b.dmg, b.isCrit);
           const owner = players.get(b.ownerId);
+          
           if (owner) {
             owner.damageDealt = (owner.damageDealt || 0) + b.dmg;
             owner.waveDamage = (owner.waveDamage || 0) + b.dmg;
@@ -1106,7 +1153,7 @@ function tick() {
           
           if (m.hp <= 0) {
             m.dead = true;
-            queueEvent("fx", { type: "explode", x: m.x, y: m.y, color: ATTACK_TYPES[m.attackType]?.color || "#fa0" });
+            createExplosion(m.x, m.y, 25, ATTACK_TYPES[m.attackType]?.color || "#fa0");
             
             if (owner) {
               owner.score = (owner.score || 0) + 50;
@@ -1132,7 +1179,7 @@ function tick() {
           }
           
           if (b.explosive > 0) {
-            queueEvent("fx", { type: "explode", x: b.x, y: b.y, color: "#fa0" });
+            createExplosion(b.x, b.y, 35, "#fa0");
             for (const m2 of missiles) {
               if (m2.dead || m2 === m) continue;
               const d = Math.hypot(m2.x - b.x, m2.y - b.y);
@@ -1145,14 +1192,14 @@ function tick() {
               const d = Math.hypot(m2.x - m.x, m2.y - m.y);
               if (d < 70) {
                 m2.hp -= 1;
-                queueEvent("dmg", { x: m2.x, y: m2.y - m2.r, amt: 1, crit: false });
-                queueEvent("fx", { type: "chain", x1: m.x, y1: m.y, x2: m2.x, y2: m2.y });
+                addDamageNumber(m2.x, m2.y - m2.r, 1, false);
                 if (m2.hp <= 0) m2.dead = true;
+                particles.push({ x: m.x, y: m.y, vx: (m2.x - m.x) * 3, vy: (m2.y - m.y) * 3, life: 0.12, maxLife: 0.12, color: "#ff0", size: 2 });
                 break;
               }
             }
           }
-          queueEvent("fx", { type: "hit", x: b.x, y: b.y, crit: b.isCrit });
+          createExplosion(b.x, b.y, 15, b.isCrit ? "#ff0" : "#0ff");
           if (b.dead) break;
         }
       }
@@ -1163,7 +1210,6 @@ function tick() {
 
     if (checkGameOver()) return;
 
-    // Wave completion check
     if (missiles.length === 0 && spawnQueue.length === 0) {
       if (waveClearedTime === 0) {
         waveClearedTime = Date.now();
@@ -1175,61 +1221,64 @@ function tick() {
       waveClearedTime = 0;
     }
 
-    // OPTIMIZED: Broadcast at 10Hz instead of 30Hz
+    // OPTIMIZED: Only broadcast every BROADCAST_INTERVAL ticks (10Hz instead of 30Hz)
     if (tickCount % BROADCAST_INTERVAL === 0) {
       broadcast({
         t: "state",
         ts: Date.now(),
         phase,
         wave,
-        // OPTIMIZED: Compact missile format (no vertices - sent on spawn)
-        m: missiles.map((m) => [
-          m.id, m.x|0, m.y|0, m.r, m.hp, m.maxHp, 
-          m.rotation, m.targetSlot, m.isPhased ? 1 : 0, m.inFTL ? 1 : 0
-        ]),
-        // OPTIMIZED: Compact bullet format
-        b: bullets.map((b) => [
-          b.x|0, b.y|0, b.ownerSlot, b.isCrit ? 1 : 0, b.bulletType === "missile" ? 2 : b.bulletType === "sniper" ? 1 : 0
-        ]),
-        // Events for client-side effects
-        ev: eventQueue,
-        // Player data
-        p: lockedSlots.map((id) => {
+        world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
+        missiles: missiles.map((m) => ({
+          id: m.id, x: m.x, y: m.y, r: m.r, hp: m.hp, maxHp: m.maxHp, type: m.type,
+          rotation: m.rotation, vertices: m.vertices, attackType: m.attackType, isPhased: m.isPhased,
+          inFTL: m.inFTL
+        })),
+        bullets: bullets.map((b) => ({
+          id: b.id, x: b.x, y: b.y, r: b.r, vx: b.vx, vy: b.vy,
+          slot: b.ownerSlot, isCrit: b.isCrit, lifespan: b.lifespan,
+          isTower: b.isTowerBullet, bulletType: b.bulletType
+        })),
+        particles: particles.map((p) => ({ x: p.x, y: p.y, life: p.life, maxLife: p.maxLife, color: p.color, size: p.size })),
+        damageNumbers: damageNumbers.map((d) => ({ x: d.x, y: d.y, amount: d.amount, isCrit: d.isCrit, life: d.life })),
+        // OPTIMIZED: Include events for client-side rendering
+        events: eventQueue,
+        players: lockedSlots.map((id) => {
           const p = players.get(id);
-          if (!p) return null;
+          if (!p) return { id, slot: -1 };
           const u = p.upgrades || {};
           return {
-            id: p.id, s: p.slot,
-            n: p.name || `Player ${p.slot + 1}`,
-            sc: p.score || 0,
-            g: p.gold || 0,
+            id: p.id, slot: p.slot,
+            name: p.name || `Player ${p.slot + 1}`,
+            score: p.score || 0,
+            gold: p.gold || 0,
             hp: p.hp,
-            mhp: p.maxHp,
-            ta: p.turretAngle || -Math.PI / 2,
-            im: p.manualShooting ? 1 : 0,
-            tw: p.towers,
-            k: p.kills || 0,
-            dd: p.damageDealt || 0,
-            wd: p.waveDamage || 0,
-            li: p.lastInterest || 0,
-            u: {
-              sa: u.shieldActive ?? 0,
-              sf: u.slowfield ? 1 : 0,
-              da: u.damageAdd ?? 0,
-              bsm: u.bulletSpeedMult ?? 1,
-              frm: u.fireRateMult ?? 1,
-              ms: u.multishot ?? 1,
-              msdm: u.multishotDmgMult ?? 1,
-              cc: u.critChance ?? 0,
-              ex: u.explosive ?? 0,
-              la: u.lifespanAdd ?? 0,
-              ri: u.ricochet ?? 0,
-              pi: u.pierce ?? 0,
-              ch: u.chain ? 1 : 0,
-              gm: u.goldMult ?? 1,
+            maxHp: p.maxHp,
+            turretAngle: p.turretAngle || -Math.PI / 2,
+            isManual: !!p.manualShooting,
+            towers: p.towers,
+            kills: p.kills || 0,
+            damageDealt: p.damageDealt || 0,
+            waveDamage: p.waveDamage || 0,
+            lastInterest: p.lastInterest || 0,
+            upgrades: {
+              shieldActive: u.shieldActive ?? 0,
+              slowfield: !!u.slowfield,
+              damageAdd: u.damageAdd ?? 0,
+              bulletSpeedMult: u.bulletSpeedMult ?? 1,
+              fireRateMult: u.fireRateMult ?? 1,
+              multishot: u.multishot ?? 1,
+              multishotDmgMult: u.multishotDmgMult ?? 1,
+              critChance: u.critChance ?? 0,
+              explosive: u.explosive ?? 0,
+              lifespanAdd: u.lifespanAdd ?? 0,
+              ricochet: u.ricochet ?? 0,
+              pierce: u.pierce ?? 0,
+              chain: !!u.chain,
+              goldMult: u.goldMult ?? 1,
             },
           };
-        }).filter(p => p !== null),
+        }),
       });
       
       // Clear event queue after broadcast
@@ -1587,4 +1636,4 @@ wss.on("connection", (ws) => {
 setInterval(() => { tick(); }, 1000 / TICK_RATE);
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => { console.log(`Rogue Asteroid PvP server (OPTIMIZED): http://localhost:${PORT}`); });
+server.listen(PORT, () => { console.log(`Rogue Asteroid PvP (OPTIMIZED 10Hz): http://localhost:${PORT}`); });
