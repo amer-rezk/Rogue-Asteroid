@@ -142,6 +142,7 @@
   // Stats panel
   let statsPanelOpen = false;
   let hoveredStatsBtn = false;
+  let showDamageNumbers = localStorage.getItem("rogueAsteroidDmgNumbers") !== "false"; // Default true
 
   // Upgrade reroll
   let currentRerollCost = 10;
@@ -718,6 +719,16 @@
       return;
     }
 
+    // Handle damage numbers toggle click
+    if (phase === "playing" && statsPanelOpen && window.dmgToggleBounds) {
+      const b = window.dmgToggleBounds;
+      if (mouseX >= b.x && mouseX <= b.x + b.w && mouseY >= b.y && mouseY <= b.y + b.h) {
+        showDamageNumbers = !showDamageNumbers;
+        localStorage.setItem("rogueAsteroidDmgNumbers", showDamageNumbers.toString());
+        return;
+      }
+    }
+
     // Handle quantity mode button clicks
     if (hoveredQuantityBtn && phase === "playing") {
       attackQuantityMode = hoveredQuantityBtn;
@@ -1276,8 +1287,8 @@
         drawBullet(b, sx, sy, baseColor);
       }
 
-      // Damage numbers
-      if (lastSnap.damageNumbers) {
+      // Damage numbers (if enabled)
+      if (showDamageNumbers && lastSnap.damageNumbers) {
         for (const d of lastSnap.damageNumbers) {
           ctx.font = `bold ${d.isCrit ? 16 : 12}px 'Courier New', monospace`;
           ctx.textAlign = "center";
@@ -1868,7 +1879,7 @@
         if (statsPanelOpen) {
           const u = myPlayer.upgrades || {};
           const panelW = 200;
-          const panelH = 280;
+          const panelH = 330; // Taller to fit options
           const panelX = canvas.width - panelW - 15;
           const panelY = btnY - panelH - 10;
           
@@ -1902,7 +1913,7 @@
           ctx.font = "11px 'Courier New', monospace";
           ctx.textAlign = "left";
           let statY = panelY + 52;
-          const lineH = 22;
+          const lineH = 20;
           
           const stats = [
             { label: "Base Damage", value: `+${(u.damageAdd || 0).toFixed(1)}`, color: "#ff6666" },
@@ -1927,6 +1938,48 @@
             ctx.fillText(stat.value, panelX + panelW - 15, statY + i * lineH);
             ctx.textAlign = "left";
           });
+          
+          // Options section
+          const optionsY = statY + stats.length * lineH + 10;
+          
+          // Separator
+          ctx.strokeStyle = "rgba(122,224,255,0.3)";
+          ctx.beginPath();
+          ctx.moveTo(panelX + 10, optionsY);
+          ctx.lineTo(panelX + panelW - 10, optionsY);
+          ctx.stroke();
+          
+          ctx.font = "bold 11px 'Orbitron', sans-serif";
+          ctx.fillStyle = "#7ae0ff";
+          ctx.textAlign = "center";
+          ctx.fillText("⚙️ OPTIONS", panelX + panelW / 2, optionsY + 18);
+          
+          // Damage numbers toggle button
+          const toggleY = optionsY + 28;
+          const toggleW = panelW - 30;
+          const toggleH = 28;
+          const toggleX = panelX + 15;
+          
+          const isHoveringDmgToggle = mouseX >= toggleX && mouseX <= toggleX + toggleW && 
+                                       mouseY >= toggleY && mouseY <= toggleY + toggleH;
+          window.dmgToggleBounds = { x: toggleX, y: toggleY, w: toggleW, h: toggleH };
+          
+          ctx.fillStyle = isHoveringDmgToggle ? "rgba(100,180,255,0.3)" : "rgba(40,60,100,0.4)";
+          ctx.strokeStyle = isHoveringDmgToggle ? "#7ae0ff" : "rgba(122,224,255,0.3)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(toggleX, toggleY, toggleW, toggleH, 5);
+          ctx.fill();
+          ctx.stroke();
+          
+          ctx.font = "11px 'Courier New', monospace";
+          ctx.textAlign = "left";
+          ctx.fillStyle = "#ccc";
+          ctx.fillText("Damage Numbers:", toggleX + 8, toggleY + 18);
+          
+          ctx.textAlign = "right";
+          ctx.fillStyle = showDamageNumbers ? "#66ff66" : "#ff6666";
+          ctx.fillText(showDamageNumbers ? "ON" : "OFF", toggleX + toggleW - 8, toggleY + 18);
         }
         
         ctx.textAlign = "left";
