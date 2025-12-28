@@ -170,12 +170,11 @@
   let asteroidCache = new Map(); // Cache: id -> {vertices, rotSpeed, rotation, color}
   let lastUpdateTime = Date.now();
   
-  // CLIENT-SIDE PREDICTION for smooth movement
+  // SIMPLE INTERPOLATION for smooth movement
   let lastServerTime = Date.now();
-  let missileStates = new Map();  // id -> {x, y, vx, vy, lastX, lastY}
-  let bulletStates = new Map();   // id -> {x, y, vx, vy}
-  const BULLET_SPEED = 175;       // Must match server
-  const PREDICTION_ENABLED = true;
+  let missileStates = new Map();  // id -> {x, y, targetX, targetY, vx, vy}
+  let bulletStates = new Map();   // id -> {x, y, targetX, targetY, vx, vy}
+  const INTERP_SPEED = 0.15;      // How fast to interpolate toward server position
 
   // ===== Utilities =====
   function hexToRgba(hex, alpha) {
@@ -295,85 +294,34 @@
       data.rotation += data.rotSpeed * dt;
     }
     
-    // CLIENT-SIDE PREDICTION: Move objects between server updates
-    if (PREDICTION_ENABLED && lastSnap) {
-      // Check which players have slowfield active
-      const slowfieldSlots = new Set();
-      if (lastSnap.players) {
-        for (const p of lastSnap.players) {
-          if (p.upgrades?.slowfield) {
-            slowfieldSlots.add(p.slot);
-          }
-        }
-      }
-      
-      // Build a map of missile FTL states from lastSnap
-      const missileInFTL = new Map();
-      if (lastSnap.missiles) {
-        for (const m of lastSnap.missiles) {
-          missileInFTL.set(m.id, m.inFTL);
-        }
-      }
-      
-      // Predict missile positions with drift correction
+    // SIMPLE INTERPOLATION: Smoothly move toward server positions
+    if (lastSnap) {
+      // Interpolate missiles toward their target positions
       for (const [id, state] of missileStates) {
-        const inFTL = missileInFTL.get(id);
+        // Move toward target with velocity-based prediction + interpolation
+        state.x += state.vx * dt;
+        state.y += state.vy * dt;
         
-        // Advance both predicted AND server position estimates
-        if (inFTL) {
-          // FTL mode: fast vertical, slow horizontal
-          const dx = state.vx * dt * 0.3;
-          const dy = state.vy * dt * 8;
-          state.x += dx;
-          state.y += dy;
-          state.serverX += dx;
-          state.serverY += dy;
-        } else {
-          // Normal mode: check if in slowfield
-          const segmentWidth = world.segmentWidth || 360;
-          const missileSlot = Math.floor(state.x / segmentWidth);
-          const speedMult = slowfieldSlots.has(missileSlot) ? 0.75 : 1.0;
-          
-          const dx = state.vx * dt * speedMult;
-          const dy = state.vy * dt * speedMult;
-          state.x += dx;
-          state.y += dy;
-          state.serverX += dx;
-          state.serverY += dy;
-        }
+        // Smoothly correct toward server target
+        state.x += (state.targetX - state.x) * INTERP_SPEED;
+        state.y += (state.targetY - state.y) * INTERP_SPEED;
         
-        // Smooth drift correction toward server position
-        // Higher value = faster catch-up but potentially more visible
-        const errorX = state.serverX - state.x;
-        const errorY = state.serverY - state.y;
-        const errorDist = Math.hypot(errorX, errorY);
-        
-        // Adaptive correction: faster when error is larger
-        const baseDrift = 0.08;
-        const correction = Math.min(baseDrift + errorDist * 0.002, 0.2);
-        state.x += errorX * correction;
-        state.y += errorY * correction;
+        // Also advance target by velocity (server is also moving it)
+        state.targetX += state.vx * dt;
+        state.targetY += state.vy * dt;
       }
       
-      // Predict bullet positions with drift correction
+      // Interpolate bullets toward their target positions
       for (const [id, state] of bulletStates) {
-        const dx = state.vx * dt;
-        const dy = state.vy * dt;
-        state.x += dx;
-        state.y += dy;
-        state.serverX += dx;
-        state.serverY += dy;
-        
-        // Adaptive drift correction for bullets
-        const errorX = state.serverX - state.x;
-        const errorY = state.serverY - state.y;
-        const errorDist = Math.hypot(errorX, errorY);
-        const correction = Math.min(0.1 + errorDist * 0.002, 0.25);
-        state.x += errorX * correction;
-        state.y += errorY * correction;
+        state.x += state.vx * dt;
+        state.y += state.vy * dt;
+        state.x += (state.targetX - state.x) * INTERP_SPEED;
+        state.y += (state.targetY - state.y) * INTERP_SPEED;
+        state.targetX += state.vx * dt;
+        state.targetY += state.vy * dt;
       }
       
-      // Apply predicted positions to lastSnap for rendering
+      // Apply interpolated positions to lastSnap for rendering
       if (lastSnap.missiles) {
         for (const m of lastSnap.missiles) {
           const state = missileStates.get(m.id);
@@ -408,17 +356,15 @@
             rotation: Math.random() * Math.PI * 2,
             color: ev.color || "#fa0"
           });
-          // Initialize prediction state with spawn velocity
-          if (PREDICTION_ENABLED) {
-            missileStates.set(ev.id, {
-              serverX: ev.x,
-              serverY: ev.y,
-              x: ev.x,
-              y: ev.y,
-              vx: ev.vx || 0,
-              vy: ev.vy || 30
-            });
-          }
+          // Initialize interpolation state with spawn position
+          missileStates.set(ev.id, {
+            x: ev.x,
+            y: ev.y,
+            targetX: ev.x,
+            targetY: ev.y,
+            vx: ev.vx || 0,
+            vy: ev.vy || 30
+          });
           break;
           
         case "explosion":
@@ -714,89 +660,61 @@
         
         // Calculate time delta for velocity estimation
         const now = Date.now();
-        const serverDt = (now - lastServerTime) / 1000;
         lastServerTime = now;
         
-        // Update missile states with velocity for prediction
-        // Use interpolation instead of snapping to avoid rubber-banding
-        if (msg.missiles && PREDICTION_ENABLED) {
-          const newMissileStates = new Map();
+        // Update missile states - store server position as target
+        if (msg.missiles) {
           for (const m of msg.missiles) {
             const prev = missileStates.get(m.id);
-            let x, y;
             if (prev) {
-              // Calculate error between predicted and server position
-              const errorX = m.x - prev.x;
-              const errorY = m.y - prev.y;
-              const errorDist = Math.hypot(errorX, errorY);
-              
-              // Cap maximum correction to prevent large jumps
-              const maxCorrection = 8; // Max pixels to correct per update
-              if (errorDist > maxCorrection) {
-                // Large error: correct by maxCorrection toward server
-                const scale = maxCorrection / errorDist;
-                x = prev.x + errorX * scale;
-                y = prev.y + errorY * scale;
-              } else {
-                // Small error: blend smoothly
-                const lerpFactor = 0.4;
-                x = prev.x + errorX * lerpFactor;
-                y = prev.y + errorY * lerpFactor;
-              }
+              // Existing missile: update target, keep current interpolated position
+              prev.targetX = m.x;
+              prev.targetY = m.y;
+              prev.vx = m.vx || 0;
+              prev.vy = m.vy || 30;
             } else {
-              // New object, start at server position
-              x = m.x;
-              y = m.y;
+              // New missile: start at server position
+              missileStates.set(m.id, {
+                x: m.x,
+                y: m.y,
+                targetX: m.x,
+                targetY: m.y,
+                vx: m.vx || 0,
+                vy: m.vy || 30
+              });
             }
-            newMissileStates.set(m.id, {
-              serverX: m.x,
-              serverY: m.y,
-              x: x,
-              y: y,
-              vx: m.vx || 0,
-              vy: m.vy || 30
-            });
           }
-          missileStates = newMissileStates;
+          // Remove missiles that no longer exist
+          const currentIds = new Set(msg.missiles.map(m => m.id));
+          for (const id of missileStates.keys()) {
+            if (!currentIds.has(id)) missileStates.delete(id);
+          }
         }
         
-        // Update bullet states for prediction with interpolation
-        if (msg.bullets && PREDICTION_ENABLED) {
-          const newBulletStates = new Map();
+        // Update bullet states - store server position as target  
+        if (msg.bullets) {
           for (const b of msg.bullets) {
-            const speed = BULLET_SPEED * 1.1;
-            const vx = Math.cos(b.angle) * speed;
-            const vy = Math.sin(b.angle) * speed;
             const prev = bulletStates.get(b.id);
-            let x, y;
             if (prev) {
-              const errorX = b.x - prev.x;
-              const errorY = b.y - prev.y;
-              const errorDist = Math.hypot(errorX, errorY);
-              
-              const maxCorrection = 12; // Bullets move faster, allow more correction
-              if (errorDist > maxCorrection) {
-                const scale = maxCorrection / errorDist;
-                x = prev.x + errorX * scale;
-                y = prev.y + errorY * scale;
-              } else {
-                const lerpFactor = 0.4;
-                x = prev.x + errorX * lerpFactor;
-                y = prev.y + errorY * lerpFactor;
-              }
+              prev.targetX = b.x;
+              prev.targetY = b.y;
+              prev.vx = b.vx;
+              prev.vy = b.vy;
             } else {
-              x = b.x;
-              y = b.y;
+              bulletStates.set(b.id, {
+                x: b.x,
+                y: b.y,
+                targetX: b.x,
+                targetY: b.y,
+                vx: b.vx,
+                vy: b.vy
+              });
             }
-            newBulletStates.set(b.id, {
-              serverX: b.x,
-              serverY: b.y,
-              x: x,
-              y: y,
-              vx, vy
-            });
           }
-          bulletStates = newBulletStates;
+          const currentIds = new Set(msg.bullets.map(b => b.id));
+          for (const id of bulletStates.keys()) {
+            if (!currentIds.has(id)) bulletStates.delete(id);
+          }
         }
         
         // Augment missiles with cached vertices/rotation
@@ -812,16 +730,7 @@
           cleanupAsteroidCache(msg.missiles.map(m => m.id));
         }
         
-        // Augment bullets with vx/vy from angle (for trail rendering)
-        if (msg.bullets) {
-          for (const b of msg.bullets) {
-            if (b.angle !== undefined) {
-              const speed = BULLET_SPEED;
-              b.vx = Math.cos(b.angle) * speed;
-              b.vy = Math.sin(b.angle) * speed;
-            }
-          }
-        }
+        // Bullets now come with vx/vy directly from server (homing changes direction)
         
         // Use client-side particles/damage numbers if server didn't send them
         if (!msg.particles || msg.particles.length === 0) {

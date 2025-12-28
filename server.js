@@ -1,12 +1,12 @@
-// server.js - Rogue Asteroid PvP (OPTIMIZED v2)
+// server.js - Rogue Asteroid PvP (OPTIMIZED v3)
 // Competitive asteroid defense with attack purchasing
 // 
 // OPTIMIZATIONS:
 // - Broadcast at 15Hz instead of 30Hz (50% less network traffic)
-// - Particles/damage numbers fully client-side (not sent at all)
+// - Particles/damage numbers fully client-side (visual only, from events)
 // - Asteroid vertices sent once on spawn, cached by client
 // - Asteroid rotation simulated client-side from rotSpeed
-// - Bullets send angle instead of vx/vy (50% less bullet data)
+// - Client uses simple interpolation for smooth rendering
 // - Initial homing 50% stronger (560), weakens to 375 after first hit
 
 const express = require("express");
@@ -1279,10 +1279,9 @@ function tick() {
           vx: m.vx, vy: m.vy,
           attackType: m.attackType, isPhased: m.isPhased, inFTL: m.inFTL
         })),
-        // OPTIMIZED: Send angle instead of vx/vy (1 float vs 2)
+        // Bullets - send full vx/vy since homing changes direction constantly
         bullets: bullets.map((b) => ({
-          id: b.id, x: b.x, y: b.y, r: b.r, 
-          angle: Math.atan2(b.vy, b.vx),
+          id: b.id, x: b.x, y: b.y, r: b.r, vx: b.vx, vy: b.vy,
           slot: b.ownerSlot, isCrit: b.isCrit, lifespan: b.lifespan,
           isTower: b.isTowerBullet, bulletType: b.bulletType
         })),
