@@ -19,7 +19,7 @@ const { WebSocketServer } = require("ws");
 // ===== Game constants =====
 const MAX_PLAYERS = 4;
 const TICK_RATE = 30;          // Physics at 30Hz
-const BROADCAST_RATE = 15;     // Network at 15Hz (balanced - 50% less traffic)
+const BROADCAST_RATE = 30;     // Network at 30Hz (Smoother, slightly more bandwidth)
 const DT = 1 / TICK_RATE;
 const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 2 ticks
 
@@ -226,15 +226,41 @@ function redistributeAsteroids(deadSlot) {
   
   for (const m of missiles) {
     if (m.dead) continue;
+    
+    // If the missile was targeting the player who just died
     if (m.targetSlot === deadSlot) {
-      const newSlot = aliveSlots[Math.floor(Math.random() * aliveSlots.length)];
-      const { x0, x1 } = segmentBounds(newSlot);
-      m.targetSlot = newSlot;
-      m.x = x0 + Math.random() * (x1 - x0);
-      createExplosion(m.x, m.y, 20, "#ff00ff");
+      
+      // 1. Find players who are alive AND did not send this asteroid
+      // (lockedSlots array maps the slot number to the Player ID)
+      const validTargets = aliveSlots.filter(slotIdx => {
+        const playerId = lockedSlots[slotIdx];
+        return playerId !== m.senderId;
+      });
+
+      // 2. Pick a new target
+      if (validTargets.length > 0) {
+        const newSlot = validTargets[Math.floor(Math.random() * validTargets.length)];
+        const { x0, x1 } = segmentBounds(newSlot);
+        
+        m.targetSlot = newSlot;
+        
+        // Randomize X position in the new lane
+        m.x = x0 + Math.random() * (x1 - x0);
+        
+        // 3. FIX: Reset Y position to the TOP of the screen
+        m.y = -m.r - 20; 
+        
+        // Visual flair: Trigger the "FTL" hyperspace effect again
+        m.inFTL = true;  
+      } else {
+        // If the only person left is the one who sent it, just destroy the asteroid
+        m.dead = true; 
+        createExplosion(m.x, m.y, 20, "#ff00ff");
+      }
     }
   }
   
+  // Handle asteroids that were queued up but not spawned yet
   for (const queued of spawnQueue) {
     if (queued.targetSlot === deadSlot) {
       const newSlot = aliveSlots[Math.floor(Math.random() * aliveSlots.length)];
@@ -288,7 +314,6 @@ const UPGRADE_DEFS = [
   { id: "multi", name: "Multishot", cat: "offense", icon: "⚔️", desc: "+{val} Bullets (-{penalty}% dmg)", stat: "multishot", base: 1, type: "multishot" },
   { id: "crit", name: "Crit Scope", cat: "offense", icon: "🎯", desc: "+{val}% Crit Chance", stat: "critChance", base: 0.05, type: "add_cap", cap: 1.0 },
   { id: "boom", name: "Explosive", cat: "offense", icon: "💣", desc: "Explosions size +{val}", stat: "explosive", base: 1, type: "add" },
-  { id: "life", name: "Stabilizer", cat: "utility", icon: "⏱️", desc: "+{val}s Bullet Life", stat: "lifespanAdd", base: 0.75, type: "add" },
   { id: "rico", name: "Ricochet", cat: "utility", icon: "🎱", desc: "Bounces {val} times", stat: "ricochet", base: 1, type: "add" },
   { id: "pierce", name: "Railgun", cat: "utility", icon: "📌", desc: "Pierces {val} enemies", stat: "pierce", base: 1, type: "add" },
   { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "{val}% chance for Lightning", stat: "chainChance", base: 0.02, type: "add_cap", cap: 0.30 },
@@ -788,7 +813,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     speed = BULLET_SPEED * (owner.upgrades?.bulletSpeedMult ?? 1);
     isCrit = Math.random() < (owner.upgrades?.critChance ?? 0);
     explosive = owner.upgrades?.explosive ?? 0;
-    lifespan = BULLET_LIFESPAN + (owner.upgrades?.lifespanAdd ?? 0);
+    lifespan = BULLET_LIFESPAN; // Removed lifespanAdd
     bulletType = "main";
     ricochet = owner.upgrades?.ricochet || 0;
     pierce = owner.upgrades?.pierce || 0;
