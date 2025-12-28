@@ -2,9 +2,10 @@
 // Competitive asteroid defense with attack purchasing
 // 
 // OPTIMIZATIONS:
-// - Broadcast at 10Hz instead of 30Hz (3x less network traffic)
+// - Broadcast at 15Hz instead of 30Hz (50% less network traffic)
 // - Visual effects sent as lightweight events instead of full particle arrays
 // - Clients generate their own particles based on events
+// - Reduced bullet homing strength by 75%
 
 const express = require("express");
 const http = require("http");
@@ -15,9 +16,9 @@ const { WebSocketServer } = require("ws");
 // ===== Game constants =====
 const MAX_PLAYERS = 4;
 const TICK_RATE = 30;          // Physics at 30Hz
-const BROADCAST_RATE = 10;     // Network at 10Hz (OPTIMIZED - 3x less traffic)
+const BROADCAST_RATE = 15;     // Network at 15Hz (balanced - 50% less traffic)
 const DT = 1 / TICK_RATE;
-const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 3 ticks
+const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 2 ticks
 
 const WORLD_H = 600;
 const GROUND_Y = 560;
@@ -1095,7 +1096,7 @@ function tick() {
           const dx = nearest.x - b.x;
           const dy = nearest.y - b.y;
           const len = Math.hypot(dx, dy) || 1;
-          const homingStrength = 1500 * DT;
+          const homingStrength = 375 * DT;  // 75% weaker homing (was 1500)
           b.vx += (dx / len) * homingStrength;
           b.vy += (dy / len) * homingStrength;
           const speed = Math.hypot(b.vx, b.vy);
@@ -1221,7 +1222,7 @@ function tick() {
       waveClearedTime = 0;
     }
 
-    // OPTIMIZED: Only broadcast every BROADCAST_INTERVAL ticks (10Hz instead of 30Hz)
+    // OPTIMIZED: Only broadcast every BROADCAST_INTERVAL ticks (15Hz instead of 30Hz)
     if (tickCount % BROADCAST_INTERVAL === 0) {
       broadcast({
         t: "state",
@@ -1636,4 +1637,4 @@ wss.on("connection", (ws) => {
 setInterval(() => { tick(); }, 1000 / TICK_RATE);
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => { console.log(`Rogue Asteroid PvP (OPTIMIZED 10Hz): http://localhost:${PORT}`); });
+server.listen(PORT, () => { console.log(`Rogue Asteroid PvP (OPTIMIZED 15Hz): http://localhost:${PORT}`); });
