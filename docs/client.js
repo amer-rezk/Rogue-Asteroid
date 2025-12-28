@@ -1,6 +1,7 @@
 (() => {
   // ===== Configuration =====
-  const DEFAULT_SERVER = "wss://rogue-asteroid-production.up.railway.app/ws";
+  // Updated to new Netlify address
+  const DEFAULT_SERVER = "wss://iridescent-boba-20d032.netlify.app/ws";
 
   // Polyfill for roundRect
   if (!CanvasRenderingContext2D.prototype.roundRect) {
