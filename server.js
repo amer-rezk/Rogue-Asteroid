@@ -572,7 +572,7 @@ function startGame(solo = false) {
     if (p) {
       p.upgrades = {};
       p.towers = [null, null, null, null];
-      p.gold = solo ? 50 : 30; // More starting gold for solo
+      p.gold = solo ? 0 : 0; // No starting gold
       p.cooldown = 0;
       p.targetX = null;
       p.targetY = null;
