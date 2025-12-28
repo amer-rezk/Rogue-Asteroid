@@ -609,12 +609,12 @@ function startGame(solo = false) {
 }
 
 function queueUpgradesAndNextWave() {
-  // Give 10% interest on gold to alive players
+  // Give 10% interest on gold to alive players (capped at 100)
   for (const id of lockedSlots) {
     const p = players.get(id);
     if (!p || p.hp <= 0) continue;
     
-    const interest = Math.floor(p.gold * 0.10);
+    const interest = Math.min(100, Math.floor(p.gold * 0.10));
     p.lastInterest = interest; // Store for display
     if (interest > 0) {
       p.gold += interest;
@@ -1561,6 +1561,44 @@ wss.on("connection", (ws) => {
         wave: current.wave,
         rerollCost: nextRerollCost,
         goldSpent: rerollCost,
+        queueSize: queue.length
+      });
+      return;
+    }
+
+    // Buy an additional upgrade option
+    if (msg.t === "buyUpgrade" && phase === "playing") {
+      const queue = pendingUpgrades.get(id);
+      if (!queue || queue.length === 0) return;
+      
+      const cost = msg.cost || 30;
+      if (p.gold < cost) {
+        safeSend(p.ws, { t: "buyUpgradeFailed", reason: "Not enough gold" });
+        return;
+      }
+      
+      const current = queue[0];
+      
+      // Deduct gold
+      p.gold -= cost;
+      
+      // Generate one additional upgrade option
+      const additionalOptions = makeUpgradeOptions(p);
+      // Add one random option from the generated set to current options
+      if (additionalOptions.length > 0) {
+        const newOption = additionalOptions[Math.floor(Math.random() * additionalOptions.length)];
+        current.options.push(newOption);
+      }
+      
+      // Calculate next reroll cost (unchanged)
+      const nextRerollCost = getRerollCost(current.rerollCount);
+      
+      safeSend(p.ws, { 
+        t: "upgrade", 
+        options: current.options, 
+        wave: current.wave,
+        rerollCost: nextRerollCost,
+        goldSpent: cost,
         queueSize: queue.length
       });
       return;
