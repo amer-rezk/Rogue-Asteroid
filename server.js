@@ -1,10 +1,12 @@
-// server.js - Rogue Asteroid PvP (OPTIMIZED)
+// server.js - Rogue Asteroid PvP (OPTIMIZED v2)
 // Competitive asteroid defense with attack purchasing
 // 
 // OPTIMIZATIONS:
 // - Broadcast at 15Hz instead of 30Hz (50% less network traffic)
-// - Visual effects sent as lightweight events instead of full particle arrays
-// - Clients generate their own particles based on events
+// - Particles/damage numbers fully client-side (not sent at all)
+// - Asteroid vertices sent once on spawn, cached by client
+// - Asteroid rotation simulated client-side from rotSpeed
+// - Bullets send angle instead of vx/vy (50% less bullet data)
 // - Reduced bullet homing strength by 75%
 
 const express = require("express");
@@ -385,15 +387,22 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
   const vx = rand(-15, 15);
 
   const ftlThreshold = GROUND_Y * 0.1;
+  const id = uid();
+  const vertices = generateAsteroidShape(r);
+  const rotSpeed = rand(-3, 3);
+  const color = attackType ? (ATTACK_TYPES[attackType]?.color || "#fa0") : "#fa0";
+
+  // OPTIMIZED: Send spawn event with vertices/rotSpeed so client can cache
+  queueEvent("spawn", { id, x, y, r, type, attackType, vertices, rotSpeed, color });
 
   return {
-    id: uid(),
+    id,
     x, y, vx, vy, r, type,
     hp: hp,
     maxHp: hp,
     rotation: rand(0, Math.PI * 2),
-    rotSpeed: rand(-3, 3),
-    vertices: generateAsteroidShape(r),
+    rotSpeed: rotSpeed,
+    vertices: vertices,
     targetSlot: targetSlot,
     attackType: attackType,
     senderId: senderId,
@@ -1230,19 +1239,19 @@ function tick() {
         phase,
         wave,
         world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
+        // OPTIMIZED: No vertices/rotation - client caches from spawn events
         missiles: missiles.map((m) => ({
           id: m.id, x: m.x, y: m.y, r: m.r, hp: m.hp, maxHp: m.maxHp, type: m.type,
-          rotation: m.rotation, vertices: m.vertices, attackType: m.attackType, isPhased: m.isPhased,
-          inFTL: m.inFTL
+          attackType: m.attackType, isPhased: m.isPhased, inFTL: m.inFTL
         })),
+        // OPTIMIZED: Send angle instead of vx/vy (1 float vs 2)
         bullets: bullets.map((b) => ({
-          id: b.id, x: b.x, y: b.y, r: b.r, vx: b.vx, vy: b.vy,
+          id: b.id, x: b.x, y: b.y, r: b.r, 
+          angle: Math.atan2(b.vy, b.vx),
           slot: b.ownerSlot, isCrit: b.isCrit, lifespan: b.lifespan,
           isTower: b.isTowerBullet, bulletType: b.bulletType
         })),
-        particles: particles.map((p) => ({ x: p.x, y: p.y, life: p.life, maxLife: p.maxLife, color: p.color, size: p.size })),
-        damageNumbers: damageNumbers.map((d) => ({ x: d.x, y: d.y, amount: d.amount, isCrit: d.isCrit, life: d.life })),
-        // OPTIMIZED: Include events for client-side rendering
+        // OPTIMIZED: Events for client-side particles/damage numbers
         events: eventQueue,
         players: lockedSlots.map((id) => {
           const p = players.get(id);
@@ -1637,4 +1646,4 @@ wss.on("connection", (ws) => {
 setInterval(() => { tick(); }, 1000 / TICK_RATE);
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => { console.log(`Rogue Asteroid PvP (OPTIMIZED 15Hz): http://localhost:${PORT}`); });
+server.listen(PORT, () => { console.log(`Rogue Asteroid PvP (OPTIMIZED v2 - 15Hz): http://localhost:${PORT}`); });
