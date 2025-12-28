@@ -167,6 +167,7 @@
   // CLIENT-SIDE RENDERING (offloaded from server)
   let clientParticles = [];      // Particles generated from events
   let clientDamageNumbers = [];  // Damage numbers generated from events
+  let clientLightning = [];      // Lightning effects from tesla coil
   let asteroidCache = new Map(); // Cache: id -> {vertices, rotSpeed, rotation, color}
   let lastUpdateTime = Date.now();
   
@@ -271,6 +272,54 @@
     });
   }
 
+  function createLightningEffect(points, isCrit, slot) {
+    if (!points || points.length < 2) return;
+    
+    // Generate jagged lightning segments between each pair of points
+    const segments = [];
+    for (let i = 0; i < points.length - 1; i++) {
+      const start = points[i];
+      const end = points[i + 1];
+      segments.push(generateLightningBolt(start.x, start.y, end.x, end.y));
+    }
+    
+    clientLightning.push({
+      segments,
+      isCrit,
+      slot,
+      life: 0.4,
+      maxLife: 0.4
+    });
+    
+    // Screen shake for lightning
+    screenShake = Math.max(screenShake, 4);
+  }
+
+  function generateLightningBolt(x1, y1, x2, y2) {
+    // Create jagged lightning path between two points
+    const points = [{ x: x1, y: y1 }];
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const dist = Math.hypot(dx, dy);
+    const segments = Math.max(4, Math.floor(dist / 15));
+    
+    for (let i = 1; i < segments; i++) {
+      const t = i / segments;
+      const baseX = x1 + dx * t;
+      const baseY = y1 + dy * t;
+      // Perpendicular offset for jaggedness
+      const perpX = -dy / dist;
+      const perpY = dx / dist;
+      const offset = (Math.random() - 0.5) * 30 * (1 - Math.abs(t - 0.5) * 2); // More offset in middle
+      points.push({
+        x: baseX + perpX * offset,
+        y: baseY + perpY * offset
+      });
+    }
+    points.push({ x: x2, y: y2 });
+    return points;
+  }
+
   function updateClientEffects(dt) {
     // Update particles
     clientParticles = clientParticles.filter(p => {
@@ -287,6 +336,12 @@
       d.y += d.vy * dt;
       d.life -= dt * 1.5;
       return d.life > 0;
+    });
+    
+    // Update lightning effects
+    clientLightning = clientLightning.filter(l => {
+      l.life -= dt;
+      return l.life > 0;
     });
     
     // Update cached asteroid rotations
@@ -373,6 +428,11 @@
           
         case "damage":
           createClientDamageNumber(ev.x, ev.y, ev.amount, ev.isCrit);
+          break;
+          
+        case "lightning":
+          // Tesla coil lightning effect
+          createLightningEffect(ev.points, ev.isCrit, ev.slot);
           break;
       }
     }
@@ -463,6 +523,8 @@
         isSpectator = false;
         canSpectate = false;
         hideSpectateOption();
+        // Make sure lobby is visible
+        if (lobbyEl) lobbyEl.style.display = "block";
         // Update attack types from server if provided
         if (msg.attackTypes) {
           for (const [key, val] of Object.entries(msg.attackTypes)) {
@@ -493,11 +555,16 @@
         canSpectate = msg.canSpectate;
         spectateReason = msg.reason;
         spectatorCount = msg.spectatorCount || 0;
+        phase = "menu"; // Stay in menu phase
         if (statusText) {
           statusText.textContent = msg.reason.toUpperCase();
           statusText.className = "status-text";
         }
         if (statusLED) statusLED.className = "led yellow";
+        // Hide lobby since we're not a player
+        if (lobbyEl) lobbyEl.style.display = "none";
+        // Make sure menu is visible
+        showMenu();
         // Show spectate button if game in progress
         if (canSpectate) {
           showSpectateOption();
@@ -515,6 +582,7 @@
         // Clear client-side caches
         clientParticles = [];
         clientDamageNumbers = [];
+        clientLightning = [];
         asteroidCache.clear();
         missileStates.clear();
         bulletStates.clear();
@@ -592,6 +660,7 @@
         // Clear client-side visual caches
         clientParticles = [];
         clientDamageNumbers = [];
+        clientLightning = [];
         asteroidCache.clear();
         // Clear prediction states
         missileStates.clear();
@@ -811,31 +880,50 @@
   }
   
   function showSpectateOption() {
-    // Show a "Watch Game" button in the menu
-    let spectateBtn = document.getElementById("spectateBtn");
-    if (!spectateBtn) {
-      spectateBtn = document.createElement("button");
+    // Show a "Watch Game" button prominently in the menu
+    let spectateContainer = document.getElementById("spectateContainer");
+    if (!spectateContainer) {
+      spectateContainer = document.createElement("div");
+      spectateContainer.id = "spectateContainer";
+      spectateContainer.style.cssText = "text-align: center; padding: 20px; margin-top: 20px;";
+      
+      const infoText = document.createElement("div");
+      infoText.style.cssText = "color: #888; font-size: 14px; margin-bottom: 15px;";
+      infoText.textContent = "A game is currently in progress";
+      spectateContainer.appendChild(infoText);
+      
+      const spectateBtn = document.createElement("button");
       spectateBtn.id = "spectateBtn";
       spectateBtn.className = "btn spectate";
       spectateBtn.textContent = "👁 WATCH GAME";
-      spectateBtn.style.cssText = "margin-top: 15px; background: linear-gradient(180deg, #444 0%, #222 100%); border: 2px solid #666;";
+      spectateBtn.style.cssText = "background: linear-gradient(180deg, #2a4a6a 0%, #1a2a3a 100%); border: 2px solid #4af; font-size: 16px; padding: 12px 24px;";
       spectateBtn.onclick = () => {
         if (ws && ws.readyState === 1) {
           ws.send(JSON.stringify({ t: "spectate" }));
         }
       };
-      // Insert after status area
+      spectateContainer.appendChild(spectateBtn);
+      
+      // Insert after status area or at end of menu
       const statusArea = document.querySelector(".status-area");
       if (statusArea && statusArea.parentNode) {
-        statusArea.parentNode.insertBefore(spectateBtn, statusArea.nextSibling);
+        statusArea.parentNode.insertBefore(spectateContainer, statusArea.nextSibling);
+      } else {
+        menuScreen.appendChild(spectateContainer);
       }
     }
-    spectateBtn.style.display = "block";
-    const countText = spectatorCount > 0 ? ` (${spectatorCount} watching)` : "";
-    spectateBtn.textContent = `👁 WATCH GAME${countText}`;
+    spectateContainer.style.display = "block";
+    
+    const spectateBtn = document.getElementById("spectateBtn");
+    if (spectateBtn) {
+      const countText = spectatorCount > 0 ? ` (${spectatorCount} watching)` : "";
+      spectateBtn.textContent = `👁 WATCH GAME${countText}`;
+    }
   }
   
   function hideSpectateOption() {
+    const spectateContainer = document.getElementById("spectateContainer");
+    if (spectateContainer) spectateContainer.style.display = "none";
     const spectateBtn = document.getElementById("spectateBtn");
     if (spectateBtn) spectateBtn.style.display = "none";
   }
@@ -1642,6 +1730,59 @@
             ctx.fill();
           }
         }
+      }
+
+      // Tesla Coil Lightning Effects
+      for (const lightning of clientLightning) {
+        const alpha = lightning.life / lightning.maxLife;
+        const playerColor = PLAYER_COLORS[lightning.slot]?.main || "#0ff";
+        const coreColor = lightning.isCrit ? "#fff" : playerColor;
+        const glowColor = lightning.isCrit ? "#ff0" : "#0ff";
+        
+        ctx.save();
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        
+        for (const segment of lightning.segments) {
+          if (segment.length < 2) continue;
+          
+          // Outer glow
+          ctx.strokeStyle = hexToRgba(glowColor, alpha * 0.3);
+          ctx.lineWidth = 12 * sx;
+          ctx.shadowColor = glowColor;
+          ctx.shadowBlur = 20;
+          ctx.beginPath();
+          ctx.moveTo(segment[0].x * sx, segment[0].y * sy);
+          for (let i = 1; i < segment.length; i++) {
+            ctx.lineTo(segment[i].x * sx, segment[i].y * sy);
+          }
+          ctx.stroke();
+          
+          // Mid glow
+          ctx.strokeStyle = hexToRgba(coreColor, alpha * 0.6);
+          ctx.lineWidth = 6 * sx;
+          ctx.shadowBlur = 10;
+          ctx.beginPath();
+          ctx.moveTo(segment[0].x * sx, segment[0].y * sy);
+          for (let i = 1; i < segment.length; i++) {
+            ctx.lineTo(segment[i].x * sx, segment[i].y * sy);
+          }
+          ctx.stroke();
+          
+          // Bright core
+          ctx.strokeStyle = hexToRgba("#fff", alpha);
+          ctx.lineWidth = 2 * sx;
+          ctx.shadowColor = "#fff";
+          ctx.shadowBlur = 5;
+          ctx.beginPath();
+          ctx.moveTo(segment[0].x * sx, segment[0].y * sy);
+          for (let i = 1; i < segment.length; i++) {
+            ctx.lineTo(segment[i].x * sx, segment[i].y * sy);
+          }
+          ctx.stroke();
+        }
+        
+        ctx.restore();
       }
 
       // Asteroids/Missiles

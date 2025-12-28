@@ -290,7 +290,7 @@ const UPGRADE_DEFS = [
   { id: "life", name: "Stabilizer", cat: "utility", icon: "⏱️", desc: "+{val}s Bullet Life", stat: "lifespanAdd", base: 0.75, type: "add" },
   { id: "rico", name: "Ricochet", cat: "utility", icon: "🎱", desc: "Bounces {val} times", stat: "ricochet", base: 1, type: "add" },
   { id: "pierce", name: "Railgun", cat: "utility", icon: "📌", desc: "Pierces {val} enemies", stat: "pierce", base: 1, type: "add" },
-  { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "Chain Lightning", stat: "chain", base: 1, type: "bool" },
+  { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "{val}% chance for Lightning", stat: "chainChance", base: 0.02, type: "add_cap", cap: 0.30 },
   { id: "shield", name: "Shield Gen", cat: "defense", icon: "🛡️", desc: "+{val} Shield (one-time)", stat: "shield", base: 1, type: "add" },
   { id: "slow", name: "Grav Field", cat: "defense", icon: "🌀", desc: "Slow Enemies", stat: "slowfield", base: 1, type: "bool" },
   { id: "income", name: "War Profiteer", cat: "economy", icon: "💰", desc: "+{val}% Gold Gain", stat: "goldMult", base: 0.12, type: "mult" },
@@ -313,7 +313,13 @@ function makeUpgradeOptions(player) {
     if (def.type === "bool" && player.upgrades[def.stat]) { i--; continue; }
     if (def.stat === "critChance" && (player.upgrades.critChance || 0) >= 1) { i--; continue; }
 
-    const rarityKey = rollRarity();
+    let rarityKey = rollRarity();
+    
+    // Multishot and Chain Lightning are rare+ only (skip if common rolled)
+    if ((def.id === "multi" || def.id === "chain") && rarityKey === "common") {
+      rarityKey = "rare";
+    }
+    
     const rarity = RARITY_CONFIG[rarityKey];
 
     let val = def.base;
@@ -321,11 +327,18 @@ function makeUpgradeOptions(player) {
     let effect = { stat: def.stat, type: def.type };
     
     if (def.type === "multishot") {
+      // Rare: +1, Epic: +2, Legendary: +3
       val = rarityKey === "legendary" ? 3 : rarityKey === "epic" ? 2 : 1;
       const penalty = val === 1 ? 15 : val === 2 ? 25 : 40;
       desc = def.desc.replace("{val}", val).replace("{penalty}", penalty);
       effect.val = val;
       effect.penalty = penalty / 100;
+    } else if (def.id === "chain") {
+      // Chain Lightning: Rare: 2%, Epic: 4%, Legendary: 6%
+      val = rarityKey === "legendary" ? 6 : rarityKey === "epic" ? 4 : 2;
+      desc = def.desc.replace("{val}", val);
+      effect.val = val / 100; // Convert to decimal
+      effect.type = "add";
     } else if (def.type === "add" || def.type === "mult" || def.type === "add_cap") {
       val = def.base * rarity.scale;
       if (def.stat === "shield" || def.stat === "ricochet" || def.stat === "pierce") {
@@ -740,7 +753,7 @@ function endGame(winnerId) {
 
 // ===== Simulation =====
 function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, overrideProps = null) {
-  let dmg, speed, isCrit, explosive, lifespan, bulletType, ricochet, pierce, chain;
+  let dmg, speed, isCrit, explosive, lifespan, bulletType, ricochet, pierce, chainChance;
 
   if (overrideProps) {
     dmg = overrideProps.damage;
@@ -752,7 +765,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
       lifespan = BULLET_LIFESPAN + (overrideProps.lifespanAdd ?? 0);
       ricochet = overrideProps.ricochet || 0;
       pierce = overrideProps.pierce || 0;
-      chain = !!overrideProps.chain;
+      chainChance = overrideProps.chainChance || 0;
     } else {
       speed = BULLET_SPEED * (overrideProps.bulletType === "sniper" ? 1.5 : 1);
       isCrit = false;
@@ -760,7 +773,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
       lifespan = BULLET_LIFESPAN;
       ricochet = 0;
       pierce = overrideProps.bulletType === "sniper" ? 1 : 0;
-      chain = false;
+      chainChance = 0;
     }
     
     bulletType = overrideProps.bulletType || "tower";
@@ -778,7 +791,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     bulletType = "main";
     ricochet = owner.upgrades?.ricochet || 0;
     pierce = owner.upgrades?.pierce || 0;
-    chain = !!owner.upgrades?.chain;
+    chainChance = owner.upgrades?.chainChance || 0;
   }
 
   const finalDmg = isCrit ? dmg * 3 : dmg;
@@ -813,7 +826,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     isTowerBullet: !isPlayerBullet,
     bulletType: bulletType,
     magnet: true,
-    chain: chain,
+    chainChance: chainChance,
     ricochet: ricochet,
     pierce: pierce,
     hitList: [],
@@ -1007,7 +1020,7 @@ function tick() {
                 lifespanAdd: (u.lifespanAdd ?? 0) * 0.5,
                 ricochet: Math.floor((u.ricochet ?? 0) * 0.5),
                 pierce: (stats.bulletType === "sniper" ? 1 : 0) + Math.floor((u.pierce ?? 0) * 0.5),
-                chain: !!u.chain,
+                chainChance: (u.chainChance ?? 0) * 0.5,
                 inheritedUpgrades: true,
               };
               fireBullet(p, towerPos.x, towerPos.y, aim.x, aim.y, 0, towerProps);
@@ -1184,7 +1197,66 @@ function tick() {
           if (!b.hitList) b.hitList = [];
           b.hitList.push(m.id);
           b.hasHit = true;  // Mark that bullet has hit something (weakens future homing)
-          if (b.pierce > 0) { b.pierce--; } else { b.dead = true; }
+          
+          // Tesla Coil: chance to consume bullet and create chain lightning
+          const triggeredLightning = b.chainChance > 0 && Math.random() < b.chainChance;
+          
+          if (triggeredLightning) {
+            // Consume bullet and hit 3 nearest enemies with lightning
+            b.dead = true;
+            
+            // Find 3 nearest enemies (excluding current target)
+            const { x0: segX0, x1: segX1 } = segmentBounds(b.ownerSlot);
+            const lightningTargets = [];
+            for (const m2 of missiles) {
+              if (m2.dead || m2 === m) continue;
+              if (m2.x < segX0 || m2.x > segX1) continue;
+              if (m2.attackType && m2.targetSlot !== b.ownerSlot) continue;
+              const d = Math.hypot(m2.x - m.x, m2.y - m.y);
+              if (d < 150) { // Lightning range
+                lightningTargets.push({ m: m2, d });
+              }
+            }
+            lightningTargets.sort((a, b) => a.d - b.d);
+            
+            // Hit up to 3 targets with lightning (same damage as bullet)
+            const chainPoints = [{ x: m.x, y: m.y }]; // Start from hit asteroid
+            const owner = players.get(b.ownerId);
+            for (let i = 0; i < Math.min(3, lightningTargets.length); i++) {
+              const target = lightningTargets[i].m;
+              target.hp -= b.dmg;
+              addDamageNumber(target.x, target.y - target.r, b.dmg, b.isCrit);
+              chainPoints.push({ x: target.x, y: target.y });
+              
+              if (owner) {
+                owner.damageDealt = (owner.damageDealt || 0) + b.dmg;
+                owner.waveDamage = (owner.waveDamage || 0) + b.dmg;
+                owner.score = (owner.score || 0) + Math.round(b.dmg * 10);
+              }
+              
+              if (target.hp <= 0) {
+                target.dead = true;
+                createExplosion(target.x, target.y, 20, "#0ff");
+                if (owner) {
+                  owner.score = (owner.score || 0) + 50;
+                  owner.kills = (owner.kills || 0) + 1;
+                }
+              }
+            }
+            
+            // Send lightning event to clients for visual effect
+            if (chainPoints.length > 1) {
+              queueEvent("lightning", { 
+                points: chainPoints, 
+                isCrit: b.isCrit,
+                slot: b.ownerSlot
+              });
+            }
+          } else {
+            // Normal bullet behavior
+            if (b.pierce > 0) { b.pierce--; } else { b.dead = true; }
+          }
+          
           addDamageNumber(m.x, m.y - m.r, b.dmg, b.isCrit);
           const owner = players.get(b.ownerId);
           
@@ -1226,19 +1298,6 @@ function tick() {
               if (m2.dead || m2 === m) continue;
               const d = Math.hypot(m2.x - b.x, m2.y - b.y);
               if (d < 35 + m2.r) { m2.hp -= 1; if (m2.hp <= 0) m2.dead = true; }
-            }
-          }
-          if (b.chain && m.hp <= 0) {
-            for (const m2 of missiles) {
-              if (m2.dead || m2 === m) continue;
-              const d = Math.hypot(m2.x - m.x, m2.y - m.y);
-              if (d < 70) {
-                m2.hp -= 1;
-                addDamageNumber(m2.x, m2.y - m2.r, 1, false);
-                if (m2.hp <= 0) m2.dead = true;
-                particles.push({ x: m.x, y: m.y, vx: (m2.x - m.x) * 3, vy: (m2.y - m.y) * 3, life: 0.12, maxLife: 0.12, color: "#ff0", size: 2 });
-                break;
-              }
             }
           }
           createExplosion(b.x, b.y, 15, b.isCrit ? "#ff0" : "#0ff");
@@ -1318,7 +1377,7 @@ function tick() {
               lifespanAdd: u.lifespanAdd ?? 0,
               ricochet: u.ricochet ?? 0,
               pierce: u.pierce ?? 0,
-              chain: !!u.chain,
+              chainChance: u.chainChance ?? 0,
               goldMult: u.goldMult ?? 1,
             },
           };
