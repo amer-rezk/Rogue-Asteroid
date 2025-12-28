@@ -46,8 +46,8 @@ const ATTACK_TYPES = {
     name: "Swarm", 
     cost: 15, 
     count: 5, // Increased from 3
-    baseHp: 0.6,
-    hpScale: 1.2, // Scales 20% faster than wave
+    baseHp: 0.5,
+    hpScale: 1.1, // Scales 10% faster than wave
     size: "small", 
     speed: 1.3,
     desc: "5 fast weak asteroids",
@@ -313,7 +313,7 @@ function makeUpgradeOptions(player) {
       // Multishot scales with rarity: 1/1/2/3
       val = rarityKey === "legendary" ? 3 : rarityKey === "epic" ? 2 : 1;
       // Damage penalty: +1 = 35%, +2 = 60%, +3 = 85%
-      const penalty = val === 1 ? 35 : val === 2 ? 60 : 85;
+      const penalty = val === 1 ? 15 : val === 2 ? 25 : 40;
       desc = def.desc.replace("{val}", val).replace("{penalty}", penalty);
       effect.val = val;
       effect.penalty = penalty / 100;
