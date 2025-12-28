@@ -1606,10 +1606,13 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    // Buy an additional upgrade option
+// Buy an additional upgrade option (Interrupts current flow)
     if (msg.t === "buyUpgrade" && phase === "playing") {
+      // Initialize queue if empty so we can buy upgrades even when no wave is pending
+      if (!pendingUpgrades.has(id)) {
+        pendingUpgrades.set(id, []);
+      }
       const queue = pendingUpgrades.get(id);
-      if (!queue || queue.length === 0) return;
       
       const cost = msg.cost || 30;
       if (p.gold < cost) {
@@ -1617,29 +1620,33 @@ wss.on("connection", (ws) => {
         return;
       }
       
-      const current = queue[0];
-      
       // Deduct gold
       p.gold -= cost;
       
-      // Generate one additional upgrade option
-      const additionalOptions = makeUpgradeOptions(p);
-      // Add one random option from the generated set to current options
-      if (additionalOptions.length > 0) {
-        const newOption = additionalOptions[Math.floor(Math.random() * additionalOptions.length)];
-        current.options.push(newOption);
-      }
+      // Generate a FULL NEW SET of options (standard 3 cards)
+      const newEventOptions = makeUpgradeOptions(p);
       
-      // Calculate next reroll cost (unchanged)
-      const nextRerollCost = getRerollCost(current.rerollCount);
+      // Create a new queue entry
+      // We use 'unshift' to put this at the FRONT of the queue
+      // This pushes any existing menu to index [1], effectively "saving" it for later
+      const newEntry = { 
+        wave: wave, 
+        options: newEventOptions, 
+        rerollCount: 0,
+        isPurchased: true // Optional flag if you want to track it
+      };
       
+      queue.unshift(newEntry);
+      
+      // Send the new front-of-queue to the client immediately
+      const nextRerollCost = getRerollCost(0);
       safeSend(p.ws, { 
         t: "upgrade", 
-        options: current.options, 
-        wave: current.wave,
-        rerollCost: nextRerollCost,
+        options: newEventOptions, 
+        wave: wave,
+        rerollCost: nextRerollCost, 
         goldSpent: cost,
-        queueSize: queue.length
+        queueSize: queue.length 
       });
       return;
     }
