@@ -342,10 +342,17 @@
           state.serverY += dy;
         }
         
-        // Small drift correction toward estimated server position (fixes accumulated error)
-        const driftCorrection = 0.05;
-        state.x += (state.serverX - state.x) * driftCorrection;
-        state.y += (state.serverY - state.y) * driftCorrection;
+        // Smooth drift correction toward server position
+        // Higher value = faster catch-up but potentially more visible
+        const errorX = state.serverX - state.x;
+        const errorY = state.serverY - state.y;
+        const errorDist = Math.hypot(errorX, errorY);
+        
+        // Adaptive correction: faster when error is larger
+        const baseDrift = 0.08;
+        const correction = Math.min(baseDrift + errorDist * 0.002, 0.2);
+        state.x += errorX * correction;
+        state.y += errorY * correction;
       }
       
       // Predict bullet positions with drift correction
@@ -357,10 +364,13 @@
         state.serverX += dx;
         state.serverY += dy;
         
-        // Small drift correction
-        const driftCorrection = 0.05;
-        state.x += (state.serverX - state.x) * driftCorrection;
-        state.y += (state.serverY - state.y) * driftCorrection;
+        // Adaptive drift correction for bullets
+        const errorX = state.serverX - state.x;
+        const errorY = state.serverY - state.y;
+        const errorDist = Math.hypot(errorX, errorY);
+        const correction = Math.min(0.1 + errorDist * 0.002, 0.25);
+        state.x += errorX * correction;
+        state.y += errorY * correction;
       }
       
       // Apply predicted positions to lastSnap for rendering
@@ -715,10 +725,24 @@
             const prev = missileStates.get(m.id);
             let x, y;
             if (prev) {
-              // Interpolate toward server position (smooth correction)
-              const lerpFactor = 0.3; // Blend 30% toward server position
-              x = prev.x + (m.x - prev.x) * lerpFactor;
-              y = prev.y + (m.y - prev.y) * lerpFactor;
+              // Calculate error between predicted and server position
+              const errorX = m.x - prev.x;
+              const errorY = m.y - prev.y;
+              const errorDist = Math.hypot(errorX, errorY);
+              
+              // Cap maximum correction to prevent large jumps
+              const maxCorrection = 8; // Max pixels to correct per update
+              if (errorDist > maxCorrection) {
+                // Large error: correct by maxCorrection toward server
+                const scale = maxCorrection / errorDist;
+                x = prev.x + errorX * scale;
+                y = prev.y + errorY * scale;
+              } else {
+                // Small error: blend smoothly
+                const lerpFactor = 0.4;
+                x = prev.x + errorX * lerpFactor;
+                y = prev.y + errorY * lerpFactor;
+              }
             } else {
               // New object, start at server position
               x = m.x;
@@ -746,10 +770,20 @@
             const prev = bulletStates.get(b.id);
             let x, y;
             if (prev) {
-              // Interpolate toward server position
-              const lerpFactor = 0.3;
-              x = prev.x + (b.x - prev.x) * lerpFactor;
-              y = prev.y + (b.y - prev.y) * lerpFactor;
+              const errorX = b.x - prev.x;
+              const errorY = b.y - prev.y;
+              const errorDist = Math.hypot(errorX, errorY);
+              
+              const maxCorrection = 12; // Bullets move faster, allow more correction
+              if (errorDist > maxCorrection) {
+                const scale = maxCorrection / errorDist;
+                x = prev.x + errorX * scale;
+                y = prev.y + errorY * scale;
+              } else {
+                const lerpFactor = 0.4;
+                x = prev.x + errorX * lerpFactor;
+                y = prev.y + errorY * lerpFactor;
+              }
             } else {
               x = b.x;
               y = b.y;
