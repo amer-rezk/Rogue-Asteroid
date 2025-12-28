@@ -147,6 +147,10 @@
   // Upgrade reroll
   let currentRerollCost = 10;
   let hoveredReroll = false;
+  
+  // Buy additional upgrade
+  let buyUpgradeCost = 30;
+  let hoveredBuyUpgrade = false;
 
   // Visual
   let stars = [];
@@ -713,6 +717,18 @@
       return;
     }
 
+    // Handle buy upgrade button click
+    if (phase === "playing" && hoveredBuyUpgrade && !upgradePicked && upgradeOptions.length > 0) {
+      const myPlayer = lastSnap?.players.find(p => p.id === myId);
+      if (myPlayer && myPlayer.gold >= buyUpgradeCost) {
+        send({ t: "buyUpgrade", cost: buyUpgradeCost });
+        // Increase cost: +10 gold + 10% of new cost
+        const newCost = buyUpgradeCost + 10;
+        buyUpgradeCost = Math.round(newCost * 1.10);
+      }
+      return;
+    }
+
     // Handle stats panel button click
     if (phase === "playing" && hoveredStatsBtn) {
       statsPanelOpen = !statsPanelOpen;
@@ -725,6 +741,16 @@
       if (mouseX >= b.x && mouseX <= b.x + b.w && mouseY >= b.y && mouseY <= b.y + b.h) {
         showDamageNumbers = !showDamageNumbers;
         localStorage.setItem("rogueAsteroidDmgNumbers", showDamageNumbers.toString());
+        return;
+      }
+    }
+
+    // Handle low graphics toggle click
+    if (phase === "playing" && statsPanelOpen && window.gfxToggleBounds) {
+      const b = window.gfxToggleBounds;
+      if (mouseX >= b.x && mouseX <= b.x + b.w && mouseY >= b.y && mouseY <= b.y + b.h) {
+        lowPerformanceMode = !lowPerformanceMode;
+        localStorage.setItem("rogueAsteroidLowPerf", lowPerformanceMode.toString());
         return;
       }
     }
@@ -1031,16 +1057,16 @@
       ctx.fillStyle = "#050510";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // Stars - skip some in low performance mode
-      const starSkip = lowPerformanceMode ? 2 : 1;
+      // Stars - skip most in low performance mode
+      const starSkip = lowPerformanceMode ? 4 : 1; // Skip 3/4 of stars in low perf
       for (let i = 0; i < stars.length; i += starSkip) {
         const s = stars[i];
         s.y += s.speed;
         if (s.y > 1) s.y = 0;
         if (lowPerformanceMode) {
-          // Simple star rendering
-          ctx.fillStyle = "rgba(255,255,255,0.5)";
-          ctx.fillRect(s.x * canvas.width, s.y * canvas.height, s.size, s.size);
+          // Simple star rendering - no alpha calculation
+          ctx.fillStyle = "#888";
+          ctx.fillRect(s.x * canvas.width, s.y * canvas.height, 1, 1);
         } else {
           const twinkle = Math.sin(time * 3 + s.twinkle) * 0.3 + 0.7;
           ctx.fillStyle = `rgba(255,255,255,${twinkle * 0.5})`;
@@ -1063,20 +1089,22 @@
       if (screenShake > 0.5) ctx.translate((Math.random() - 0.5) * screenShake, (Math.random() - 0.5) * screenShake);
       ctx.translate(offsetX, offsetY);
 
-      // Grid
-      ctx.strokeStyle = "rgba(0,255,255,0.03)";
-      ctx.lineWidth = 1;
-      for (let x = 0; x < world.width; x += 30) {
-        ctx.beginPath();
-        ctx.moveTo(x * sx, 0);
-        ctx.lineTo(x * sx, world.height * sy);
-        ctx.stroke();
-      }
-      for (let y = 0; y < world.height; y += 30) {
-        ctx.beginPath();
-        ctx.moveTo(0, y * sy);
-        ctx.lineTo(world.width * sx, y * sy);
-        ctx.stroke();
+      // Grid (skip in low performance mode)
+      if (!lowPerformanceMode) {
+        ctx.strokeStyle = "rgba(0,255,255,0.03)";
+        ctx.lineWidth = 1;
+        for (let x = 0; x < world.width; x += 30) {
+          ctx.beginPath();
+          ctx.moveTo(x * sx, 0);
+          ctx.lineTo(x * sx, world.height * sy);
+          ctx.stroke();
+        }
+        for (let y = 0; y < world.height; y += 30) {
+          ctx.beginPath();
+          ctx.moveTo(0, y * sy);
+          ctx.lineTo(world.width * sx, y * sy);
+          ctx.stroke();
+        }
       }
 
       // Segment dividers - solid walls between players
@@ -1084,26 +1112,34 @@
       for (let i = 1; i < segCount; i++) {
         const x = i * world.segmentWidth * sx;
         
-        // Wall glow effect
-        const gradient = ctx.createLinearGradient(x - 15, 0, x + 15, 0);
-        gradient.addColorStop(0, "rgba(160,0,255,0)");
-        gradient.addColorStop(0.5, "rgba(160,0,255,0.15)");
-        gradient.addColorStop(1, "rgba(160,0,255,0)");
-        ctx.fillStyle = gradient;
-        ctx.fillRect(x - 15, 0, 30, world.height * sy);
-        
-        // Main wall line
-        ctx.strokeStyle = "rgba(160,0,255,0.8)";
-        ctx.lineWidth = 3;
-        setShadow(ctx, "#a000ff", 15);
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, world.height * sy);
-        ctx.stroke();
-        clearShadow(ctx);
-        
-        // Energy pulse effect (skip in low perf mode)
-        if (!lowPerformanceMode) {
+        if (lowPerformanceMode) {
+          // Simple wall line
+          ctx.strokeStyle = "rgba(160,0,255,0.8)";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, world.height * sy);
+          ctx.stroke();
+        } else {
+          // Wall glow effect
+          const gradient = ctx.createLinearGradient(x - 15, 0, x + 15, 0);
+          gradient.addColorStop(0, "rgba(160,0,255,0)");
+          gradient.addColorStop(0.5, "rgba(160,0,255,0.15)");
+          gradient.addColorStop(1, "rgba(160,0,255,0)");
+          ctx.fillStyle = gradient;
+          ctx.fillRect(x - 15, 0, 30, world.height * sy);
+          
+          // Main wall line
+          ctx.strokeStyle = "rgba(160,0,255,0.8)";
+          ctx.lineWidth = 3;
+          setShadow(ctx, "#a000ff", 15);
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, world.height * sy);
+          ctx.stroke();
+          clearShadow(ctx);
+          
+          // Energy pulse effect
           const pulseY = ((time * 100) % (world.height * sy));
           ctx.fillStyle = "rgba(200,100,255,0.6)";
           ctx.beginPath();
@@ -1118,8 +1154,8 @@
       // Ground line
       const groundY = 560 * sy;
       ctx.strokeStyle = "#0ff";
-      ctx.lineWidth = 3;
-      setShadow(ctx, "#0ff", 20);
+      ctx.lineWidth = lowPerformanceMode ? 2 : 3;
+      if (!lowPerformanceMode) setShadow(ctx, "#0ff", 20);
       ctx.beginPath();
       ctx.moveTo(0, groundY);
       ctx.lineTo(world.width * sx, groundY);
@@ -1127,19 +1163,23 @@
       clearShadow(ctx);
 
       // Player effects (slowfield, shield)
-      for (const p of lastSnap.players) {
-        if (p.upgrades?.slowfield) {
-          ctx.fillStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.04);
-          ctx.fillRect(p.slot * world.segmentWidth * sx, 0, world.segmentWidth * sx, 560 * sy);
+      if (!lowPerformanceMode) {
+        for (const p of lastSnap.players) {
+          if (p.upgrades?.slowfield) {
+            ctx.fillStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.04);
+            ctx.fillRect(p.slot * world.segmentWidth * sx, 0, world.segmentWidth * sx, 560 * sy);
+          }
         }
       }
       for (const p of lastSnap.players) {
         if (p.upgrades?.shieldActive > 0) {
           const cx = (p.slot * world.segmentWidth + world.segmentWidth / 2) * sx;
           ctx.strokeStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.5);
-          ctx.lineWidth = 3;
-          ctx.shadowColor = PLAYER_COLORS[p.slot]?.main;
-          ctx.shadowBlur = 15;
+          ctx.lineWidth = lowPerformanceMode ? 2 : 3;
+          if (!lowPerformanceMode) {
+            ctx.shadowColor = PLAYER_COLORS[p.slot]?.main;
+            ctx.shadowBlur = 15;
+          }
           ctx.beginPath();
           ctx.arc(cx, groundY, world.segmentWidth * sx * 0.45, Math.PI, 0);
           ctx.stroke();
@@ -1147,14 +1187,14 @@
         }
       }
 
-      // Particles (reduced in low performance mode)
+      // Particles (heavily reduced in low performance mode)
       if (lastSnap.particles) {
-        const particleSkip = lowPerformanceMode ? 2 : 1;
+        const particleSkip = lowPerformanceMode ? 5 : 1; // Skip 4/5 of particles in low perf
         for (let i = 0; i < lastSnap.particles.length; i += particleSkip) {
           const p = lastSnap.particles[i];
           ctx.fillStyle = hexToRgba(p.color, p.life / (p.maxLife || 0.5));
           if (lowPerformanceMode) {
-            ctx.fillRect(p.x * sx - 2, p.y * sy - 2, 4, 4);
+            ctx.fillRect(p.x * sx - 1, p.y * sy - 1, 2, 2);
           } else {
             ctx.beginPath();
             ctx.arc(p.x * sx, p.y * sy, (p.size || 2) * sx, 0, Math.PI * 2);
@@ -1234,46 +1274,61 @@
         // Ghost phasing effect
         const phaseAlpha = m.isPhased ? 0.3 : 0.7;
 
-        ctx.save();
-        ctx.translate(x, y);
-        ctx.rotate(m.rotation || 0);
-        ctx.fillStyle = hexToRgba(baseColor, phaseAlpha);
-        ctx.strokeStyle = baseColor;
-        ctx.lineWidth = 1.5;
-        setShadow(ctx, baseColor, 8);
-
-        if (m.vertices && m.vertices.length > 0) {
-          ctx.beginPath();
-          for (let i = 0; i <= m.vertices.length; i++) {
-            const v = m.vertices[i % m.vertices.length];
-            const px = Math.cos(v.angle) * r * v.dist;
-            const py = Math.sin(v.angle) * r * v.dist;
-            if (i === 0) ctx.moveTo(px, py);
-            else ctx.lineTo(px, py);
+        if (lowPerformanceMode) {
+          // Simple rectangle asteroid in low perf mode
+          ctx.fillStyle = hexToRgba(baseColor, phaseAlpha);
+          ctx.fillRect(x - r, y - r, r * 2, r * 2);
+          
+          // Simple HP bar
+          if (m.hp < m.maxHp) {
+            const bw = r * 2, bh = 3 * sy, bx = x - bw / 2, by = y - r - 8 * sy;
+            ctx.fillStyle = "rgba(0,0,0,0.6)";
+            ctx.fillRect(bx, by, bw, bh);
+            ctx.fillStyle = (m.hp / m.maxHp) > 0.5 ? "#0f8" : "#f44";
+            ctx.fillRect(bx, by, bw * (m.hp / m.maxHp), bh);
           }
-          ctx.closePath();
-          ctx.fill();
-          ctx.stroke();
         } else {
-          ctx.beginPath();
-          ctx.arc(0, 0, r, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.stroke();
-        }
-        ctx.restore();
-        clearShadow(ctx);
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.rotate(m.rotation || 0);
+          ctx.fillStyle = hexToRgba(baseColor, phaseAlpha);
+          ctx.strokeStyle = baseColor;
+          ctx.lineWidth = 1.5;
+          setShadow(ctx, baseColor, 8);
 
-        // HP bar
-        if (m.hp < m.maxHp) {
-          const bw = r * 2, bh = 3 * sy, bx = x - bw / 2, by = y - r - 8 * sy;
-          ctx.fillStyle = "rgba(0,0,0,0.6)";
-          ctx.fillRect(bx, by, bw, bh);
-          ctx.fillStyle = (m.hp / m.maxHp) > 0.5 ? "#0f8" : "#f44";
-          ctx.fillRect(bx, by, bw * (m.hp / m.maxHp), bh);
+          if (m.vertices && m.vertices.length > 0) {
+            ctx.beginPath();
+            for (let i = 0; i <= m.vertices.length; i++) {
+              const v = m.vertices[i % m.vertices.length];
+              const px = Math.cos(v.angle) * r * v.dist;
+              const py = Math.sin(v.angle) * r * v.dist;
+              if (i === 0) ctx.moveTo(px, py);
+              else ctx.lineTo(px, py);
+            }
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+          } else {
+            ctx.beginPath();
+            ctx.arc(0, 0, r, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          }
+          ctx.restore();
+          clearShadow(ctx);
+
+          // HP bar
+          if (m.hp < m.maxHp) {
+            const bw = r * 2, bh = 3 * sy, bx = x - bw / 2, by = y - r - 8 * sy;
+            ctx.fillStyle = "rgba(0,0,0,0.6)";
+            ctx.fillRect(bx, by, bw, bh);
+            ctx.fillStyle = (m.hp / m.maxHp) > 0.5 ? "#0f8" : "#f44";
+            ctx.fillRect(bx, by, bw * (m.hp / m.maxHp), bh);
+          }
         }
 
-        // Attack type indicator
-        if (m.attackType && ATTACK_TYPES[m.attackType]) {
+        // Attack type indicator (skip in low perf mode)
+        if (!lowPerformanceMode && m.attackType && ATTACK_TYPES[m.attackType]) {
           ctx.font = `${10 * sx}px sans-serif`;
           ctx.textAlign = "center";
           ctx.fillStyle = "#fff";
@@ -1287,9 +1342,12 @@
         drawBullet(b, sx, sy, baseColor);
       }
 
-      // Damage numbers (if enabled)
+      // Damage numbers (if enabled - in low perf only show crits)
       if (showDamageNumbers && lastSnap.damageNumbers) {
         for (const d of lastSnap.damageNumbers) {
+          // In low perf mode, only show crits and big hits
+          if (lowPerformanceMode && !d.isCrit && d.amount < 10) continue;
+          
           ctx.font = `bold ${d.isCrit ? 16 : 12}px 'Courier New', monospace`;
           ctx.textAlign = "center";
           ctx.fillStyle = d.isCrit ? `rgba(255,255,0,${d.life})` : `rgba(255,255,255,${d.life})`;
@@ -1337,12 +1395,12 @@
         const baseH = 14 * sy;
         ctx.fillStyle = hexToRgba(color.main, turretAlpha);
         ctx.strokeStyle = color.main;
-        ctx.lineWidth = 1.5;
-        if (!isDead) setShadow(ctx, color.main, 15);
+        ctx.lineWidth = lowPerformanceMode ? 1 : 1.5;
+        if (!isDead && !lowPerformanceMode) setShadow(ctx, color.main, 15);
         ctx.beginPath();
-        ctx.roundRect(cx - baseW / 2, 560 * sy - baseH, baseW, baseH, 3);
+        ctx.roundRect(cx - baseW / 2, 560 * sy - baseH, baseW, baseH, lowPerformanceMode ? 0 : 3);
         ctx.fill();
-        ctx.stroke();
+        if (!lowPerformanceMode) ctx.stroke();
         ctx.save();
         ctx.translate(cx, 560 * sy - baseH / 2);
         ctx.rotate(p.turretAngle + Math.PI / 2);
@@ -1366,40 +1424,52 @@
               const towerAngle = t.angle !== undefined ? t.angle : -Math.PI / 2;
               const scale = 0.6; // Make towers smaller
 
-              // Platform (doesn't rotate)
-              const platformW = 22 * sx * scale;
-              const platformH = 6 * sy * scale;
-              ctx.fillStyle = hexToRgba("#333", 0.9 * towerAlpha);
-              ctx.strokeStyle = hexToRgba(tColor, 0.6 * towerAlpha);
-              ctx.lineWidth = 2;
-              ctx.beginPath();
-              ctx.roundRect(tx - platformW / 2, ty - platformH, platformW, platformH, 2);
-              ctx.fill();
-              ctx.stroke();
-
-              if (!isDead) setShadow(ctx, tColor, 8 + level * 2);
-
-              // Rotating turret part
-              ctx.save();
-              ctx.translate(tx, ty - platformH);
-              ctx.rotate(towerAngle + Math.PI / 2);
-
-              if (typeInfo.name === "Gatling") {
-                const bodyW = 14 * sx * scale;
-                const bodyH = 12 * sy * scale;
-                ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
-                ctx.strokeStyle = hexToRgba(tColor, towerAlpha);
-                ctx.lineWidth = 1;
+              if (lowPerformanceMode) {
+                // Simple tower - just a colored rectangle
+                ctx.fillStyle = hexToRgba(tColor, towerAlpha);
+                ctx.fillRect(tx - 8 * sx, ty - 20 * sy, 16 * sx, 20 * sy);
+                // Level indicator
+                if (level > 1) {
+                  ctx.fillStyle = "#ffd700";
+                  ctx.font = `bold ${8 * sx}px sans-serif`;
+                  ctx.textAlign = "center";
+                  ctx.fillText("★".repeat(Math.min(level - 1, 4)), tx, ty + 8 * sy);
+                }
+              } else {
+                // Platform (doesn't rotate)
+                const platformW = 22 * sx * scale;
+                const platformH = 6 * sy * scale;
+                ctx.fillStyle = hexToRgba("#333", 0.9 * towerAlpha);
+                ctx.strokeStyle = hexToRgba(tColor, 0.6 * towerAlpha);
+                ctx.lineWidth = 2;
                 ctx.beginPath();
-                ctx.roundRect(-bodyW / 2, -bodyH, bodyW, bodyH, 3);
+                ctx.roundRect(tx - platformW / 2, ty - platformH, platformW, platformH, 2);
                 ctx.fill();
                 ctx.stroke();
-                // Triple barrels
-                for (let b = -1; b <= 1; b++) {
-                  ctx.fillStyle = hexToRgba(tColor, towerAlpha);
-                  ctx.fillRect(b * 3 * sx * scale - 1 * sx * scale, -bodyH - 10 * sy * scale, 2 * sx * scale, 12 * sy * scale);
-                }
-              } else if (typeInfo.name === "Sniper") {
+
+                if (!isDead) setShadow(ctx, tColor, 8 + level * 2);
+
+                // Rotating turret part
+                ctx.save();
+                ctx.translate(tx, ty - platformH);
+                ctx.rotate(towerAngle + Math.PI / 2);
+
+                if (typeInfo.name === "Gatling") {
+                  const bodyW = 14 * sx * scale;
+                  const bodyH = 12 * sy * scale;
+                  ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
+                  ctx.strokeStyle = hexToRgba(tColor, towerAlpha);
+                  ctx.lineWidth = 1;
+                  ctx.beginPath();
+                  ctx.roundRect(-bodyW / 2, -bodyH, bodyW, bodyH, 3);
+                  ctx.fill();
+                  ctx.stroke();
+                  // Triple barrels
+                  for (let b = -1; b <= 1; b++) {
+                    ctx.fillStyle = hexToRgba(tColor, towerAlpha);
+                    ctx.fillRect(b * 3 * sx * scale - 1 * sx * scale, -bodyH - 10 * sy * scale, 2 * sx * scale, 12 * sy * scale);
+                  }
+                } else if (typeInfo.name === "Sniper") {
                 const bodyW = 10 * sx * scale;
                 const bodyH = 14 * sy * scale;
                 ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
@@ -1466,31 +1536,43 @@
                 ctx.stroke();
                 ctx.setLineDash([]);
               }
+              } // End of else (non-low-perf tower rendering)
             }
           } else if (p.id === myId && !isDead) {
             // Empty slot
-            ctx.save();
-            const pulse = (Math.sin(time * 8) + 1) / 2;
-            ctx.strokeStyle = `rgba(0, 255, 136, ${0.2 + pulse * 0.3})`;
-            ctx.lineWidth = 2;
-            ctx.setLineDash([4, 4]);
-            ctx.beginPath();
-            ctx.roundRect(tx - 14 * sx, ty - 8 * sy, 28 * sx, 8 * sy, 3);
-            ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.fillStyle = `rgba(0, 255, 136, ${0.15 + pulse * 0.25})`;
-            ctx.strokeStyle = `rgba(0, 255, 136, ${0.4 + pulse * 0.4})`;
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.arc(tx, ty - 18 * sy, 12 * sx, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
-            ctx.fillStyle = "#fff";
-            ctx.font = `bold ${16 * sx}px sans-serif`;
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.fillText("+", tx, ty - 18 * sy);
-            ctx.restore();
+            if (lowPerformanceMode) {
+              // Simple empty slot indicator
+              ctx.strokeStyle = "rgba(0, 255, 136, 0.5)";
+              ctx.lineWidth = 2;
+              ctx.strokeRect(tx - 10 * sx, ty - 20 * sy, 20 * sx, 20 * sy);
+              ctx.fillStyle = "#fff";
+              ctx.font = `bold ${14 * sx}px sans-serif`;
+              ctx.textAlign = "center";
+              ctx.fillText("+", tx, ty - 10 * sy);
+            } else {
+              ctx.save();
+              const pulse = (Math.sin(time * 8) + 1) / 2;
+              ctx.strokeStyle = `rgba(0, 255, 136, ${0.2 + pulse * 0.3})`;
+              ctx.lineWidth = 2;
+              ctx.setLineDash([4, 4]);
+              ctx.beginPath();
+              ctx.roundRect(tx - 14 * sx, ty - 8 * sy, 28 * sx, 8 * sy, 3);
+              ctx.stroke();
+              ctx.setLineDash([]);
+              ctx.fillStyle = `rgba(0, 255, 136, ${0.15 + pulse * 0.25})`;
+              ctx.strokeStyle = `rgba(0, 255, 136, ${0.4 + pulse * 0.4})`;
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.arc(tx, ty - 18 * sy, 12 * sx, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+              ctx.fillStyle = "#fff";
+              ctx.font = `bold ${16 * sx}px sans-serif`;
+              ctx.textAlign = "center";
+              ctx.textBaseline = "middle";
+              ctx.fillText("+", tx, ty - 18 * sy);
+              ctx.restore();
+            }
           }
         });
 
@@ -1648,34 +1730,46 @@
           
           // Damage bar background
           ctx.fillStyle = "rgba(255,255,255,0.08)";
-          ctx.beginPath();
-          ctx.roundRect(panelX + 22, rowY + 18, panelW - 55, 7, 3);
-          ctx.fill();
+          if (lowPerformanceMode) {
+            ctx.fillRect(panelX + 22, rowY + 18, panelW - 55, 7);
+          } else {
+            ctx.beginPath();
+            ctx.roundRect(panelX + 22, rowY + 18, panelW - 55, 7, 3);
+            ctx.fill();
+          }
           
           // Damage bar fill
           if (barWidth > 2) {
-            const barGrad = ctx.createLinearGradient(panelX + 22, 0, panelX + 22 + barWidth, 0);
-            barGrad.addColorStop(0, hexToRgba(color.main, 0.4));
-            barGrad.addColorStop(0.5, hexToRgba(color.main, 0.7));
-            barGrad.addColorStop(1, color.main);
-            ctx.fillStyle = barGrad;
+            if (lowPerformanceMode) {
+              ctx.fillStyle = color.main;
+              ctx.fillRect(panelX + 22, rowY + 18, barWidth, 7);
+            } else {
+              const barGrad = ctx.createLinearGradient(panelX + 22, 0, panelX + 22 + barWidth, 0);
+              barGrad.addColorStop(0, hexToRgba(color.main, 0.4));
+              barGrad.addColorStop(0.5, hexToRgba(color.main, 0.7));
+              barGrad.addColorStop(1, color.main);
+              ctx.fillStyle = barGrad;
+            ctx.beginPath();
             ctx.beginPath();
             ctx.roundRect(panelX + 22, rowY + 18, barWidth, 7, 3);
             ctx.fill();
             
-            // Glow for leader
-            if (isLeader) {
+            // Glow for leader (skip in low perf)
+            if (isLeader && !lowPerformanceMode) {
               ctx.shadowColor = color.main;
               ctx.shadowBlur = 8;
               ctx.fill();
               ctx.shadowBlur = 0;
             }
             
-            // End pip
-            ctx.fillStyle = "rgba(255,255,255,0.9)";
-            ctx.beginPath();
-            ctx.arc(panelX + 22 + barWidth - 1, rowY + 21.5, 2.5, 0, Math.PI * 2);
-            ctx.fill();
+            // End pip (skip in low perf)
+            if (!lowPerformanceMode) {
+              ctx.fillStyle = "rgba(255,255,255,0.9)";
+              ctx.beginPath();
+              ctx.arc(panelX + 22 + barWidth - 1, rowY + 21.5, 2.5, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            } // end else (non-low-perf bar rendering)
           }
           
           ctx.textAlign = "left";
@@ -1879,7 +1973,7 @@
         if (statsPanelOpen) {
           const u = myPlayer.upgrades || {};
           const panelW = 200;
-          const panelH = 330; // Taller to fit options
+          const panelH = 365; // Taller to fit two options
           const panelX = canvas.width - panelW - 15;
           const panelY = btnY - panelH - 10;
           
@@ -1980,6 +2074,30 @@
           ctx.textAlign = "right";
           ctx.fillStyle = showDamageNumbers ? "#66ff66" : "#ff6666";
           ctx.fillText(showDamageNumbers ? "ON" : "OFF", toggleX + toggleW - 8, toggleY + 18);
+          
+          // Low Graphics toggle button
+          const gfxToggleY = toggleY + toggleH + 6;
+          
+          const isHoveringGfxToggle = mouseX >= toggleX && mouseX <= toggleX + toggleW && 
+                                       mouseY >= gfxToggleY && mouseY <= gfxToggleY + toggleH;
+          window.gfxToggleBounds = { x: toggleX, y: gfxToggleY, w: toggleW, h: toggleH };
+          
+          ctx.fillStyle = isHoveringGfxToggle ? "rgba(100,180,255,0.3)" : "rgba(40,60,100,0.4)";
+          ctx.strokeStyle = isHoveringGfxToggle ? "#7ae0ff" : "rgba(122,224,255,0.3)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(toggleX, gfxToggleY, toggleW, toggleH, 5);
+          ctx.fill();
+          ctx.stroke();
+          
+          ctx.font = "11px 'Courier New', monospace";
+          ctx.textAlign = "left";
+          ctx.fillStyle = "#ccc";
+          ctx.fillText("Low Graphics:", toggleX + 8, gfxToggleY + 18);
+          
+          ctx.textAlign = "right";
+          ctx.fillStyle = lowPerformanceMode ? "#66ff66" : "#ff6666";
+          ctx.fillText(lowPerformanceMode ? "ON" : "OFF", toggleX + toggleW - 8, gfxToggleY + 18);
         }
         
         ctx.textAlign = "left";
@@ -2311,6 +2429,36 @@
         ctx.fillText("🎲", rerollBtnX + rerollBtnW / 2, rerollBtnY + 25);
         ctx.font = "bold 10px 'Courier New', monospace";
         ctx.fillText(`${currentRerollCost}g`, rerollBtnX + rerollBtnW / 2, rerollBtnY + 42);
+        
+        // Buy Upgrade button to the right of reroll
+        const canAffordBuy = myGold >= buyUpgradeCost;
+        const buyBtnW = 70;
+        const buyBtnH = 50;
+        const buyBtnX = rerollBtnX + rerollBtnW + 10;
+        const buyBtnY = rerollBtnY;
+        
+        const isBuyHovered = mouseX >= buyBtnX && mouseX <= buyBtnX + buyBtnW && 
+                             mouseY >= buyBtnY && mouseY <= buyBtnY + buyBtnH;
+        hoveredBuyUpgrade = isBuyHovered;
+        
+        // Buy button background
+        ctx.fillStyle = isBuyHovered && canAffordBuy ? "rgba(100,255,150,0.4)" : 
+                        canAffordBuy ? "rgba(60,200,120,0.25)" : "rgba(40,40,60,0.4)";
+        ctx.strokeStyle = isBuyHovered && canAffordBuy ? "#7affaa" : 
+                          canAffordBuy ? "rgba(122,255,170,0.5)" : "#444";
+        ctx.lineWidth = isBuyHovered && canAffordBuy ? 2 : 1;
+        ctx.beginPath();
+        ctx.roundRect(buyBtnX, buyBtnY, buyBtnW, buyBtnH, 6);
+        ctx.fill();
+        ctx.stroke();
+        
+        // Buy button text
+        ctx.font = "18px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillStyle = canAffordBuy ? "#7affaa" : "#555";
+        ctx.fillText("➕", buyBtnX + buyBtnW / 2, buyBtnY + 25);
+        ctx.font = "bold 10px 'Courier New', monospace";
+        ctx.fillText(`${buyUpgradeCost}g`, buyBtnX + buyBtnW / 2, buyBtnY + 42);
         
         ctx.textAlign = "left";
       }
