@@ -35,7 +35,7 @@
 
   // PvP Attack Types
   const ATTACK_TYPES = {
-    swarm: { name: "Swarm", cost: 15, desc: "6 fast weak", color: "#ffcc00", icon: "🐝" },
+    swarm: { name: "Swarm", cost: 25, desc: "6 fast weak", color: "#ffcc00", icon: "🐝" },
     bruiser: { name: "Bruiser", cost: 35, desc: "Very tanky", color: "#ff4444", icon: "🪨" },
     bomber: { name: "Bomber", cost: 55, desc: "Explodes 2dmg", color: "#ff00ff", icon: "💣" },
     splitter: { name: "Splitter", cost: 50, desc: "Splits x15", color: "#00ffff", icon: "💎" },
@@ -72,6 +72,12 @@
   const leaderboardList = document.getElementById("leaderboardList");
   const clearLeaderboardBtn = document.getElementById("clearLeaderboardBtn");
 
+  // Load saved name from localStorage
+  const savedName = localStorage.getItem("rogueAsteroidPlayerName");
+  if (savedName && nameInput) {
+    nameInput.value = savedName;
+  }
+
   // ===== State =====
   let ws = null;
   let myId = null;
@@ -82,6 +88,15 @@
   let phase = "menu";
   let world = { width: 360, height: 600, segmentWidth: 360 };
   let wave = 0;
+
+  // Performance settings
+  let lowPerformanceMode = localStorage.getItem("rogueAsteroidLowPerf") === "true";
+  let frameCount = 0;
+  let lastFpsCheck = Date.now();
+  let currentFps = 60;
+  let fpsHistory = [];
+  const FPS_CHECK_INTERVAL = 2000; // Check FPS every 2 seconds
+  const LOW_FPS_THRESHOLD = 35; // Auto-enable low perf mode below this
 
   let lobbyPlayers = [];
   let allReady = false;
@@ -149,6 +164,41 @@
       clearTimeout(timeout);
       timeout = setTimeout(() => func.apply(this, args), wait);
     };
+  }
+
+  // Performance helpers
+  function setShadow(ctx, color, blur) {
+    if (lowPerformanceMode) {
+      ctx.shadowBlur = 0;
+      return;
+    }
+    ctx.shadowColor = color;
+    ctx.shadowBlur = blur;
+  }
+  
+  function clearShadow(ctx) {
+    ctx.shadowBlur = 0;
+  }
+  
+  function checkPerformance() {
+    frameCount++;
+    const now = Date.now();
+    if (now - lastFpsCheck >= FPS_CHECK_INTERVAL) {
+      currentFps = Math.round(frameCount * 1000 / (now - lastFpsCheck));
+      fpsHistory.push(currentFps);
+      if (fpsHistory.length > 5) fpsHistory.shift();
+      
+      // Auto-enable low performance mode if FPS consistently low
+      const avgFps = fpsHistory.reduce((a, b) => a + b, 0) / fpsHistory.length;
+      if (avgFps < LOW_FPS_THRESHOLD && !lowPerformanceMode && fpsHistory.length >= 3) {
+        lowPerformanceMode = true;
+        localStorage.setItem("rogueAsteroidLowPerf", "true");
+        console.log("Auto-enabled low performance mode (avg FPS: " + avgFps.toFixed(1) + ")");
+      }
+      
+      frameCount = 0;
+      lastFpsCheck = now;
+    }
   }
 
   function initStars() {
@@ -758,14 +808,21 @@
     ctx.font = `bold ${size}px 'Orbitron', 'Courier New', monospace`;
     ctx.textAlign = align;
     ctx.textBaseline = "middle";
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 15;
-    ctx.fillStyle = color;
-    ctx.fillText(text, x, y);
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = "#fff";
-    ctx.globalAlpha = 0.6;
-    ctx.fillText(text, x, y);
+    
+    if (lowPerformanceMode) {
+      // Simple text without glow
+      ctx.fillStyle = color;
+      ctx.fillText(text, x, y);
+    } else {
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 15;
+      ctx.fillStyle = color;
+      ctx.fillText(text, x, y);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "#fff";
+      ctx.globalAlpha = 0.6;
+      ctx.fillText(text, x, y);
+    }
     ctx.restore();
   }
 
@@ -778,6 +835,16 @@
 
     const fadeStart = 0.5;
     const alpha = b.lifespan < fadeStart ? Math.max(0.2, b.lifespan / fadeStart) : 1.0;
+
+    // Simple rendering for low performance mode
+    if (lowPerformanceMode) {
+      const color = b.bulletType === "gatling" ? "#ffff00" : 
+                    b.bulletType === "sniper" ? "#00ff00" :
+                    b.bulletType === "missile" ? "#ff4444" : baseColor;
+      ctx.fillStyle = hexToRgba(color, alpha);
+      ctx.fillRect(x - r, y - r, r * 2, r * 2);
+      return;
+    }
 
     ctx.save();
 
@@ -933,6 +1000,7 @@
 
   function draw() {
     requestAnimationFrame(draw);
+    checkPerformance(); // Track FPS for auto performance adjustment
 
     try {
       const dt = 1 / 60;
@@ -942,14 +1010,23 @@
       ctx.fillStyle = "#050510";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      for (const s of stars) {
+      // Stars - skip some in low performance mode
+      const starSkip = lowPerformanceMode ? 2 : 1;
+      for (let i = 0; i < stars.length; i += starSkip) {
+        const s = stars[i];
         s.y += s.speed;
         if (s.y > 1) s.y = 0;
-        const twinkle = Math.sin(time * 3 + s.twinkle) * 0.3 + 0.7;
-        ctx.fillStyle = `rgba(255,255,255,${twinkle * 0.5})`;
-        ctx.beginPath();
-        ctx.arc(s.x * canvas.width, s.y * canvas.height, s.size, 0, Math.PI * 2);
-        ctx.fill();
+        if (lowPerformanceMode) {
+          // Simple star rendering
+          ctx.fillStyle = "rgba(255,255,255,0.5)";
+          ctx.fillRect(s.x * canvas.width, s.y * canvas.height, s.size, s.size);
+        } else {
+          const twinkle = Math.sin(time * 3 + s.twinkle) * 0.3 + 0.7;
+          ctx.fillStyle = `rgba(255,255,255,${twinkle * 0.5})`;
+          ctx.beginPath();
+          ctx.arc(s.x * canvas.width, s.y * canvas.height, s.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
 
       if (phase === "menu" || phase === "lobby") {
@@ -997,36 +1074,36 @@
         // Main wall line
         ctx.strokeStyle = "rgba(160,0,255,0.8)";
         ctx.lineWidth = 3;
-        ctx.shadowColor = "#a000ff";
-        ctx.shadowBlur = 15;
+        setShadow(ctx, "#a000ff", 15);
         ctx.beginPath();
         ctx.moveTo(x, 0);
         ctx.lineTo(x, world.height * sy);
         ctx.stroke();
-        ctx.shadowBlur = 0;
+        clearShadow(ctx);
         
-        // Energy pulse effect
-        const pulseY = ((time * 100) % (world.height * sy));
-        ctx.fillStyle = "rgba(200,100,255,0.6)";
-        ctx.beginPath();
-        ctx.arc(x, pulseY, 4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(x, world.height * sy - pulseY, 4, 0, Math.PI * 2);
-        ctx.fill();
+        // Energy pulse effect (skip in low perf mode)
+        if (!lowPerformanceMode) {
+          const pulseY = ((time * 100) % (world.height * sy));
+          ctx.fillStyle = "rgba(200,100,255,0.6)";
+          ctx.beginPath();
+          ctx.arc(x, pulseY, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(x, world.height * sy - pulseY, 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
 
       // Ground line
       const groundY = 560 * sy;
       ctx.strokeStyle = "#0ff";
       ctx.lineWidth = 3;
-      ctx.shadowColor = "#0ff";
-      ctx.shadowBlur = 20;
+      setShadow(ctx, "#0ff", 20);
       ctx.beginPath();
       ctx.moveTo(0, groundY);
       ctx.lineTo(world.width * sx, groundY);
       ctx.stroke();
-      ctx.shadowBlur = 0;
+      clearShadow(ctx);
 
       // Player effects (slowfield, shield)
       for (const p of lastSnap.players) {
@@ -1049,13 +1126,19 @@
         }
       }
 
-      // Particles
+      // Particles (reduced in low performance mode)
       if (lastSnap.particles) {
-        for (const p of lastSnap.particles) {
+        const particleSkip = lowPerformanceMode ? 2 : 1;
+        for (let i = 0; i < lastSnap.particles.length; i += particleSkip) {
+          const p = lastSnap.particles[i];
           ctx.fillStyle = hexToRgba(p.color, p.life / (p.maxLife || 0.5));
-          ctx.beginPath();
-          ctx.arc(p.x * sx, p.y * sy, (p.size || 2) * sx, 0, Math.PI * 2);
-          ctx.fill();
+          if (lowPerformanceMode) {
+            ctx.fillRect(p.x * sx - 2, p.y * sy - 2, 4, 4);
+          } else {
+            ctx.beginPath();
+            ctx.arc(p.x * sx, p.y * sy, (p.size || 2) * sx, 0, Math.PI * 2);
+            ctx.fill();
+          }
         }
       }
 
@@ -1073,50 +1156,57 @@
 
         // FTL entry effect - Star Wars hyperspace exit style
         if (m.inFTL) {
-          ctx.save();
-          
-          // Draw streak lines (motion trails)
-          const streakLength = 80 * sy;
-          const numStreaks = 5;
-          
-          for (let i = 0; i < numStreaks; i++) {
-            const offsetX = (Math.random() - 0.5) * r * 1.5;
-            const alpha = 0.3 + Math.random() * 0.4;
+          if (lowPerformanceMode) {
+            // Simple FTL effect - just a stretched colored rectangle
+            ctx.fillStyle = baseColor;
+            ctx.fillRect(x - r, y - r * 3, r * 2, r * 4);
+            ctx.fillStyle = "#fff";
+            ctx.fillRect(x - r/2, y - r * 2, r, r * 3);
+          } else {
+            ctx.save();
             
-            const grad = ctx.createLinearGradient(x + offsetX, y - streakLength, x + offsetX, y);
-            grad.addColorStop(0, "rgba(150, 180, 255, 0)");
-            grad.addColorStop(0.5, `rgba(180, 200, 255, ${alpha})`);
-            grad.addColorStop(1, `rgba(255, 255, 255, ${alpha + 0.2})`);
+            // Draw streak lines (motion trails)
+            const streakLength = 80 * sy;
+            const numStreaks = 5;
             
-            ctx.strokeStyle = grad;
-            ctx.lineWidth = 1 + Math.random() * 2;
+            for (let i = 0; i < numStreaks; i++) {
+              const offsetX = (Math.random() - 0.5) * r * 1.5;
+              const alpha = 0.3 + Math.random() * 0.4;
+              
+              const grad = ctx.createLinearGradient(x + offsetX, y - streakLength, x + offsetX, y);
+              grad.addColorStop(0, "rgba(150, 180, 255, 0)");
+              grad.addColorStop(0.5, `rgba(180, 200, 255, ${alpha})`);
+              grad.addColorStop(1, `rgba(255, 255, 255, ${alpha + 0.2})`);
+              
+              ctx.strokeStyle = grad;
+              ctx.lineWidth = 1 + Math.random() * 2;
+              ctx.beginPath();
+              ctx.moveTo(x + offsetX, y - streakLength);
+              ctx.lineTo(x + offsetX, y);
+              ctx.stroke();
+            }
+            
+            // Main FTL glow around asteroid
+            setShadow(ctx, "#aaccff", 25);
+            
+            // Draw elongated asteroid (stretched during FTL)
+            ctx.translate(x, y);
+            ctx.scale(1, 2.5); // Stretch vertically
+            ctx.rotate(m.rotation || 0);
+            
+            const ftlGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+            ftlGrad.addColorStop(0, "#ffffff");
+            ftlGrad.addColorStop(0.4, baseColor);
+            ftlGrad.addColorStop(1, hexToRgba(baseColor, 0.5));
+            ctx.fillStyle = ftlGrad;
+            
             ctx.beginPath();
-            ctx.moveTo(x + offsetX, y - streakLength);
-            ctx.lineTo(x + offsetX, y);
-            ctx.stroke();
+            ctx.arc(0, 0, r, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.restore();
+            clearShadow(ctx);
           }
-          
-          // Main FTL glow around asteroid
-          ctx.shadowColor = "#aaccff";
-          ctx.shadowBlur = 25;
-          
-          // Draw elongated asteroid (stretched during FTL)
-          ctx.translate(x, y);
-          ctx.scale(1, 2.5); // Stretch vertically
-          ctx.rotate(m.rotation || 0);
-          
-          const ftlGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
-          ftlGrad.addColorStop(0, "#ffffff");
-          ftlGrad.addColorStop(0.4, baseColor);
-          ftlGrad.addColorStop(1, hexToRgba(baseColor, 0.5));
-          ctx.fillStyle = ftlGrad;
-          
-          ctx.beginPath();
-          ctx.arc(0, 0, r, 0, Math.PI * 2);
-          ctx.fill();
-          
-          ctx.restore();
-          ctx.shadowBlur = 0;
           continue; // Skip normal rendering for FTL asteroids
         }
 
@@ -1129,8 +1219,7 @@
         ctx.fillStyle = hexToRgba(baseColor, phaseAlpha);
         ctx.strokeStyle = baseColor;
         ctx.lineWidth = 1.5;
-        ctx.shadowColor = baseColor;
-        ctx.shadowBlur = 8;
+        setShadow(ctx, baseColor, 8);
 
         if (m.vertices && m.vertices.length > 0) {
           ctx.beginPath();
@@ -1151,7 +1240,7 @@
           ctx.stroke();
         }
         ctx.restore();
-        ctx.shadowBlur = 0;
+        clearShadow(ctx);
 
         // HP bar
         if (m.hp < m.maxHp) {
@@ -1228,8 +1317,7 @@
         ctx.fillStyle = hexToRgba(color.main, turretAlpha);
         ctx.strokeStyle = color.main;
         ctx.lineWidth = 1.5;
-        ctx.shadowColor = isDead ? "transparent" : color.main;
-        ctx.shadowBlur = isDead ? 0 : 15;
+        if (!isDead) setShadow(ctx, color.main, 15);
         ctx.beginPath();
         ctx.roundRect(cx - baseW / 2, 560 * sy - baseH, baseW, baseH, 3);
         ctx.fill();
@@ -1240,7 +1328,7 @@
         ctx.fillStyle = hexToRgba(color.main, turretAlpha);
         ctx.fillRect(-2.5 * sx, -22 * sy, 5 * sx, 22 * sy);
         ctx.restore();
-        ctx.shadowBlur = 0;
+        clearShadow(ctx);
 
         // Tower slots
         const offsets = [-110, -50, 50, 110];
@@ -1268,8 +1356,7 @@
               ctx.fill();
               ctx.stroke();
 
-              ctx.shadowColor = isDead ? "transparent" : tColor;
-              ctx.shadowBlur = isDead ? 0 : 8 + level * 2;
+              if (!isDead) setShadow(ctx, tColor, 8 + level * 2);
 
               // Rotating turret part
               ctx.save();
@@ -1335,7 +1422,7 @@
                 }
               }
               ctx.restore();
-              ctx.shadowBlur = 0;
+              clearShadow(ctx);
 
               // Level stars
               if (level > 1) {
@@ -2323,9 +2410,13 @@
   draw();
 
   nameInput.addEventListener("input", debounce(() => {
-    if (connected) {
-      const name = nameInput.value.trim();
-      if (name) send({ t: "setName", name });
+    const name = nameInput.value.trim();
+    // Save to localStorage
+    if (name) {
+      localStorage.setItem("rogueAsteroidPlayerName", name);
+    }
+    if (connected && name) {
+      send({ t: "setName", name });
     }
   }, 300));
 
@@ -2341,4 +2432,23 @@
       send({ t: "forceStart" });
     }
   };
+
+  // Performance toggle button
+  const perfToggleBtn = document.getElementById("perfToggleBtn");
+  function updatePerfButton() {
+    if (perfToggleBtn) {
+      perfToggleBtn.textContent = lowPerformanceMode ? "🎮 GRAPHICS: LOW" : "🎮 GRAPHICS: HIGH";
+      perfToggleBtn.style.background = lowPerformanceMode ? "#553300" : "#003355";
+    }
+  }
+  updatePerfButton();
+  
+  if (perfToggleBtn) {
+    perfToggleBtn.onclick = () => {
+      lowPerformanceMode = !lowPerformanceMode;
+      localStorage.setItem("rogueAsteroidLowPerf", lowPerformanceMode.toString());
+      updatePerfButton();
+      console.log("Performance mode:", lowPerformanceMode ? "LOW" : "HIGH");
+    };
+  }
 })();
