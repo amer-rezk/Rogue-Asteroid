@@ -887,7 +887,6 @@
     if (isSpectator) {
       readyBtn.style.display = "none";
       launchBtn.style.display = "none";
-      soloBtn.style.display = "none";
       
       // Show spectator status
       let spectatorStatus = document.getElementById("lobbySpectatorStatus");
@@ -948,9 +947,9 @@
           send({ t: "becomeSpectator" });
         }
       };
-      // Insert after solo button
-      if (soloBtn && soloBtn.parentNode) {
-        soloBtn.parentNode.insertBefore(becomeSpecBtn, soloBtn.nextSibling);
+      // Insert after launch button
+      if (launchBtn && launchBtn.parentNode) {
+        launchBtn.parentNode.insertBefore(becomeSpecBtn, launchBtn.nextSibling);
       }
     }
     becomeSpecBtn.style.display = "block";
