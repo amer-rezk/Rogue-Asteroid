@@ -44,10 +44,10 @@ const MAX_TOWER_LEVEL = 5;
 const ATTACK_TYPES = {
   swarm: { 
     name: "Swarm", 
-    cost: 35, 
+    cost: 25, 
     count: 6,
     baseHp: 0.1,
-    hpScale: 1,
+    hpScale: 0.75, // 25% weaker scaling
     size: "small", 
     speed: 1.3,
     desc: "6 fast weak asteroids",
