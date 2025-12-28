@@ -139,6 +139,10 @@
   let attackQuantityMode = 1; // 1, 10, or "max"
   let hoveredQuantityBtn = null; // Track which quantity button is hovered
 
+  // Stats panel
+  let statsPanelOpen = false;
+  let hoveredStatsBtn = false;
+
   // Upgrade reroll
   let currentRerollCost = 10;
   let hoveredReroll = false;
@@ -705,6 +709,12 @@
       if (myPlayer && myPlayer.gold >= currentRerollCost) {
         send({ t: "rerollUpgrades" });
       }
+      return;
+    }
+
+    // Handle stats panel button click
+    if (phase === "playing" && hoveredStatsBtn) {
+      statsPanelOpen = !statsPanelOpen;
       return;
     }
 
@@ -1826,6 +1836,98 @@
           const rowY = currentY + 55 + i * 38; // 25% bigger row spacing
           drawPlayerDamageRow(p, rowY, p.waveDamage || 0, maxWaveDamage, totalWaveDamage, i === 0, panelX, panelW);
         });
+        
+        ctx.textAlign = "left";
+      }
+
+      // ===== STATS PANEL BUTTON & PANEL =====
+      if (phase === "playing" && myPlayer) {
+        const btnW = 90;
+        const btnH = 32;
+        const btnX = canvas.width - btnW - 15;
+        const btnY = canvas.height - btnH - 15;
+        
+        // Check if hovering stats button
+        hoveredStatsBtn = mouseX >= btnX && mouseX <= btnX + btnW && mouseY >= btnY && mouseY <= btnY + btnH;
+        
+        // Stats button
+        ctx.fillStyle = hoveredStatsBtn ? "rgba(100,180,255,0.4)" : statsPanelOpen ? "rgba(80,150,220,0.35)" : "rgba(40,60,100,0.6)";
+        ctx.strokeStyle = hoveredStatsBtn ? "#7ae0ff" : statsPanelOpen ? "#5ac8ff" : "rgba(122,224,255,0.4)";
+        ctx.lineWidth = hoveredStatsBtn || statsPanelOpen ? 2 : 1;
+        ctx.beginPath();
+        ctx.roundRect(btnX, btnY, btnW, btnH, 6);
+        ctx.fill();
+        ctx.stroke();
+        
+        ctx.font = "bold 12px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.fillStyle = hoveredStatsBtn || statsPanelOpen ? "#fff" : "#aaa";
+        ctx.fillText("📊 STATS", btnX + btnW / 2, btnY + 21);
+        
+        // Stats panel (shows when open)
+        if (statsPanelOpen) {
+          const u = myPlayer.upgrades || {};
+          const panelW = 200;
+          const panelH = 280;
+          const panelX = canvas.width - panelW - 15;
+          const panelY = btnY - panelH - 10;
+          
+          // Panel background
+          const grad = ctx.createLinearGradient(panelX, panelY, panelX, panelY + panelH);
+          grad.addColorStop(0, "rgba(10,17,40,0.95)");
+          grad.addColorStop(1, "rgba(15,25,50,0.95)");
+          ctx.fillStyle = grad;
+          ctx.strokeStyle = "rgba(122,224,255,0.5)";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.roundRect(panelX, panelY, panelW, panelH, 10);
+          ctx.fill();
+          ctx.stroke();
+          
+          // Title
+          ctx.font = "bold 14px 'Orbitron', sans-serif";
+          ctx.fillStyle = "#7ae0ff";
+          ctx.textAlign = "center";
+          ctx.fillText("📊 YOUR STATS", panelX + panelW / 2, panelY + 22);
+          
+          // Separator
+          ctx.strokeStyle = "rgba(122,224,255,0.3)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(panelX + 10, panelY + 32);
+          ctx.lineTo(panelX + panelW - 10, panelY + 32);
+          ctx.stroke();
+          
+          // Stats list
+          ctx.font = "11px 'Courier New', monospace";
+          ctx.textAlign = "left";
+          let statY = panelY + 52;
+          const lineH = 22;
+          
+          const stats = [
+            { label: "Base Damage", value: `+${(u.damageAdd || 0).toFixed(1)}`, color: "#ff6666" },
+            { label: "Fire Rate", value: `${((u.fireRateMult || 1) * 100).toFixed(0)}%`, color: "#ffaa00" },
+            { label: "Bullet Speed", value: `${((u.bulletSpeedMult || 1) * 100).toFixed(0)}%`, color: "#66ff66" },
+            { label: "Crit Chance", value: `${((u.critChance || 0) * 100).toFixed(0)}%`, color: "#ff66ff" },
+            { label: "Multishot", value: `${u.multishot || 1}x`, color: "#66ffff" },
+            { label: "Pierce", value: `${u.pierce || 0}`, color: "#ffff66" },
+            { label: "Ricochet", value: `${u.ricochet || 0}`, color: "#ff9966" },
+            { label: "Chain", value: u.chain ? "Yes" : "No", color: "#9966ff" },
+            { label: "Explosive", value: `${u.explosive || 0}`, color: "#ff4444" },
+            { label: "Gold Mult", value: `${((u.goldMult || 1) * 100).toFixed(0)}%`, color: "#ffd700" },
+          ];
+          
+          stats.forEach((stat, i) => {
+            // Label
+            ctx.fillStyle = "#aaa";
+            ctx.fillText(stat.label + ":", panelX + 15, statY + i * lineH);
+            // Value
+            ctx.fillStyle = stat.color;
+            ctx.textAlign = "right";
+            ctx.fillText(stat.value, panelX + panelW - 15, statY + i * lineH);
+            ctx.textAlign = "left";
+          });
+        }
         
         ctx.textAlign = "left";
       }
