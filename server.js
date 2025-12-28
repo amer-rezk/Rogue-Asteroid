@@ -8,7 +8,7 @@ const fs = require("fs");
 const { WebSocketServer } = require("ws");
 
 // ===== Game constants =====
-const MAX_PLAYERS = 4;
+const MAX_PLAYERS = 5;
 const TICK_RATE = 30;
 const DT = 1 / TICK_RATE;
 
