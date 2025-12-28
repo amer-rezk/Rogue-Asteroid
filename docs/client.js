@@ -315,29 +315,52 @@
         }
       }
       
-      // Predict missile positions
+      // Predict missile positions with drift correction
       for (const [id, state] of missileStates) {
         const inFTL = missileInFTL.get(id);
         
+        // Advance both predicted AND server position estimates
         if (inFTL) {
           // FTL mode: fast vertical, slow horizontal
-          state.x += state.vx * dt * 0.3;
-          state.y += state.vy * dt * 8;
+          const dx = state.vx * dt * 0.3;
+          const dy = state.vy * dt * 8;
+          state.x += dx;
+          state.y += dy;
+          state.serverX += dx;
+          state.serverY += dy;
         } else {
           // Normal mode: check if in slowfield
           const segmentWidth = world.segmentWidth || 360;
           const missileSlot = Math.floor(state.x / segmentWidth);
           const speedMult = slowfieldSlots.has(missileSlot) ? 0.75 : 1.0;
           
-          state.x += state.vx * dt * speedMult;
-          state.y += state.vy * dt * speedMult;
+          const dx = state.vx * dt * speedMult;
+          const dy = state.vy * dt * speedMult;
+          state.x += dx;
+          state.y += dy;
+          state.serverX += dx;
+          state.serverY += dy;
         }
+        
+        // Small drift correction toward estimated server position (fixes accumulated error)
+        const driftCorrection = 0.05;
+        state.x += (state.serverX - state.x) * driftCorrection;
+        state.y += (state.serverY - state.y) * driftCorrection;
       }
       
-      // Predict bullet positions  
+      // Predict bullet positions with drift correction
       for (const [id, state] of bulletStates) {
-        state.x += state.vx * dt;
-        state.y += state.vy * dt;
+        const dx = state.vx * dt;
+        const dy = state.vy * dt;
+        state.x += dx;
+        state.y += dy;
+        state.serverX += dx;
+        state.serverY += dy;
+        
+        // Small drift correction
+        const driftCorrection = 0.05;
+        state.x += (state.serverX - state.x) * driftCorrection;
+        state.y += (state.serverY - state.y) * driftCorrection;
       }
       
       // Apply predicted positions to lastSnap for rendering
@@ -685,15 +708,27 @@
         lastServerTime = now;
         
         // Update missile states with velocity for prediction
+        // Use interpolation instead of snapping to avoid rubber-banding
         if (msg.missiles && PREDICTION_ENABLED) {
           const newMissileStates = new Map();
           for (const m of msg.missiles) {
-            // Use server-provided velocity directly
+            const prev = missileStates.get(m.id);
+            let x, y;
+            if (prev) {
+              // Interpolate toward server position (smooth correction)
+              const lerpFactor = 0.3; // Blend 30% toward server position
+              x = prev.x + (m.x - prev.x) * lerpFactor;
+              y = prev.y + (m.y - prev.y) * lerpFactor;
+            } else {
+              // New object, start at server position
+              x = m.x;
+              y = m.y;
+            }
             newMissileStates.set(m.id, {
               serverX: m.x,
               serverY: m.y,
-              x: m.x,
-              y: m.y,
+              x: x,
+              y: y,
               vx: m.vx || 0,
               vy: m.vy || 30
             });
@@ -701,18 +736,29 @@
           missileStates = newMissileStates;
         }
         
-        // Update bullet states for prediction
+        // Update bullet states for prediction with interpolation
         if (msg.bullets && PREDICTION_ENABLED) {
           const newBulletStates = new Map();
           for (const b of msg.bullets) {
-            const speed = BULLET_SPEED * 1.1; // Slight overestimate for smoothness
+            const speed = BULLET_SPEED * 1.1;
             const vx = Math.cos(b.angle) * speed;
             const vy = Math.sin(b.angle) * speed;
+            const prev = bulletStates.get(b.id);
+            let x, y;
+            if (prev) {
+              // Interpolate toward server position
+              const lerpFactor = 0.3;
+              x = prev.x + (b.x - prev.x) * lerpFactor;
+              y = prev.y + (b.y - prev.y) * lerpFactor;
+            } else {
+              x = b.x;
+              y = b.y;
+            }
             newBulletStates.set(b.id, {
               serverX: b.x,
               serverY: b.y,
-              x: b.x,
-              y: b.y,
+              x: x,
+              y: y,
               vx, vy
             });
           }
