@@ -44,7 +44,7 @@ const MAX_TOWER_LEVEL = 5;
 const ATTACK_TYPES = {
   swarm: { 
     name: "Swarm", 
-    cost: 15, 
+    cost: 35, 
     count: 6,
     baseHp: 0.1,
     hpScale: 1,
