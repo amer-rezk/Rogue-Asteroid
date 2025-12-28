@@ -22,7 +22,7 @@ const BULLET_R = 2.5;
 const BULLET_SPEED = 175; // Slowed to 25% of original (was 700)
 const BULLET_COOLDOWN = 0.72;
 const BULLET_DAMAGE = 1.25; // Base damage increased by +1
-const BULLET_LIFESPAN = 6.0; // Increased for slower homing bullets
+const BULLET_LIFESPAN = 3.0; // Increased for slower homing bullets
 
 const ASTEROID_R_MIN = 8;
 const ASTEROID_R_MAX = 16;
@@ -45,12 +45,12 @@ const ATTACK_TYPES = {
   swarm: { 
     name: "Swarm", 
     cost: 15, 
-    count: 4, // Increased from 3
-    baseHp: 1,
+    count: 5, // Increased from 3
+    baseHp: 0.6,
     hpScale: 1.2, // Scales 20% faster than wave
     size: "small", 
     speed: 1.3,
-    desc: "4 fast weak asteroids",
+    desc: "5 fast weak asteroids",
     color: "#ffcc00",
     icon: "🐝"
   },
