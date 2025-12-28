@@ -1452,7 +1452,7 @@
       // ===== UNIFIED RIGHT PANEL (Attacks + DPS Meters) =====
       if (phase === "playing" && lastSnap && lastSnap.players.length > 1) {
         hoveredAttack = null;
-        const panelW = 175;
+        const panelW = 220; // 25% bigger (was 175)
         const panelX = canvas.width - panelW - 12;
         let currentY = 15;
         const myGold = myPlayer?.gold || 0;
@@ -1466,25 +1466,25 @@
           grad.addColorStop(1, "rgba(15,20,40,0.95)");
           ctx.fillStyle = grad;
           ctx.strokeStyle = borderColor;
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = 2;
           ctx.beginPath();
-          ctx.roundRect(x, y, w, h, 10);
+          ctx.roundRect(x, y, w, h, 12);
           ctx.fill();
           ctx.stroke();
           
           // Title
           if (title) {
-            ctx.font = "bold 11px 'Orbitron', sans-serif";
+            ctx.font = "bold 14px 'Orbitron', sans-serif"; // Bigger font
             ctx.fillStyle = titleColor;
             ctx.textAlign = "center";
-            ctx.fillText(title, x + w / 2, y + 16);
+            ctx.fillText(title, x + w / 2, y + 20);
             
             // Separator line
             ctx.strokeStyle = hexToRgba(borderColor, 0.4);
             ctx.lineWidth = 1;
             ctx.beginPath();
-            ctx.moveTo(x + 10, y + 26);
-            ctx.lineTo(x + w - 10, y + 26);
+            ctx.moveTo(x + 10, y + 30);
+            ctx.lineTo(x + w - 10, y + 30);
             ctx.stroke();
           }
         }
@@ -1492,7 +1492,7 @@
         // Helper function to draw player damage row (reusable for both meters)
         function drawPlayerDamageRow(p, rowY, damage, maxDamage, totalDamage, isLeader, panelX, panelW) {
           const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
-          const barWidth = maxDamage > 0 ? (damage / maxDamage) * (panelW - 48) : 0;
+          const barWidth = maxDamage > 0 ? (damage / maxDamage) * (panelW - 55) : 0;
           const percent = totalDamage > 0 ? ((damage / totalDamage) * 100).toFixed(0) : "0";
           const isMe = p.id === myId;
           
@@ -1500,65 +1500,65 @@
           if (isMe) {
             ctx.fillStyle = "rgba(122,224,255,0.08)";
             ctx.beginPath();
-            ctx.roundRect(panelX + 4, rowY - 2, panelW - 8, 28, 4);
+            ctx.roundRect(panelX + 4, rowY - 2, panelW - 8, 32, 5);
             ctx.fill();
           }
           
           // Player color indicator
           ctx.fillStyle = color.main;
           ctx.shadowColor = color.main;
-          ctx.shadowBlur = isLeader ? 8 : 4;
+          ctx.shadowBlur = isLeader ? 10 : 5;
           ctx.beginPath();
-          ctx.roundRect(panelX + 8, rowY + 2, 4, 20, 2);
+          ctx.roundRect(panelX + 10, rowY + 2, 5, 24, 2);
           ctx.fill();
           ctx.shadowBlur = 0;
           
           // Rank / Crown
-          ctx.font = "bold 10px sans-serif";
+          ctx.font = "bold 12px sans-serif";
           ctx.textAlign = "left";
           if (isLeader && damage > 0) {
             ctx.fillStyle = "#ffd700";
-            ctx.fillText("👑", panelX + 16, rowY + 16);
+            ctx.fillText("👑", panelX + 20, rowY + 18);
           }
           
           // Player name
-          ctx.font = "bold 9px 'Courier New', monospace";
+          ctx.font = "bold 11px 'Courier New', monospace";
           ctx.fillStyle = isLeader ? "#ffd700" : "#e8f0ff";
-          const displayName = p.name.length > 8 ? p.name.substring(0, 7) + "…" : p.name;
-          ctx.fillText(displayName, panelX + (isLeader ? 30 : 18), rowY + 10);
+          const displayName = p.name.length > 10 ? p.name.substring(0, 9) + "…" : p.name;
+          ctx.fillText(displayName, panelX + (isLeader ? 36 : 22), rowY + 12);
           
           // Damage amount
-          ctx.font = "bold 9px 'Courier New', monospace";
+          ctx.font = "bold 11px 'Courier New', monospace";
           ctx.textAlign = "right";
           ctx.fillStyle = "#91ff7a";
-          ctx.fillText(Math.round(damage).toLocaleString(), panelX + panelW - 32, rowY + 10);
+          ctx.fillText(Math.round(damage).toLocaleString(), panelX + panelW - 38, rowY + 12);
           
           // Percentage
-          ctx.font = "bold 8px 'Courier New', monospace";
+          ctx.font = "bold 10px 'Courier New', monospace";
           ctx.fillStyle = isLeader ? "#ffd700" : "#7ae0ff";
-          ctx.fillText(percent + "%", panelX + panelW - 8, rowY + 10);
+          ctx.fillText(percent + "%", panelX + panelW - 10, rowY + 12);
           
           // Damage bar background
           ctx.fillStyle = "rgba(255,255,255,0.08)";
           ctx.beginPath();
-          ctx.roundRect(panelX + 18, rowY + 16, panelW - 48, 6, 3);
+          ctx.roundRect(panelX + 22, rowY + 18, panelW - 55, 7, 3);
           ctx.fill();
           
           // Damage bar fill
           if (barWidth > 2) {
-            const barGrad = ctx.createLinearGradient(panelX + 18, 0, panelX + 18 + barWidth, 0);
+            const barGrad = ctx.createLinearGradient(panelX + 22, 0, panelX + 22 + barWidth, 0);
             barGrad.addColorStop(0, hexToRgba(color.main, 0.4));
             barGrad.addColorStop(0.5, hexToRgba(color.main, 0.7));
             barGrad.addColorStop(1, color.main);
             ctx.fillStyle = barGrad;
             ctx.beginPath();
-            ctx.roundRect(panelX + 18, rowY + 16, barWidth, 6, 3);
+            ctx.roundRect(panelX + 22, rowY + 18, barWidth, 7, 3);
             ctx.fill();
             
             // Glow for leader
             if (isLeader) {
               ctx.shadowColor = color.main;
-              ctx.shadowBlur = 6;
+              ctx.shadowBlur = 8;
               ctx.fill();
               ctx.shadowBlur = 0;
             }
@@ -1566,7 +1566,7 @@
             // End pip
             ctx.fillStyle = "rgba(255,255,255,0.9)";
             ctx.beginPath();
-            ctx.arc(panelX + 18 + barWidth - 1, rowY + 19, 2, 0, Math.PI * 2);
+            ctx.arc(panelX + 22 + barWidth - 1, rowY + 21.5, 2.5, 0, Math.PI * 2);
             ctx.fill();
           }
           
@@ -1575,20 +1575,20 @@
 
         // ===== ATTACK SPAWN PANEL =====
         if (isAlive) {
-          const attackPanelH = 295; // Increased for quantity buttons
+          const attackPanelH = 370; // 25% bigger (was 295)
           drawSectionPanel(panelX, currentY, panelW, attackPanelH, "rgba(255,68,68,0.5)", "⚔️ SEND ATTACKS", "#ff6666");
           
           // Quantity mode buttons (1x, 10x, MAX)
-          const qBtnW = (panelW - 24) / 3;
-          const qBtnH = 22;
-          const qBtnY = currentY + 32;
+          const qBtnW = (panelW - 30) / 3;
+          const qBtnH = 28;
+          const qBtnY = currentY + 38;
           hoveredQuantityBtn = null;
           
           const quantityModes = [1, 10, "max"];
           const quantityLabels = ["1x", "10x", "MAX"];
           
           quantityModes.forEach((mode, i) => {
-            const qBtnX = panelX + 6 + i * (qBtnW + 3);
+            const qBtnX = panelX + 8 + i * (qBtnW + 4);
             const isSelected = attackQuantityMode === mode;
             const isHovered = mouseX >= qBtnX && mouseX <= qBtnX + qBtnW && mouseY >= qBtnY && mouseY <= qBtnY + qBtnH;
             
@@ -1600,27 +1600,27 @@
             ctx.strokeStyle = isSelected ? "#ff6666" : isHovered ? "#ff8888" : "#444";
             ctx.lineWidth = isSelected ? 2 : 1;
             ctx.beginPath();
-            ctx.roundRect(qBtnX, qBtnY, qBtnW, qBtnH, 4);
+            ctx.roundRect(qBtnX, qBtnY, qBtnW, qBtnH, 5);
             ctx.fill();
             ctx.stroke();
             
             // Label
-            ctx.font = "bold 10px 'Courier New', monospace";
+            ctx.font = "bold 12px 'Courier New', monospace";
             ctx.textAlign = "center";
             ctx.fillStyle = isSelected ? "#fff" : "#999";
-            ctx.fillText(quantityLabels[i], qBtnX + qBtnW / 2, qBtnY + 15);
+            ctx.fillText(quantityLabels[i], qBtnX + qBtnW / 2, qBtnY + 19);
           });
 
           // Attack buttons
           const attacks = Object.entries(ATTACK_TYPES);
-          const btnH = 36;
-          const btnGap = 3;
-          const startY = currentY + 62;
+          const btnH = 45; // 25% bigger (was 36)
+          const btnGap = 4;
+          const startY = currentY + 75;
 
           attacks.forEach(([key, atk], i) => {
             const btnY = startY + i * (btnH + btnGap);
-            const btnX = panelX + 6;
-            const btnW = panelW - 12;
+            const btnX = panelX + 8;
+            const btnW = panelW - 16;
             
             // Calculate cost based on quantity mode
             let displayCost = atk.cost;
@@ -1646,22 +1646,22 @@
                               canAfford ? hexToRgba(atk.color, 0.4) : "#2a2a3a";
             ctx.lineWidth = isHovered && canAfford ? 2 : 1;
             ctx.beginPath();
-            ctx.roundRect(btnX, btnY, btnW, btnH, 6);
+            ctx.roundRect(btnX, btnY, btnW, btnH, 8);
             ctx.fill();
             ctx.stroke();
 
             // Icon
-            ctx.font = "15px sans-serif";
+            ctx.font = "20px sans-serif";
             ctx.textAlign = "left";
-            ctx.fillText(atk.icon, btnX + 6, btnY + 23);
+            ctx.fillText(atk.icon, btnX + 8, btnY + 30);
 
             // Name
-            ctx.font = "bold 10px 'Courier New', monospace";
+            ctx.font = "bold 12px 'Courier New', monospace";
             ctx.fillStyle = canAfford ? atk.color : "#444";
-            ctx.fillText(atk.name.toUpperCase(), btnX + 28, btnY + 13);
+            ctx.fillText(atk.name.toUpperCase(), btnX + 36, btnY + 18);
 
             // Description with count hint
-            ctx.font = "8px 'Courier New', monospace";
+            ctx.font = "10px 'Courier New', monospace";
             ctx.fillStyle = canAfford ? "rgba(255,255,255,0.5)" : "#333";
             let descText = atk.desc;
             if (attackQuantityMode === 10 && affordCount > 0) {
@@ -1669,23 +1669,23 @@
             } else if (attackQuantityMode === "max" && affordCount > 0) {
               descText = `×${affordCount}`;
             }
-            ctx.fillText(descText, btnX + 28, btnY + 24);
+            ctx.fillText(descText, btnX + 36, btnY + 32);
 
             // Cost (shows total for multi-buy)
-            ctx.font = "bold 10px 'Courier New', monospace";
+            ctx.font = "bold 12px 'Courier New', monospace";
             ctx.textAlign = "right";
             ctx.fillStyle = canAfford ? "#ffd700" : "#444";
             const costText = attackQuantityMode === 1 ? `${atk.cost}g` : `${displayCost}g`;
-            ctx.fillText(costText, btnX + btnW - 6, btnY + 20);
+            ctx.fillText(costText, btnX + btnW - 8, btnY + 26);
           });
 
           ctx.textAlign = "left";
-          currentY += attackPanelH + 8;
+          currentY += attackPanelH + 10;
         }
 
         // ===== TOTAL RUN DPS PANEL =====
         const playerCount = lastSnap.players.filter(p => p.slot >= 0).length;
-        const totalDmgPanelH = 44 + playerCount * 30;
+        const totalDmgPanelH = 55 + playerCount * 38; // 25% bigger
         drawSectionPanel(panelX, currentY, panelW, totalDmgPanelH, "rgba(145,255,122,0.4)", "📊 TOTAL DAMAGE", "#91ff7a");
         
         // Calculate totals for run
@@ -1693,12 +1693,12 @@
         const maxDamage = Math.max(...lastSnap.players.map(p => p.damageDealt || 0), 1);
         
         // Total damage number (centered, big)
-        ctx.font = "bold 14px 'Orbitron', sans-serif";
+        ctx.font = "bold 16px 'Orbitron', sans-serif";
         ctx.textAlign = "center";
         ctx.fillStyle = "#91ff7a";
         ctx.shadowColor = "#91ff7a";
-        ctx.shadowBlur = 10;
-        ctx.fillText(Math.round(totalDamage).toLocaleString(), panelX + panelW / 2, currentY + 38);
+        ctx.shadowBlur = 12;
+        ctx.fillText(Math.round(totalDamage).toLocaleString(), panelX + panelW / 2, currentY + 45);
         ctx.shadowBlur = 0;
         
         // Sort and draw players
@@ -1707,14 +1707,14 @@
           .sort((a, b) => (b.damageDealt || 0) - (a.damageDealt || 0));
         
         sortedByTotal.forEach((p, i) => {
-          const rowY = currentY + 48 + i * 30;
+          const rowY = currentY + 55 + i * 38; // 25% bigger row spacing
           drawPlayerDamageRow(p, rowY, p.damageDealt || 0, maxDamage, totalDamage, i === 0, panelX, panelW);
         });
         
-        currentY += totalDmgPanelH + 8;
+        currentY += totalDmgPanelH + 10;
 
         // ===== CURRENT WAVE DPS PANEL =====
-        const waveDmgPanelH = 44 + playerCount * 30;
+        const waveDmgPanelH = 55 + playerCount * 38; // 25% bigger
         drawSectionPanel(panelX, currentY, panelW, waveDmgPanelH, "rgba(122,224,255,0.4)", "🌊 WAVE " + wave + " DAMAGE", "#7ae0ff");
         
         // Calculate totals for wave
@@ -1722,12 +1722,12 @@
         const maxWaveDamage = Math.max(...lastSnap.players.map(p => p.waveDamage || 0), 1);
         
         // Wave damage number (centered, big)
-        ctx.font = "bold 14px 'Orbitron', sans-serif";
+        ctx.font = "bold 16px 'Orbitron', sans-serif";
         ctx.textAlign = "center";
         ctx.fillStyle = "#7ae0ff";
         ctx.shadowColor = "#7ae0ff";
-        ctx.shadowBlur = 10;
-        ctx.fillText(Math.round(totalWaveDamage).toLocaleString(), panelX + panelW / 2, currentY + 38);
+        ctx.shadowBlur = 12;
+        ctx.fillText(Math.round(totalWaveDamage).toLocaleString(), panelX + panelW / 2, currentY + 45);
         ctx.shadowBlur = 0;
         
         // Sort and draw players by wave damage
@@ -1736,7 +1736,7 @@
           .sort((a, b) => (b.waveDamage || 0) - (a.waveDamage || 0));
         
         sortedByWave.forEach((p, i) => {
-          const rowY = currentY + 48 + i * 30;
+          const rowY = currentY + 55 + i * 38; // 25% bigger row spacing
           drawPlayerDamageRow(p, rowY, p.waveDamage || 0, maxWaveDamage, totalWaveDamage, i === 0, panelX, panelW);
         });
         
@@ -1766,7 +1766,7 @@
         ctx.font = "bold 14px 'Courier New', monospace";
         ctx.textAlign = "center";
         ctx.fillStyle = `rgba(255,100,100,${alpha})`;
-        ctx.fillText(`⚠️ ${attackDef?.icon || "?"} INCOMING FROM ${a.from.toUpperCase()}!`, canvas.width / 2, 70 + i * 20);
+        ctx.fillText(`⚠️ ${attackDef?.icon || "?"} INCOMING FROM ${a.from.toUpperCase()}!`, canvas.width / 2, 245 + i * 20);
       }
 
       // Build menu
@@ -1938,21 +1938,17 @@
 
       // Upgrade cards at top of screen (during gameplay)
       if (phase === "playing" && upgradeOptions.length > 0 && !upgradePicked) {
-        // Semi-transparent header bar at top
-        const headerH = 200;
-        const headerGrad = ctx.createLinearGradient(0, 0, 0, headerH);
-        headerGrad.addColorStop(0, "rgba(10,10,30,0.95)");
-        headerGrad.addColorStop(0.8, "rgba(10,10,30,0.85)");
-        headerGrad.addColorStop(1, "rgba(10,10,30,0)");
-        ctx.fillStyle = headerGrad;
-        ctx.fillRect(0, 0, canvas.width, headerH);
+        // No blocking background - just floating cards with nice borders
         
         // Wave indicator and queue
-        ctx.font = "bold 11px 'Courier New', monospace";
+        ctx.font = "bold 12px 'Courier New', monospace";
         ctx.textAlign = "center";
-        ctx.fillStyle = "rgba(255,255,255,0.6)";
+        ctx.fillStyle = "#fff";
+        ctx.shadowColor = "#000";
+        ctx.shadowBlur = 4;
         const queueText = upgradeQueueSize > 1 ? ` (+${upgradeQueueSize - 1} pending)` : "";
-        ctx.fillText(`WAVE ${upgradeWaveNum} UPGRADE${queueText}`, canvas.width / 2, 18);
+        ctx.fillText(`WAVE ${upgradeWaveNum} UPGRADE${queueText}`, canvas.width / 2, 68);
+        ctx.shadowBlur = 0;
         
         // Cards - compact horizontal design at top
         const cardW = 140;
@@ -1960,7 +1956,7 @@
         const gap = 15;
         const totalW = upgradeOptions.length * cardW + (upgradeOptions.length - 1) * gap;
         const startX = canvas.width / 2 - totalW / 2;
-        const cardY = 28;
+        const cardY = 78;
         
         hoveredUpgrade = -1;
         
@@ -1972,26 +1968,26 @@
           
           const rarityColor = opt.rarityColor || "#fff";
           
-          // Card background
+          // Card background - solid with glow border
           ctx.save();
-          if (isHovered) {
-            ctx.shadowColor = rarityColor;
-            ctx.shadowBlur = 20;
-          }
           
-          // Main card body
+          // Outer glow
+          ctx.shadowColor = rarityColor;
+          ctx.shadowBlur = isHovered ? 25 : 15;
+          
+          // Main card body - more opaque
           const cardGrad = ctx.createLinearGradient(cardX, cardY, cardX, cardY + cardH);
-          cardGrad.addColorStop(0, isHovered ? "rgba(50,50,70,0.98)" : "rgba(25,25,40,0.95)");
-          cardGrad.addColorStop(1, isHovered ? "rgba(40,40,60,0.98)" : "rgba(20,20,30,0.95)");
+          cardGrad.addColorStop(0, isHovered ? "rgba(60,60,80,0.98)" : "rgba(20,20,35,0.97)");
+          cardGrad.addColorStop(1, isHovered ? "rgba(45,45,65,0.98)" : "rgba(15,15,28,0.97)");
           ctx.fillStyle = cardGrad;
           
           ctx.beginPath();
-          ctx.roundRect(cardX, cardY, cardW, cardH, 6);
+          ctx.roundRect(cardX, cardY, cardW, cardH, 8);
           ctx.fill();
           
-          // Border with rarity color
-          ctx.strokeStyle = isHovered ? rarityColor : hexToRgba(rarityColor, 0.5);
-          ctx.lineWidth = isHovered ? 2 : 1;
+          // Strong border with rarity color
+          ctx.strokeStyle = rarityColor;
+          ctx.lineWidth = isHovered ? 3 : 2;
           ctx.stroke();
           ctx.restore();
           
@@ -2077,7 +2073,8 @@
         ctx.textAlign = "left";
       }
 
-      // Attack hit feedback
+      // Attack hit feedback (show below cards if cards are visible)
+      const feedbackBaseY = (phase === "playing" && upgradeOptions.length > 0 && !upgradePicked) ? 250 : 60;
       if (attackHitFeedback && Date.now() - attackHitFeedback.time < 2000) {
         const fadeAlpha = 1 - (Date.now() - attackHitFeedback.time) / 2000;
         ctx.save();
@@ -2085,7 +2082,7 @@
         ctx.font = "bold 16px 'Courier New', monospace";
         ctx.textAlign = "center";
         ctx.fillStyle = "#0f0";
-        ctx.fillText(`+${attackHitFeedback.gold}g HIT ${attackHitFeedback.target}!`, canvas.width / 2, 60);
+        ctx.fillText(`+${attackHitFeedback.gold}g HIT ${attackHitFeedback.target}!`, canvas.width / 2, feedbackBaseY);
         ctx.restore();
         ctx.textAlign = "left";
       }
@@ -2098,7 +2095,7 @@
         ctx.font = "bold 14px 'Courier New', monospace";
         ctx.textAlign = "center";
         ctx.fillStyle = "#ffd700";
-        ctx.fillText(`+${interestFeedback.amount}g INTEREST (10%)`, canvas.width / 2, 80);
+        ctx.fillText(`+${interestFeedback.amount}g INTEREST (10%)`, canvas.width / 2, feedbackBaseY + 20);
         ctx.restore();
         ctx.textAlign = "left";
       }
@@ -2111,7 +2108,7 @@
         ctx.font = "bold 14px 'Courier New', monospace";
         ctx.textAlign = "center";
         ctx.fillStyle = "#0ff";
-        ctx.fillText(`+${refundFeedback.gold}g REFUND - ${refundFeedback.reason}`, canvas.width / 2, 100);
+        ctx.fillText(`+${refundFeedback.gold}g REFUND - ${refundFeedback.reason}`, canvas.width / 2, feedbackBaseY + 40);
         ctx.restore();
         ctx.textAlign = "left";
       }
