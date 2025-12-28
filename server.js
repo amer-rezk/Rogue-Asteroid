@@ -45,9 +45,9 @@ const ATTACK_TYPES = {
   swarm: { 
     name: "Swarm", 
     cost: 15, 
-    count: 5, // Increased from 3
+    count: 6, // Increased from 3
     baseHp: 0.3,
-    hpScale: 1.1, // Scales 10% faster than wave
+    hpScale: 1, // Scales 10% faster than wave
     size: "small", 
     speed: 1.3,
     desc: "5 fast weak asteroids",
@@ -56,7 +56,7 @@ const ATTACK_TYPES = {
   },
   bruiser: { 
     name: "Bruiser", 
-    cost: 45, 
+    cost: 35,
     count: 1, 
     baseHp: 7.5,
     hpScale: 1.5, // Scales 50% faster than wave - very tanky
@@ -84,11 +84,11 @@ const ATTACK_TYPES = {
     name: "Splitter", 
     cost: 50, 
     count: 1, 
-    baseHp: 4,
+    baseHp: 5,
     hpScale: 1.3, // Scales 30% faster
     size: "large", 
     speed: 0.75,
-    splits: 4, // Now splits into 4
+    splits: 15, // Now splits into 4
     desc: "Splits into 4 on death",
     color: "#00ffff",
     icon: "💎"
