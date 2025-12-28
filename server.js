@@ -454,9 +454,15 @@ function spawnWave() {
   const totalCount = (soloMode || playerCount === 1) ? scaledTotal : Math.floor(scaledTotal * 0.5);
   const asteroidsPerPlayer = Math.max(1, Math.floor(totalCount / playerCount));
   
-  // Spawn equal asteroids for each player
+  // Spawn equal asteroids for each ALIVE player only
   for (let playerIdx = 0; playerIdx < playerCount; playerIdx++) {
     const targetSlot = playerIdx;
+    
+    // Skip dead players - no asteroids spawn in their field
+    const playerId = lockedSlots[playerIdx];
+    const player = players.get(playerId);
+    if (!player || player.hp <= 0) continue;
+    
     const { x0, x1 } = segmentBounds(targetSlot);
     
     for (let i = 0; i < asteroidsPerPlayer; i++) {
@@ -494,6 +500,22 @@ function spawnWave() {
 
   // Queue player-purchased attack asteroids (spawn slightly after natural ones)
   for (const [targetSlot, attacks] of attackQueue.entries()) {
+    // Skip attacks on dead players - refund the sender
+    const targetPlayerId = lockedSlots[targetSlot];
+    const targetPlayer = players.get(targetPlayerId);
+    if (!targetPlayer || targetPlayer.hp <= 0) {
+      // Refund attacks since target is dead
+      for (const attack of attacks) {
+        const sender = players.get(attack.senderId);
+        const attackDef = ATTACK_TYPES[attack.type];
+        if (sender && attackDef) {
+          sender.gold += attackDef.cost;
+          safeSend(sender.ws, { t: "attackRefund", gold: attackDef.cost, reason: "Target eliminated" });
+        }
+      }
+      continue;
+    }
+    
     const { x0, x1 } = segmentBounds(targetSlot);
     
     for (const attack of attacks) {
@@ -550,7 +572,7 @@ function startGame(solo = false) {
     if (p) {
       p.upgrades = {};
       p.towers = [null, null, null, null];
-      p.gold = solo ? 0 : 0; // More starting gold for solo
+      p.gold = solo ? 50 : 30; // More starting gold for solo
       p.cooldown = 0;
       p.targetX = null;
       p.targetY = null;
@@ -571,6 +593,18 @@ function startGame(solo = false) {
 }
 
 function queueUpgradesAndNextWave() {
+  // Give 10% interest on gold to alive players
+  for (const id of lockedSlots) {
+    const p = players.get(id);
+    if (!p || p.hp <= 0) continue;
+    
+    const interest = Math.floor(p.gold * 0.10);
+    if (interest > 0) {
+      p.gold += interest;
+      safeSend(p.ws, { t: "interest", amount: interest });
+    }
+  }
+  
   // Queue upgrade options for each alive player (they can pick at their leisure)
   for (const id of lockedSlots) {
     const p = players.get(id);
