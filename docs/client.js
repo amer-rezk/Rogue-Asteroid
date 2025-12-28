@@ -93,6 +93,8 @@
   let upgradeQueueSize = 0; // How many upgrades are pending
   let upgradeWaveNum = 0; // Which wave this upgrade is from
   let attackHitFeedback = null; // Feedback when attack hits opponent
+  let interestFeedback = null; // Feedback for wave interest
+  let refundFeedback = null; // Feedback for attack refund
   let gameOverData = null;
 
   // Chat system
@@ -328,6 +330,16 @@
       case "attackHit":
         // Show gold earned from attack hitting opponent
         attackHitFeedback = { gold: msg.gold, target: msg.target, time: Date.now() };
+        break;
+
+      case "interest":
+        // Show interest earned at wave end
+        interestFeedback = { amount: msg.amount, time: Date.now() };
+        break;
+
+      case "attackRefund":
+        // Show refund when attack target is dead
+        refundFeedback = { gold: msg.gold, reason: msg.reason, time: Date.now() };
         break;
 
       case "state":
@@ -1385,6 +1397,13 @@
         ctx.font = `bold ${8 * sx}px 'Courier New', monospace`;
         ctx.fillStyle = "#fff";
         ctx.fillText(`${p.hp}/${p.maxHp}`, cx, hpBarY + hpBarH / 2 + 1);
+        
+        // Gold display under HP bar
+        if (!isDead) {
+          ctx.font = `bold ${10 * sx}px 'Courier New', monospace`;
+          ctx.fillStyle = "#ffd700";
+          ctx.fillText(`${p.gold} 🟡`, cx, hpBarY + hpBarH + 12);
+        }
       }
       ctx.restore();
 
@@ -2049,6 +2068,32 @@
         ctx.textAlign = "center";
         ctx.fillStyle = "#0f0";
         ctx.fillText(`+${attackHitFeedback.gold}g HIT ${attackHitFeedback.target}!`, canvas.width / 2, 60);
+        ctx.restore();
+        ctx.textAlign = "left";
+      }
+
+      // Interest feedback
+      if (interestFeedback && Date.now() - interestFeedback.time < 2000) {
+        const fadeAlpha = 1 - (Date.now() - interestFeedback.time) / 2000;
+        ctx.save();
+        ctx.globalAlpha = fadeAlpha;
+        ctx.font = "bold 14px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#ffd700";
+        ctx.fillText(`+${interestFeedback.amount}g INTEREST (10%)`, canvas.width / 2, 80);
+        ctx.restore();
+        ctx.textAlign = "left";
+      }
+
+      // Refund feedback
+      if (refundFeedback && Date.now() - refundFeedback.time < 2500) {
+        const fadeAlpha = 1 - (Date.now() - refundFeedback.time) / 2500;
+        ctx.save();
+        ctx.globalAlpha = fadeAlpha;
+        ctx.font = "bold 14px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#0ff";
+        ctx.fillText(`+${refundFeedback.gold}g REFUND - ${refundFeedback.reason}`, canvas.width / 2, 100);
         ctx.restore();
         ctx.textAlign = "left";
       }
