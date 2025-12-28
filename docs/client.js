@@ -158,6 +158,12 @@
   let screenShake = 0;
   let time = 0;
 
+  // CLIENT-SIDE RENDERING (offloaded from server)
+  let clientParticles = [];      // Particles generated from events
+  let clientDamageNumbers = [];  // Damage numbers generated from events
+  let asteroidCache = new Map(); // Cache: id -> {vertices, rotSpeed, rotation, color}
+  let lastUpdateTime = Date.now();
+
   // ===== Utilities =====
   function hexToRgba(hex, alpha) {
     let c = hex.replace("#", "");
@@ -224,6 +230,94 @@
     }
   }
   initStars();
+
+  // ===== CLIENT-SIDE VISUAL EFFECTS (offloaded from server) =====
+  function createClientParticle(x, y, color, count = 8, speedMult = 1) {
+    const particleCount = lowPerformanceMode ? Math.ceil(count / 3) : count;
+    for (let i = 0; i < particleCount; i++) {
+      const angle = (i / particleCount) * Math.PI * 2 + Math.random() * 0.5;
+      const speed = (60 + Math.random() * 60) * speedMult;
+      clientParticles.push({
+        x, y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 0.3 + Math.random() * 0.2,
+        maxLife: 0.5,
+        color: color || "#f80",
+        size: 2 + Math.random() * 2,
+      });
+    }
+  }
+
+  function createClientDamageNumber(x, y, amount, isCrit) {
+    clientDamageNumbers.push({
+      x, y,
+      amount: Math.round(amount * 10) / 10,
+      isCrit,
+      life: 1.0,
+      vy: -60
+    });
+  }
+
+  function updateClientEffects(dt) {
+    // Update particles
+    clientParticles = clientParticles.filter(p => {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.life -= dt;
+      p.vx *= 0.95;
+      p.vy *= 0.95;
+      return p.life > 0;
+    });
+    
+    // Update damage numbers
+    clientDamageNumbers = clientDamageNumbers.filter(d => {
+      d.y += d.vy * dt;
+      d.life -= dt * 1.5;
+      return d.life > 0;
+    });
+    
+    // Update cached asteroid rotations
+    for (const [id, data] of asteroidCache) {
+      data.rotation += data.rotSpeed * dt;
+    }
+  }
+
+  function processServerEvents(events) {
+    if (!events || !Array.isArray(events)) return;
+    
+    for (const ev of events) {
+      switch (ev.t) {
+        case "spawn":
+          // Cache asteroid visual data
+          asteroidCache.set(ev.id, {
+            vertices: ev.vertices,
+            rotSpeed: ev.rotSpeed,
+            rotation: Math.random() * Math.PI * 2,
+            color: ev.color || "#fa0"
+          });
+          break;
+          
+        case "explosion":
+          createClientParticle(ev.x, ev.y, ev.color, ev.radius > 30 ? 12 : 8, ev.radius / 25);
+          break;
+          
+        case "damage":
+          createClientDamageNumber(ev.x, ev.y, ev.amount, ev.isCrit);
+          break;
+      }
+    }
+  }
+
+  function cleanupAsteroidCache(currentMissileIds) {
+    // Remove cached data for asteroids that no longer exist
+    const currentIds = new Set(currentMissileIds);
+    for (const id of asteroidCache.keys()) {
+      if (!currentIds.has(id)) {
+        asteroidCache.delete(id);
+      }
+    }
+  }
 
   // ===== Networking =====
   function connect() {
@@ -361,6 +455,10 @@
         upgradePicked = false;
         buildMenuOpen = null;
         incomingAttacks = [];
+        // Clear client-side visual caches
+        clientParticles = [];
+        clientDamageNumbers = [];
+        asteroidCache.clear();
         showGame();
         break;
 
@@ -370,6 +468,8 @@
         buildMenuOpen = null;
         incomingAttacks = [];
         screenShake = 10;
+        // Clear particles between waves for cleaner visuals
+        clientParticles = [];
         break;
 
       case "upgrade":
@@ -412,6 +512,43 @@
         break;
 
       case "state":
+        // Process server events first (spawns, explosions, damage)
+        if (msg.events) {
+          processServerEvents(msg.events);
+        }
+        
+        // Augment missiles with cached vertices/rotation
+        if (msg.missiles) {
+          for (const m of msg.missiles) {
+            const cached = asteroidCache.get(m.id);
+            if (cached) {
+              m.vertices = cached.vertices;
+              m.rotation = cached.rotation;
+            }
+          }
+          // Clean up cache for destroyed asteroids
+          cleanupAsteroidCache(msg.missiles.map(m => m.id));
+        }
+        
+        // Augment bullets with vx/vy from angle (for trail rendering)
+        if (msg.bullets) {
+          for (const b of msg.bullets) {
+            if (b.angle !== undefined) {
+              const speed = 175; // BULLET_SPEED
+              b.vx = Math.cos(b.angle) * speed;
+              b.vy = Math.sin(b.angle) * speed;
+            }
+          }
+        }
+        
+        // Use client-side particles/damage numbers if server didn't send them
+        if (!msg.particles || msg.particles.length === 0) {
+          msg.particles = clientParticles;
+        }
+        if (!msg.damageNumbers || msg.damageNumbers.length === 0) {
+          msg.damageNumbers = clientDamageNumbers;
+        }
+        
         lastSnap = msg;
         phase = msg.phase;
         wave = msg.wave;
@@ -1056,6 +1193,9 @@
       const dt = 1 / 60;
       time += dt;
       screenShake *= 0.92;
+      
+      // Update client-side visual effects (particles, damage numbers, asteroid rotations)
+      updateClientEffects(dt);
 
       ctx.fillStyle = "#050510";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
