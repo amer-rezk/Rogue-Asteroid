@@ -1203,12 +1203,12 @@ function tick() {
       }
     }
 
-    // Bullet collision
+  // Bullet collision
     for (const b of bullets) {
       // All bullets now have perfect homing - but ONLY within owner's segment
       if (b.magnet) {
         let nearest = null;
-        let nearestDist = 400; // Detection range
+        let nearestDist = 300; // REDUCED from 400 to 300 (75%)
         const { x0: ownerX0, x1: ownerX1 } = segmentBounds(b.ownerSlot);
         
         for (const m of missiles) {
