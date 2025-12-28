@@ -46,8 +46,8 @@ const ATTACK_TYPES = {
     name: "Swarm", 
     cost: 15, 
     count: 6, // Increased from 3
-    baseHp: 0.3,
-    hpScale: 1, // Scales 10% faster than wave
+    baseHp: 0.1,
+    hpScale: 1, // Scales normally
     size: "small", 
     speed: 1.3,
     desc: "5 fast weak asteroids",
