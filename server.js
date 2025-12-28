@@ -768,14 +768,30 @@ function endGame(winnerId) {
 
 // ===== Simulation =====
 function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, overrideProps = null) {
-  let dmg, speed, isCrit, explosive, lifespan, bulletType;
+  let dmg, speed, isCrit, explosive, lifespan, bulletType, ricochet, pierce, chain;
 
   if (overrideProps) {
     dmg = overrideProps.damage;
-    speed = BULLET_SPEED * (overrideProps.bulletType === "sniper" ? 1.5 : 1);
-    isCrit = false;
-    explosive = overrideProps.explosive || 0;
-    lifespan = BULLET_LIFESPAN;
+    
+    // Check if tower inherited player upgrades
+    if (overrideProps.inheritedUpgrades) {
+      speed = BULLET_SPEED * (overrideProps.bulletSpeedMult ?? 1) * (overrideProps.bulletType === "sniper" ? 1.5 : 1);
+      isCrit = Math.random() < (overrideProps.critChance ?? 0);
+      explosive = overrideProps.explosive || 0;
+      lifespan = BULLET_LIFESPAN + (overrideProps.lifespanAdd ?? 0);
+      ricochet = overrideProps.ricochet || 0;
+      pierce = overrideProps.pierce || 0;
+      chain = !!overrideProps.chain;
+    } else {
+      speed = BULLET_SPEED * (overrideProps.bulletType === "sniper" ? 1.5 : 1);
+      isCrit = false;
+      explosive = overrideProps.explosive || 0;
+      lifespan = BULLET_LIFESPAN;
+      ricochet = 0;
+      pierce = overrideProps.bulletType === "sniper" ? 1 : 0;
+      chain = false;
+    }
+    
     bulletType = overrideProps.bulletType || "tower";
 
     if (overrideProps.level) {
@@ -790,6 +806,9 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     explosive = owner.upgrades?.explosive ?? 0;
     lifespan = BULLET_LIFESPAN + (owner.upgrades?.lifespanAdd ?? 0);
     bulletType = "main";
+    ricochet = owner.upgrades?.ricochet || 0;
+    pierce = owner.upgrades?.pierce || 0;
+    chain = !!owner.upgrades?.chain;
   }
 
   const finalDmg = isCrit ? dmg * 3 : dmg;
@@ -824,9 +843,9 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     isTowerBullet: !isPlayerBullet,
     bulletType: bulletType,
     magnet: true, // All bullets are now homing
-    chain: isPlayerBullet && !!owner.upgrades?.chain,
-    ricochet: isPlayerBullet ? (owner.upgrades?.ricochet || 0) : 0,
-    pierce: isPlayerBullet ? (owner.upgrades?.pierce || 0) : (bulletType === "sniper" ? 1 : 0),
+    chain: chain,
+    ricochet: ricochet,
+    pierce: pierce,
     hitList: [],
   });
 }
@@ -1012,8 +1031,28 @@ function tick() {
             // Fire if cooldown ready
             if (tower.cd <= 0) {
               const levelBonus = 1 + (tower.level - 1) * 0.15;
-              tower.cd = stats.cooldown / levelBonus;
-              fireBullet(p, towerPos.x, towerPos.y, aim.x, aim.y, 0, { ...stats, level: tower.level });
+              // Apply player fire rate to tower cooldown
+              const fireRateMult = p.upgrades?.fireRateMult ?? 1;
+              tower.cd = stats.cooldown / levelBonus / fireRateMult;
+              
+              // Build tower props that inherit player upgrades (except multishot)
+              const u = p.upgrades || {};
+              const towerProps = {
+                ...stats,
+                level: tower.level,
+                // Inherit player upgrades
+                damage: stats.damage + (u.damageAdd ?? 0),
+                bulletSpeedMult: u.bulletSpeedMult ?? 1,
+                critChance: u.critChance ?? 0,
+                explosive: (stats.explosive || 0) + (u.explosive ?? 0),
+                lifespanAdd: u.lifespanAdd ?? 0,
+                ricochet: u.ricochet ?? 0,
+                pierce: (stats.bulletType === "sniper" ? 1 : 0) + (u.pierce ?? 0),
+                chain: !!u.chain,
+                // Mark as tower with player upgrades
+                inheritedUpgrades: true,
+              };
+              fireBullet(p, towerPos.x, towerPos.y, aim.x, aim.y, 0, towerProps);
             }
           } else {
             // Default angle pointing up when no target
