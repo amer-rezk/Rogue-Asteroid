@@ -249,6 +249,40 @@ function getAliveSlots() {
   }).filter(slot => slot >= 0);
 }
 
+// Redistribute asteroids from a dead player's lane to living players
+function redistributeAsteroids(deadSlot) {
+  const aliveSlots = getAliveSlots();
+  if (aliveSlots.length === 0) return; // No one to redistribute to
+  
+  // Redistribute existing missiles in the dead player's lane
+  for (const m of missiles) {
+    if (m.dead) continue;
+    if (m.targetSlot === deadSlot) {
+      // Pick a random alive player
+      const newSlot = aliveSlots[Math.floor(Math.random() * aliveSlots.length)];
+      const { x0, x1 } = segmentBounds(newSlot);
+      
+      // Teleport to random x position in new lane, keep same y
+      m.targetSlot = newSlot;
+      m.x = x0 + Math.random() * (x1 - x0);
+      
+      // Create a visual effect at new position
+      createExplosion(m.x, m.y, 20, "#ff00ff");
+    }
+  }
+  
+  // Redistribute queued spawns
+  for (const queued of spawnQueue) {
+    if (queued.targetSlot === deadSlot) {
+      const newSlot = aliveSlots[Math.floor(Math.random() * aliveSlots.length)];
+      const { x0, x1 } = segmentBounds(newSlot);
+      
+      queued.targetSlot = newSlot;
+      queued.x = x0 + Math.random() * (x1 - x0);
+    }
+  }
+}
+
 function turretPositions(slot) {
   const { x0 } = segmentBounds(slot);
   const cx = x0 + SEGMENT_W / 2;
@@ -1031,24 +1065,24 @@ function tick() {
             // Fire if cooldown ready
             if (tower.cd <= 0) {
               const levelBonus = 1 + (tower.level - 1) * 0.15;
-              // Apply player fire rate to tower cooldown
-              const fireRateMult = p.upgrades?.fireRateMult ?? 1;
-              tower.cd = stats.cooldown / levelBonus / fireRateMult;
+              // Apply player fire rate to tower cooldown (at 50% effectiveness)
+              const fireRateBonus = ((p.upgrades?.fireRateMult ?? 1) - 1) * 0.5 + 1; // 50% of the bonus
+              tower.cd = stats.cooldown / levelBonus / fireRateBonus;
               
-              // Build tower props that inherit player upgrades (except multishot)
+              // Build tower props that inherit player upgrades at 50% effectiveness (except multishot)
               const u = p.upgrades || {};
               const towerProps = {
                 ...stats,
                 level: tower.level,
-                // Inherit player upgrades
-                damage: stats.damage + (u.damageAdd ?? 0),
-                bulletSpeedMult: u.bulletSpeedMult ?? 1,
-                critChance: u.critChance ?? 0,
-                explosive: (stats.explosive || 0) + (u.explosive ?? 0),
-                lifespanAdd: u.lifespanAdd ?? 0,
-                ricochet: u.ricochet ?? 0,
-                pierce: (stats.bulletType === "sniper" ? 1 : 0) + (u.pierce ?? 0),
-                chain: !!u.chain,
+                // Inherit player upgrades at 50% effectiveness
+                damage: stats.damage + (u.damageAdd ?? 0) * 0.5,
+                bulletSpeedMult: 1 + ((u.bulletSpeedMult ?? 1) - 1) * 0.5, // 50% of the bonus
+                critChance: (u.critChance ?? 0) * 0.5,
+                explosive: (stats.explosive || 0) + Math.floor((u.explosive ?? 0) * 0.5),
+                lifespanAdd: (u.lifespanAdd ?? 0) * 0.5,
+                ricochet: Math.floor((u.ricochet ?? 0) * 0.5),
+                pierce: (stats.bulletType === "sniper" ? 1 : 0) + Math.floor((u.pierce ?? 0) * 0.5),
+                chain: !!u.chain, // Chain is binary, keep it as-is
                 // Mark as tower with player upgrades
                 inheritedUpgrades: true,
               };
@@ -1131,8 +1165,14 @@ function tick() {
               const p = players.get(id);
               if (p && p.slot === targetSlot) {
                 const damage = m.explosive ? 2 : 1;
+                const wasAlive = p.hp > 0;
                 p.hp = Math.max(0, p.hp - damage);
                 createExplosion(m.x, GROUND_Y - 5, m.explosive ? 60 : 40, m.explosive ? "#ff00ff" : "#f44");
+                
+                // Check if player just died - redistribute their asteroids
+                if (wasAlive && p.hp <= 0) {
+                  redistributeAsteroids(targetSlot);
+                }
                 
                 // Reward sender with gold for successful attack hit
                 if (m.senderId && m.attackType) {
