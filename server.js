@@ -167,6 +167,12 @@ function broadcastAll(obj) {
   for (const p of players.values()) safeSend(p.ws, obj);
   for (const ws of spectators) safeSend(ws, obj);
 }
+function broadcastLobby() {
+  // Send lobby state to both players and spectators
+  const snapshot = { t: "lobby", ...lobbySnapshot() };
+  for (const p of players.values()) safeSend(p.ws, snapshot);
+  for (const ws of spectators) safeSend(ws, snapshot);
+}
 
 // Spectator tracking
 const spectators = new Set();
@@ -570,6 +576,10 @@ function startGame(solo = false) {
 
   spawnWave();
   broadcast({ t: "started", world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, wave, solo: soloMode });
+  // Also notify spectators that game started
+  for (const ws of spectators) {
+    safeSend(ws, { t: "started", world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, wave, solo: soloMode, isSpectator: true });
+  }
 }
 
 function queueUpgradesAndNextWave() {
@@ -1426,12 +1436,67 @@ wss.on("connection", (ws) => {
 
     if (msg.t === "setName") {
       p.name = (msg.name || "").toString().slice(0, 16).trim() || p.name;
-      broadcast({ t: "lobby", ...lobbySnapshot() });
+      broadcastLobby();
       return;
     }
     if (msg.t === "ready" && phase === "lobby") {
       p.ready = !p.ready;
-      broadcast({ t: "lobby", ...lobbySnapshot() });
+      broadcastLobby();
+      return;
+    }
+    if (msg.t === "becomeSpectator" && phase === "lobby") {
+      // Player wants to become a spectator, freeing their slot
+      const playerWs = p.ws;
+      players.delete(id);
+      
+      // Reassign slots for remaining players
+      const remaining = Array.from(players.values()).sort((a, b) => a.slot - b.slot);
+      remaining.forEach((pl, i) => { pl.slot = i; });
+      
+      // Update host if needed
+      if (hostId === id) {
+        hostId = players.size > 0 ? Array.from(players.keys())[0] : null;
+      }
+      
+      recomputeWorld();
+      
+      // Add to spectators
+      spectators.add(playerWs);
+      
+      // Notify the new spectator
+      safeSend(playerWs, { 
+        t: "becameSpectator",
+        spectatorCount: spectators.size
+      });
+      
+      // Set up spectator disconnect handler
+      playerWs.removeAllListeners("message");
+      playerWs.on("message", (data) => {
+        // Spectators in lobby can only chat
+        let msg;
+        try { msg = JSON.parse(data.toString()); } catch { return; }
+        if (msg.t === "chat" && msg.text) {
+          const chatMsg = {
+            id: uid(),
+            from: "👁 Spectator",
+            text: msg.text.toString().slice(0, 200),
+            timestamp: Date.now()
+          };
+          chatHistory.push(chatMsg);
+          if (chatHistory.length > 50) chatHistory.shift();
+          broadcast({ t: "chatMsg", ...chatMsg });
+          for (const ws of spectators) safeSend(ws, { t: "chatMsg", ...chatMsg });
+        }
+      });
+      
+      playerWs.on("close", () => {
+        spectators.delete(playerWs);
+        broadcastAll({ t: "spectatorUpdate", count: spectators.size });
+      });
+      
+      // Update lobby for everyone (including spectators)
+      broadcastLobby();
+      broadcastAll({ t: "spectatorUpdate", count: spectators.size });
       return;
     }
     if (msg.t === "start") {

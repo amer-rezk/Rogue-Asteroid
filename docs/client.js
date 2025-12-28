@@ -555,6 +555,16 @@
       case "spectatorUpdate":
         spectatorCount = msg.count || 0;
         break;
+      
+      case "becameSpectator":
+        // Successfully became a spectator from lobby
+        isSpectator = true;
+        spectatorCount = msg.spectatorCount || 0;
+        myId = null; // No longer a player
+        mySlot = -1;
+        // Stay in lobby view but as spectator
+        updateLobbyUI();
+        break;
 
       case "kicked":
         if (statusText) {
@@ -596,6 +606,10 @@
         upgradePicked = false;
         buildMenuOpen = null;
         incomingAttacks = [];
+        // If this is a spectator watching from lobby, mark as spectator
+        if (msg.isSpectator) {
+          isSpectator = true;
+        }
         // Clear client-side visual caches
         clientParticles = [];
         clientDamageNumbers = [];
@@ -853,9 +867,57 @@
       `;
       playersEl.appendChild(div);
     }
+    
+    // Show spectator count in lobby
+    let spectatorInfo = document.getElementById("lobbySpectatorInfo");
+    if (!spectatorInfo) {
+      spectatorInfo = document.createElement("div");
+      spectatorInfo.id = "lobbySpectatorInfo";
+      spectatorInfo.style.cssText = "text-align: center; color: #888; font-size: 12px; margin-top: 10px;";
+      playersEl.parentNode.insertBefore(spectatorInfo, playersEl.nextSibling);
+    }
+    if (spectatorCount > 0) {
+      spectatorInfo.textContent = `👁 ${spectatorCount} spectator${spectatorCount > 1 ? 's' : ''} watching`;
+      spectatorInfo.style.display = "block";
+    } else {
+      spectatorInfo.style.display = "none";
+    }
+    
+    // If we're a spectator, show spectator UI
+    if (isSpectator) {
+      readyBtn.style.display = "none";
+      launchBtn.style.display = "none";
+      soloBtn.style.display = "none";
+      
+      // Show spectator status
+      let spectatorStatus = document.getElementById("lobbySpectatorStatus");
+      if (!spectatorStatus) {
+        spectatorStatus = document.createElement("div");
+        spectatorStatus.id = "lobbySpectatorStatus";
+        spectatorStatus.style.cssText = "text-align: center; padding: 15px; background: rgba(255,100,100,0.2); border: 1px solid #f66; border-radius: 8px; margin: 15px 0;";
+        spectatorStatus.innerHTML = `
+          <div style="font-size: 18px; margin-bottom: 5px;">👁 SPECTATOR MODE</div>
+          <div style="font-size: 12px; color: #aaa;">Watching lobby - game will start when players are ready</div>
+        `;
+        readyBtn.parentNode.insertBefore(spectatorStatus, readyBtn);
+      }
+      spectatorStatus.style.display = "block";
+      
+      // Hide become spectator button
+      const becomeSpecBtn = document.getElementById("becomeSpectatorBtn");
+      if (becomeSpecBtn) becomeSpecBtn.style.display = "none";
+      
+      return;
+    }
+    
+    // Normal player UI
+    let spectatorStatus = document.getElementById("lobbySpectatorStatus");
+    if (spectatorStatus) spectatorStatus.style.display = "none";
+    
     const me = lobbyPlayers.find(p => p.id === myId);
     readyBtn.textContent = me?.ready ? "✓ READY" : "READY UP";
     readyBtn.className = "btn" + (me?.ready ? " ready" : "");
+    readyBtn.style.display = "block";
     
     // Launch button: show if ready, enable force start if some players ready
     const canForceStart = readyCount >= 1 && !allReady && me?.ready;
@@ -872,6 +934,26 @@
       launchBtn.textContent = "▶ BATTLE";
       launchBtn.className = "btn launch disabled";
     }
+    
+    // Add "Become Spectator" button if not already spectating
+    let becomeSpecBtn = document.getElementById("becomeSpectatorBtn");
+    if (!becomeSpecBtn) {
+      becomeSpecBtn = document.createElement("button");
+      becomeSpecBtn.id = "becomeSpectatorBtn";
+      becomeSpecBtn.className = "btn";
+      becomeSpecBtn.textContent = "👁 SPECTATE INSTEAD";
+      becomeSpecBtn.style.cssText = "margin-top: 10px; background: linear-gradient(180deg, #444 0%, #222 100%); border: 2px solid #666; font-size: 12px; padding: 8px 16px;";
+      becomeSpecBtn.onclick = () => {
+        if (confirm("Leave player slot and become a spectator?")) {
+          send({ t: "becomeSpectator" });
+        }
+      };
+      // Insert after solo button
+      if (soloBtn && soloBtn.parentNode) {
+        soloBtn.parentNode.insertBefore(becomeSpecBtn, soloBtn.nextSibling);
+      }
+    }
+    becomeSpecBtn.style.display = "block";
     
     // Update leaderboard
     updateLeaderboardUI();
