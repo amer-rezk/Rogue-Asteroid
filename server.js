@@ -1,10 +1,5 @@
-// server.js - Rogue Asteroid PvP (OPTIMIZED)
+// server.js - Rogue Asteroid PvP
 // Competitive asteroid defense with attack purchasing
-// 
-// OPTIMIZATIONS:
-// - Broadcast at 10Hz instead of 30Hz (3x less network traffic)
-// - Visual effects sent as lightweight events instead of full particle arrays
-// - Clients generate their own particles based on events
 
 const express = require("express");
 const http = require("http");
@@ -14,27 +9,25 @@ const { WebSocketServer } = require("ws");
 
 // ===== Game constants =====
 const MAX_PLAYERS = 4;
-const TICK_RATE = 30;          // Physics at 30Hz
-const BROADCAST_RATE = 10;     // Network at 10Hz (OPTIMIZED - 3x less traffic)
+const TICK_RATE = 30;
 const DT = 1 / TICK_RATE;
-const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 3 ticks
 
 const WORLD_H = 600;
 const GROUND_Y = 560;
 const SEGMENT_W = 360;
 
-const BASE_HP_PER_PLAYER = 20;
+const BASE_HP_PER_PLAYER = 20; // Increased for PvP
 
 const BULLET_R = 2.5;
-const BULLET_SPEED = 175;
+const BULLET_SPEED = 175; // Slowed to 25% of original (was 700)
 const BULLET_COOLDOWN = 0.72;
-const BULLET_DAMAGE = 1.25;
-const BULLET_LIFESPAN = 3.0;
+const BULLET_DAMAGE = 1.25; // Base damage increased by +1
+const BULLET_LIFESPAN = 3.0; // Increased for slower homing bullets
 
 const ASTEROID_R_MIN = 8;
 const ASTEROID_R_MAX = 16;
 
-const WAVE_BASE_COUNT = 3;
+const WAVE_BASE_COUNT = 3; // Reduced base count since players send attacks
 const WAVE_COUNT_SCALE = 2;
 
 const MAX_AIM_ANGLE = (80 * Math.PI) / 180;
@@ -47,13 +40,72 @@ const TOWER_TYPES = {
 };
 const MAX_TOWER_LEVEL = 5;
 
-// ===== PvP Attack Units =====
+// ===== PvP Attack Units - Purchasable asteroids to send at opponents =====
 const ATTACK_TYPES = {
-  swarm: { name: "Swarm", cost: 25, count: 6, baseHp: 0.1, hpScale: 0.75, size: "small", speed: 1.3, desc: "6 fast weak asteroids", color: "#ffcc00", icon: "🐝" },
-  bruiser: { name: "Bruiser", cost: 35, count: 1, baseHp: 7.5, hpScale: 1.5, size: "large", speed: 0.6, desc: "Very tanky asteroid", color: "#ff4444", icon: "🪨" },
-  bomber: { name: "Bomber", cost: 55, count: 1, baseHp: 3, hpScale: 1.0, size: "medium", speed: 1.0, explosive: true, explosionDamage: 2, desc: "Explodes dealing 2 damage", color: "#ff00ff", icon: "💣" },
-  splitter: { name: "Splitter", cost: 50, count: 1, baseHp: 5, hpScale: 1.3, size: "large", speed: 0.75, splits: 15, desc: "Splits into 15 on death", color: "#00ffff", icon: "💎" },
-  ghost: { name: "Ghost", cost: 40, count: 2, baseHp: 2, hpScale: 1.2, size: "medium", speed: 1.1, phasing: true, desc: "2 phasing asteroids", color: "#8800ff", icon: "👻" }
+  swarm: { 
+    name: "Swarm", 
+    cost: 25, 
+    count: 6,
+    baseHp: 0.1,
+    hpScale: 0.75, // 25% weaker scaling
+    size: "small", 
+    speed: 1.3,
+    desc: "6 fast weak asteroids",
+    color: "#ffcc00",
+    icon: "🐝"
+  },
+  bruiser: { 
+    name: "Bruiser", 
+    cost: 35,
+    count: 1, 
+    baseHp: 7.5,
+    hpScale: 1.5,
+    size: "large", 
+    speed: 0.6,
+    desc: "Very tanky asteroid",
+    color: "#ff4444",
+    icon: "🪨"
+  },
+  bomber: { 
+    name: "Bomber", 
+    cost: 55, 
+    count: 1, 
+    baseHp: 3,
+    hpScale: 1.0,
+    size: "medium", 
+    speed: 1.0,
+    explosive: true,
+    explosionDamage: 2,
+    desc: "Explodes dealing 2 damage",
+    color: "#ff00ff",
+    icon: "💣"
+  },
+  splitter: { 
+    name: "Splitter", 
+    cost: 50, 
+    count: 1, 
+    baseHp: 5,
+    hpScale: 1.3,
+    size: "large", 
+    speed: 0.75,
+    splits: 15,
+    desc: "Splits into 15 on death",
+    color: "#00ffff",
+    icon: "💎"
+  },
+  ghost: {
+    name: "Ghost",
+    cost: 40,
+    count: 2,
+    baseHp: 2,
+    hpScale: 1.2,
+    size: "medium",
+    speed: 1.1,
+    phasing: true,
+    desc: "2 phasing asteroids",
+    color: "#8800ff",
+    icon: "👻"
+  }
 };
 
 // ===== Server state =====
@@ -64,11 +116,12 @@ app.get("/health", (_, res) => res.json({ ok: true }));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 
+// Single room for now - players see when room is full
 const players = new Map();
 
 let hostId = null;
 let phase = "lobby";
-let soloMode = false;
+let soloMode = false; // Track if game is solo vs PvP
 
 let lockedSlots = null;
 let worldW = SEGMENT_W;
@@ -80,27 +133,22 @@ let particles = [];
 let damageNumbers = [];
 
 let upgradePicks = new Map();
-let attackQueue = new Map();
-let pendingUpgrades = new Map();
-let waveClearedTime = 0;
-const WAVE_CLEAR_DELAY = 500;
+let attackQueue = new Map(); // Queued attacks for next wave: Map<targetSlot, attacks[]>
+let pendingUpgrades = new Map(); // Per-player upgrade queue: Map<playerId, upgradeOptions[][]>
+let waveClearedTime = 0; // Timestamp when last asteroid was destroyed
+const WAVE_CLEAR_DELAY = 500; // 0.5 second delay before next wave starts
 
 // Staggered spawn system
-let spawnQueue = [];
-let spawnTimer = 0;
-const SPAWN_INTERVAL = 0.3;
+let spawnQueue = []; // Asteroids waiting to spawn
+let spawnTimer = 0; // Time until next spawn
+const SPAWN_INTERVAL = 0.3; // Seconds between spawns (300ms)
 
-// OPTIMIZED: Event queue for client-side effects
-let eventQueue = [];
-
-// Tick counter for broadcast throttling
-let tickCount = 0;
-
-// Leaderboard
-let leaderboard = [];
+// Leaderboard - persists to file (survives server restarts)
+let leaderboard = []; // { name, score, kills, wave, date }
 const MAX_LEADERBOARD_ENTRIES = 10;
 const LEADERBOARD_FILE = path.join(__dirname, "leaderboard.json");
 
+// Load leaderboard from file
 function loadLeaderboard() {
   try {
     if (fs.existsSync(LEADERBOARD_FILE)) {
@@ -114,6 +162,7 @@ function loadLeaderboard() {
   }
 }
 
+// Save leaderboard to file
 function saveLeaderboard() {
   try {
     fs.writeFileSync(LEADERBOARD_FILE, JSON.stringify(leaderboard, null, 2));
@@ -122,17 +171,18 @@ function saveLeaderboard() {
   }
 }
 
+// Load leaderboard on startup
 loadLeaderboard();
 
-// Chat system
-let chatHistory = [];
+// Chat system - server-wide chat history
+let chatHistory = []; // { id, from, text, timestamp }
 const MAX_CHAT_HISTORY = 50;
 
 function addChatMessage(fromName, text) {
   const msg = {
     id: uid(),
     from: fromName,
-    text: text.slice(0, 200),
+    text: text.slice(0, 200), // Limit message length
     timestamp: Date.now()
   };
   chatHistory.push(msg);
@@ -160,11 +210,6 @@ function broadcast(obj) {
   for (const p of players.values()) safeSend(p.ws, obj);
 }
 
-// OPTIMIZED: Queue an event for client-side visual effects
-function queueEvent(type, data) {
-  eventQueue.push({ t: type, ...data });
-}
-
 function getActivePlayerIds() {
   if (phase === "lobby") return Array.from(players.keys());
   return lockedSlots ? lockedSlots.slice() : Array.from(players.keys());
@@ -187,6 +232,7 @@ function segmentBounds(slot) {
   return { x0, x1 };
 }
 
+// Check if a player slot is alive
 function isSlotAlive(slot) {
   if (!lockedSlots || slot < 0 || slot >= lockedSlots.length) return false;
   const playerId = lockedSlots[slot];
@@ -194,6 +240,7 @@ function isSlotAlive(slot) {
   return player && player.hp > 0;
 }
 
+// Get list of alive player slots
 function getAliveSlots() {
   if (!lockedSlots) return [];
   return lockedSlots.map((id, idx) => {
@@ -202,25 +249,34 @@ function getAliveSlots() {
   }).filter(slot => slot >= 0);
 }
 
+// Redistribute asteroids from a dead player's lane to living players
 function redistributeAsteroids(deadSlot) {
   const aliveSlots = getAliveSlots();
-  if (aliveSlots.length === 0) return;
+  if (aliveSlots.length === 0) return; // No one to redistribute to
   
+  // Redistribute existing missiles in the dead player's lane
   for (const m of missiles) {
     if (m.dead) continue;
     if (m.targetSlot === deadSlot) {
+      // Pick a random alive player
       const newSlot = aliveSlots[Math.floor(Math.random() * aliveSlots.length)];
       const { x0, x1 } = segmentBounds(newSlot);
+      
+      // Teleport to random x position in new lane, keep same y
       m.targetSlot = newSlot;
       m.x = x0 + Math.random() * (x1 - x0);
+      
+      // Create a visual effect at new position
       createExplosion(m.x, m.y, 20, "#ff00ff");
     }
   }
   
+  // Redistribute queued spawns
   for (const queued of spawnQueue) {
     if (queued.targetSlot === deadSlot) {
       const newSlot = aliveSlots[Math.floor(Math.random() * aliveSlots.length)];
       const { x0, x1 } = segmentBounds(newSlot);
+      
       queued.targetSlot = newSlot;
       queued.x = x0 + Math.random() * (x1 - x0);
     }
@@ -276,6 +332,7 @@ const UPGRADE_DEFS = [
   { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "Chain Lightning", stat: "chain", base: 1, type: "bool" },
   { id: "shield", name: "Shield Gen", cat: "defense", icon: "🛡️", desc: "+{val} Shield (one-time)", stat: "shield", base: 1, type: "add" },
   { id: "slow", name: "Grav Field", cat: "defense", icon: "🌀", desc: "Slow Enemies", stat: "slowfield", base: 1, type: "bool" },
+  // PvP specific upgrades
   { id: "income", name: "War Profiteer", cat: "economy", icon: "💰", desc: "+{val}% Gold Gain", stat: "goldMult", base: 0.12, type: "mult" },
 ];
 
@@ -304,7 +361,9 @@ function makeUpgradeOptions(player) {
     let effect = { stat: def.stat, type: def.type };
     
     if (def.type === "multishot") {
+      // Multishot scales with rarity: 1/1/2/3
       val = rarityKey === "legendary" ? 3 : rarityKey === "epic" ? 2 : 1;
+      // Damage penalty: +1 = 15%, +2 = 25%, +3 = 40%
       const penalty = val === 1 ? 15 : val === 2 ? 25 : 40;
       desc = def.desc.replace("{val}", val).replace("{penalty}", penalty);
       effect.val = val;
@@ -350,10 +409,13 @@ function applyUpgrade(player, card) {
   } else if (eff.type === "bool") {
     u[eff.stat] = true;
   } else if (eff.type === "multishot") {
-    u.multishot = (u.multishot || 1) + eff.val;
+    // Add bullets but reduce damage
+    u.multishot = (u.multishot || 1) + eff.val; // Start from 1, add more
+    // Apply damage penalty multiplicatively
     u.multishotDmgMult = (u.multishotDmgMult || 1) * (1 - eff.penalty);
   }
   if (eff.stat === "shield") {
+    // Add shields to active count (they don't regenerate)
     u.shieldActive = (u.shieldActive || 0) + eff.val;
   }
 }
@@ -375,15 +437,18 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
   const r = sizeMap[type] || 12;
   const speedMult = attackType ? (ATTACK_TYPES[attackType]?.speed || 1) : 1;
   
+  // Speed increases 2% per wave starting from wave 5
+  // After wave 20: additional 3% per wave for more pressure
   let waveSpeedBonus = wave >= 5 ? 1 + (wave - 5) * 0.02 : 1;
   if (wave >= 20) {
-    waveSpeedBonus += (wave - 19) * 0.03;
+    waveSpeedBonus += (wave - 19) * 0.03; // Extra 3% per wave past 20
   }
   const baseVy = rand(25, 40) * speedMult;
   const vy = baseVy * waveSpeedBonus;
   const vx = rand(-15, 15);
 
-  const ftlThreshold = GROUND_Y * 0.1;
+  // FTL entry - asteroids start in hyperspace mode
+  const ftlThreshold = GROUND_Y * 0.1; // Exit FTL at 10% into field
 
   return {
     id: uid(),
@@ -395,13 +460,14 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
     vertices: generateAsteroidShape(r),
     targetSlot: targetSlot,
     attackType: attackType,
-    senderId: senderId,
+    senderId: senderId, // Track who sent this attack for gold reward
     phaseTimer: attackType === "ghost" ? 0 : null,
     splits: attackType === "splitter" ? (ATTACK_TYPES.splitter?.splits || 4) : 0,
     explosive: attackType === "bomber",
+    // FTL state
     inFTL: true,
     ftlThreshold: ftlThreshold,
-    ftlTrail: [],
+    ftlTrail: [], // Trail points for visual effect
   };
 }
 
@@ -410,29 +476,40 @@ function spawnWave() {
   bullets = [];
   particles = [];
   damageNumbers = [];
-  spawnQueue = [];
+  spawnQueue = []; // Reset spawn queue
   spawnTimer = 0;
 
+  // Reset wave damage for each player (shields NO LONGER reset)
   for (const id of lockedSlots) {
     const p = players.get(id);
     if (p) {
-      p.waveDamage = 0;
+      p.waveDamage = 0; // Reset wave damage for each new wave
     }
   }
 
+  // Calculate extreme scaling multiplier for waves 20+
+  // Waves 1-19: normal, Waves 20+: exponential growth
   const extremeScaleMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
+  
+  // Calculate wave HP bonus for natural asteroids
   const baseWaveHp = wave * 0.8;
   const waveHpScale = baseWaveHp * extremeScaleMult;
 
+  // Queue natural wave asteroids - EQUAL distribution per player
   const playerCount = lockedSlots.length;
+  // Solo mode or single player gets full asteroid count, PvP splits between players
   const baseTotal = WAVE_BASE_COUNT + Math.floor(wave * WAVE_COUNT_SCALE);
+  // Increase asteroid count after wave 20 (10% more per wave past 20)
   const countMult = wave >= 20 ? 1 + (wave - 19) * 0.1 : 1;
   const scaledTotal = Math.floor(baseTotal * countMult);
   const totalCount = (soloMode || playerCount === 1) ? scaledTotal : Math.floor(scaledTotal * 0.5);
   const asteroidsPerPlayer = Math.max(1, Math.floor(totalCount / playerCount));
   
+  // Spawn equal asteroids for each ALIVE player only
   for (let playerIdx = 0; playerIdx < playerCount; playerIdx++) {
     const targetSlot = playerIdx;
+    
+    // Skip dead players - no asteroids spawn in their field
     const playerId = lockedSlots[playerIdx];
     const player = players.get(playerId);
     if (!player || player.hp <= 0) continue;
@@ -440,11 +517,13 @@ function spawnWave() {
     const { x0, x1 } = segmentBounds(targetSlot);
     
     for (let i = 0; i < asteroidsPerPlayer; i++) {
+      // Weighted size selection - large asteroids are rarer, especially early
+      // After wave 20: significantly more large asteroids
       let largeChance = Math.min(0.15 + wave * 0.015, 0.30);
       if (wave >= 20) {
-        largeChance = Math.min(0.30 + (wave - 19) * 0.02, 0.60);
+        largeChance = Math.min(0.30 + (wave - 19) * 0.02, 0.60); // Up to 60% large
       }
-      const mediumChance = wave >= 20 ? 0.25 : 0.35;
+      const mediumChance = wave >= 20 ? 0.25 : 0.35; // Less medium, more large
       const sizeRoll = Math.random();
       let type, r;
       if (sizeRoll < largeChance) {
@@ -461,15 +540,20 @@ function spawnWave() {
       const x = rand(x0 + r + 20, x1 - r - 20);
       const y = rand(-r - 10, -r);
 
+      // Natural asteroid HP
       const baseHpVal = type === "large" ? 3 : type === "medium" ? 1.5 : 0.75;
       const hp = Math.ceil(baseHpVal + waveHpScale);
 
+      // Queue for staggered spawning
       spawnQueue.push({ x, y, type, hp, targetSlot, attackType: null });
     }
   }
 
+  // Queue player-purchased attack asteroids (spawn slightly after natural ones)
   for (const [targetSlot, attacks] of attackQueue.entries()) {
+    // Skip attacks on dead players - refund the sender
     if (!isSlotAlive(targetSlot)) {
+      // Refund attacks since target is dead
       for (const attack of attacks) {
         const sender = players.get(attack.senderId);
         const attackDef = ATTACK_TYPES[attack.type];
@@ -493,19 +577,24 @@ function spawnWave() {
         const x = rand(x0 + r + 30, x1 - r - 30);
         const y = rand(-r - 20, -r);
 
+        // Attack HP: base HP + (wave * hpScale) * extreme scaling
+        // hpScale > 1.0 means attack scales FASTER than natural asteroids
         const baseAttackHp = attackDef.baseHp + (wave * attackDef.hpScale);
         const attackHp = Math.ceil(baseAttackHp * extremeScaleMult);
 
+        // Queue for staggered spawning - include senderId for gold reward
         spawnQueue.push({ x, y, type: attackDef.size, hp: attackHp, targetSlot, attackType: attack.type, senderId: attack.senderId });
       }
     }
   }
 
+  // Shuffle the spawn queue for variety
   for (let i = spawnQueue.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [spawnQueue[i], spawnQueue[j]] = [spawnQueue[j], spawnQueue[i]];
   }
 
+  // Clear attack queue
   attackQueue.clear();
 }
 
@@ -525,15 +614,14 @@ function startGame(solo = false) {
 
   upgradePicks = new Map();
   attackQueue = new Map();
-  pendingUpgrades = new Map();
-  eventQueue = [];
+  pendingUpgrades = new Map(); // Reset pending upgrade queues
 
   for (const id of lockedSlots) {
     const p = players.get(id);
     if (p) {
       p.upgrades = {};
       p.towers = [null, null, null, null];
-      p.gold = 0;
+      p.gold = 0; // No starting gold
       p.cooldown = 0;
       p.targetX = null;
       p.targetY = null;
@@ -546,7 +634,7 @@ function startGame(solo = false) {
       p.hp = solo ? 10 : BASE_HP_PER_PLAYER;
       p.maxHp = solo ? 10 : BASE_HP_PER_PLAYER;
       p.ready = false;
-      p.lastInterest = 0;
+      p.lastInterest = 0; // Track last interest earned
     }
   }
 
@@ -555,49 +643,58 @@ function startGame(solo = false) {
 }
 
 function queueUpgradesAndNextWave() {
+  // Give 10% interest on gold to alive players (capped at 100)
   for (const id of lockedSlots) {
     const p = players.get(id);
     if (!p || p.hp <= 0) continue;
     
     const interest = Math.min(100, Math.floor(p.gold * 0.10));
-    p.lastInterest = interest;
+    p.lastInterest = interest; // Store for display
     if (interest > 0) {
       p.gold += interest;
       safeSend(p.ws, { t: "interest", amount: interest });
     }
   }
   
+  // Queue upgrade options for each alive player (they can pick at their leisure)
   for (const id of lockedSlots) {
     const p = players.get(id);
     if (!p || p.hp <= 0) continue;
     
     const options = makeUpgradeOptions(p);
     
+    // Initialize pending queue if needed
     if (!pendingUpgrades.has(id)) {
       pendingUpgrades.set(id, []);
     }
     
+    // Add this wave's options to player's queue
     const queue = pendingUpgrades.get(id);
     queue.push({ wave: wave, options, rerollCount: 0 });
     
+    // If this is their first pending upgrade, send it to them
     if (queue.length === 1) {
       const rerollCost = getRerollCost(0);
       safeSend(p.ws, { t: "upgrade", options, wave: wave, rerollCost, queueSize: queue.length });
     } else {
+      // Just notify them they have more pending
       safeSend(p.ws, { t: "upgradeQueued", queueSize: queue.length });
     }
   }
   
+  // Immediately start next wave - no waiting!
   wave += 1;
   spawnWave();
   broadcast({ t: "wave", wave });
 }
 
+// Calculate reroll cost: base 10 gold, +50% per reroll
 function getRerollCost(rerollCount) {
   const baseCost = 10;
   return Math.floor(baseCost * Math.pow(1.5, rerollCount));
 }
 
+// Send next upgrade from queue to player (if any)
 function sendNextPendingUpgrade(playerId) {
   const queue = pendingUpgrades.get(playerId);
   if (!queue || queue.length === 0) return;
@@ -621,8 +718,7 @@ function resetToLobby() {
     damageNumbers = [];
     upgradePicks = new Map();
     attackQueue = new Map();
-    pendingUpgrades = new Map();
-    eventQueue = [];
+    pendingUpgrades = new Map(); // Clear pending upgrade queues
     wave = 0;
 
     const arr = Array.from(players.values()).sort((a, b) => a.slot - b.slot);
@@ -648,6 +744,7 @@ function checkGameOver() {
     return p && p.hp > 0;
   });
 
+  // Single player or solo mode: game over only when player dies
   if (soloMode || lockedSlots.length === 1) {
     if (alivePlayers.length === 0) {
       endGame(null);
@@ -656,6 +753,7 @@ function checkGameOver() {
     return false;
   }
 
+  // PvP mode (2+ players): game over when 1 or fewer players remain
   if (alivePlayers.length <= 1) {
     endGame(alivePlayers[0] || null);
     return true;
@@ -673,10 +771,11 @@ function endGame(winnerId) {
       score: p?.score || 0, 
       slot: p?.slot || 0,
       kills: p?.kills || 0,
-      isWinner: !soloMode && id === winnerId
+      isWinner: !soloMode && id === winnerId // No winner in solo mode
     };
   }).sort((a, b) => b.score - a.score);
 
+  // Update leaderboard with all players' scores
   for (const s of scores) {
     if (s.score > 0) {
       leaderboard.push({
@@ -689,6 +788,7 @@ function endGame(winnerId) {
       });
     }
   }
+  // Sort and keep top entries
   leaderboard.sort((a, b) => b.score - a.score);
   leaderboard = leaderboard.slice(0, MAX_LEADERBOARD_ENTRIES);
   saveLeaderboard();
@@ -707,6 +807,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
   if (overrideProps) {
     dmg = overrideProps.damage;
     
+    // Check if tower inherited player upgrades
     if (overrideProps.inheritedUpgrades) {
       speed = BULLET_SPEED * (overrideProps.bulletSpeedMult ?? 1) * (overrideProps.bulletType === "sniper" ? 1.5 : 1);
       isCrit = Math.random() < (overrideProps.critChance ?? 0);
@@ -732,6 +833,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     }
   } else {
     dmg = BULLET_DAMAGE + (owner.upgrades?.damageAdd ?? 0);
+    // Apply multishot damage penalty
     dmg *= (owner.upgrades?.multishotDmgMult ?? 1);
     speed = BULLET_SPEED * (owner.upgrades?.bulletSpeedMult ?? 1);
     isCrit = Math.random() < (owner.upgrades?.critChance ?? 0);
@@ -774,7 +876,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     lifespan: lifespan,
     isTowerBullet: !isPlayerBullet,
     bulletType: bulletType,
-    magnet: true,
+    magnet: true, // All bullets are now homing
     chain: chain,
     ricochet: ricochet,
     pierce: pierce,
@@ -787,9 +889,12 @@ function fireWithMultishot(owner, originX, originY, targetX, targetY) {
   const spread = 0.10;
   
   if (shots <= 1) {
+    // Single shot
     fireBullet(owner, originX, originY, targetX, targetY, 0);
   } else {
+    // Multiple shots with spread
     for (let i = 0; i < shots; i++) {
+      // Center the spread around 0
       const offset = (i - (shots - 1) / 2) * spread;
       fireBullet(owner, originX, originY, targetX, targetY, offset);
     }
@@ -799,11 +904,14 @@ function fireWithMultishot(owner, originX, originY, targetX, targetY) {
 function findBestTarget(x0, x1, turretX, turretY, rangeMult = 1.0, ownerSlot = 0) {
   let best = null;
   let bestScore = -Infinity;
+  // Always use the owner's segment bounds - no cross-lane targeting
   const { x0: segX0, x1: segX1 } = segmentBounds(ownerSlot);
 
   for (const m of missiles) {
+    // Must be within owner's segment
     if (m.x < segX0 || m.x > segX1) continue;
     if (m.y < 0) continue;
+    // Spawned mobs must be targeting this player
     if (m.attackType && m.targetSlot !== ownerSlot) continue;
     
     const danger = m.y / GROUND_Y;
@@ -832,12 +940,7 @@ function clampAimAngle(turretX, turretY, targetX, targetY) {
   };
 }
 
-// OPTIMIZED: Create explosion - now also queues event for client
 function createExplosion(x, y, radius, color) {
-  // Queue event for client-side rendering
-  queueEvent("explosion", { x, y, radius, color });
-  
-  // Still create server-side particles for backwards compatibility
   for (let i = 0; i < 8; i++) {
     const angle = (i / 8) * Math.PI * 2 + Math.random() * 0.5;
     particles.push({
@@ -852,41 +955,45 @@ function createExplosion(x, y, radius, color) {
   }
 }
 
-// OPTIMIZED: Add damage number - now also queues event for client
 function addDamageNumber(x, y, amount, isCrit) {
-  // Queue event for client-side rendering
-  queueEvent("damage", { x, y, amount, isCrit });
-  
-  // Still create server-side for backwards compatibility
   damageNumbers.push({ x, y, amount, isCrit, life: 1.0, vy: -60 });
 }
 
+// Unified wall bounce function for all asteroids
 function bounceOffWalls(m) {
   const { x0, x1 } = segmentBounds(m.targetSlot);
-  if (m.x - m.r < x0) { m.x = x0 + m.r; m.vx = Math.abs(m.vx); }
-  if (m.x + m.r > x1) { m.x = x1 - m.r; m.vx = -Math.abs(m.vx); }
+  
+  // Bounce off segment walls
+  if (m.x - m.r < x0) { 
+    m.x = x0 + m.r; 
+    m.vx = Math.abs(m.vx); 
+  }
+  if (m.x + m.r > x1) { 
+    m.x = x1 - m.r; 
+    m.vx = -Math.abs(m.vx); 
+  }
 }
 
 function tick() {
+  // Continuous wave system - no upgrade phase interruption
   if (phase !== "playing") return;
 
   try {
-    tickCount++;
-    
-    // Process spawn queue
+    // Process spawn queue (staggered asteroid spawning)
     if (spawnQueue.length > 0) {
       spawnTimer -= DT;
       if (spawnTimer <= 0) {
+        // Spawn 1-3 asteroids at a time for variety
         const spawnCount = Math.min(spawnQueue.length, Math.random() < 0.5 ? 1 : Math.random() < 0.8 ? 2 : 3);
         for (let i = 0; i < spawnCount && spawnQueue.length > 0; i++) {
           const queued = spawnQueue.shift();
           missiles.push(createAsteroid(queued.x, queued.y, queued.type, queued.hp, queued.targetSlot, queued.attackType, queued.senderId));
         }
+        // Random delay between 0.1 and 0.5 seconds
         spawnTimer = 0.1 + Math.random() * 0.4;
       }
     }
 
-    // Update particles
     particles = particles.filter(p => {
       p.x += p.vx * DT;
       p.y += p.vy * DT;
@@ -901,12 +1008,15 @@ function tick() {
       return d.life > 0;
     });
 
-    // Player shooting
     for (const id of lockedSlots) {
       const p = players.get(id);
       if (!p || p.hp <= 0) continue;
 
       p.cooldown = Math.max(0, (p.cooldown ?? 0) - DT);
+
+      if (p.towers) {
+        // Tower cooldowns are now updated in the main tower loop below
+      }
 
       const slot = p.slot;
       const { x0, x1 } = segmentBounds(slot);
@@ -935,7 +1045,6 @@ function tick() {
         fireWithMultishot(p, pos.main.x, pos.main.y, clamped.x, clamped.y);
       }
 
-      // Tower shooting
       if (p.towers) {
         p.towers.forEach((tower, idx) => {
           if (!tower) return;
@@ -948,35 +1057,43 @@ function tick() {
           const rangeMult = stats.rangeMult || 1.0;
           const target = findBestTarget(x0, x1, towerPos.x, towerPos.y, rangeMult, p.slot);
           
+          // Update tower angle even when not firing
           if (target) {
             const aim = clampAimAngle(towerPos.x, towerPos.y, target.x, target.y);
             tower.angle = aim.angle;
             
+            // Fire if cooldown ready
             if (tower.cd <= 0) {
               const levelBonus = 1 + (tower.level - 1) * 0.15;
-              const fireRateBonus = ((p.upgrades?.fireRateMult ?? 1) - 1) * 0.5 + 1;
+              // Apply player fire rate to tower cooldown (at 50% effectiveness)
+              const fireRateBonus = ((p.upgrades?.fireRateMult ?? 1) - 1) * 0.5 + 1; // 50% of the bonus
               tower.cd = stats.cooldown / levelBonus / fireRateBonus;
               
+              // Build tower props that inherit player upgrades at 50% effectiveness (except multishot)
               const u = p.upgrades || {};
               const towerProps = {
                 ...stats,
                 level: tower.level,
+                // Inherit player upgrades at 50% effectiveness
                 damage: stats.damage + (u.damageAdd ?? 0) * 0.5,
-                bulletSpeedMult: 1 + ((u.bulletSpeedMult ?? 1) - 1) * 0.5,
+                bulletSpeedMult: 1 + ((u.bulletSpeedMult ?? 1) - 1) * 0.5, // 50% of the bonus
                 critChance: (u.critChance ?? 0) * 0.5,
                 explosive: (stats.explosive || 0) + Math.floor((u.explosive ?? 0) * 0.5),
                 lifespanAdd: (u.lifespanAdd ?? 0) * 0.5,
                 ricochet: Math.floor((u.ricochet ?? 0) * 0.5),
                 pierce: (stats.bulletType === "sniper" ? 1 : 0) + Math.floor((u.pierce ?? 0) * 0.5),
-                chain: !!u.chain,
+                chain: !!u.chain, // Chain is binary, keep it as-is
+                // Mark as tower with player upgrades
                 inheritedUpgrades: true,
               };
               fireBullet(p, towerPos.x, towerPos.y, aim.x, aim.y, 0, towerProps);
             }
           } else {
+            // Default angle pointing up when no target
             tower.angle = -Math.PI / 2;
           }
           
+          // Decrease cooldown
           tower.cd = Math.max(0, (tower.cd || 0) - DT);
         });
       }
@@ -984,22 +1101,27 @@ function tick() {
 
     // Update missiles
     for (const m of missiles) {
+      // Ghost phasing logic
       if (m.phaseTimer !== null) {
         m.phaseTimer += DT;
         m.isPhased = Math.sin(m.phaseTimer * 4) > 0.5;
       }
 
+      // FTL entry handling - asteroids move super fast until threshold
       if (m.inFTL) {
-        const ftlSpeed = 8;
+        const ftlSpeed = 8; // 8x normal speed during FTL
         m.y += m.vy * DT * ftlSpeed;
+        // Minimal x movement during FTL (looks like straight-line entry)
         m.x += m.vx * DT * 0.3;
-        m.rotation += m.rotSpeed * DT * 3;
+        m.rotation += m.rotSpeed * DT * 3; // Faster spin during FTL
         
+        // Exit FTL when reaching threshold
         if (m.y >= m.ftlThreshold) {
           m.inFTL = false;
+          // Create exit flash effect
           createExplosion(m.x, m.y, 15, "#88f");
         }
-        continue;
+        continue; // Skip normal movement while in FTL
       }
 
       let speedMult = 1;
@@ -1014,12 +1136,15 @@ function tick() {
       m.y += m.vy * DT * speedMult;
       m.rotation += m.rotSpeed * DT;
       
+      // ALL asteroids are confined to their target segment (unified wall behavior)
       bounceOffWalls(m);
       
+      // Hit ground - damage target player
       if (m.y + m.r >= GROUND_Y) {
         let blocked = false;
         const targetSlot = m.targetSlot;
         
+        // Only damage if target slot is alive
         if (isSlotAlive(targetSlot)) {
           for (const id of lockedSlots) {
             const p = players.get(id);
@@ -1035,6 +1160,7 @@ function tick() {
           m.dead = true;
           
           if (!blocked) {
+            // Find player for this slot and damage them
             for (const id of lockedSlots) {
               const p = players.get(id);
               if (p && p.slot === targetSlot) {
@@ -1043,20 +1169,23 @@ function tick() {
                 p.hp = Math.max(0, p.hp - damage);
                 createExplosion(m.x, GROUND_Y - 5, m.explosive ? 60 : 40, m.explosive ? "#ff00ff" : "#f44");
                 
+                // Check if player just died - redistribute their asteroids
                 if (wasAlive && p.hp <= 0) {
                   redistributeAsteroids(targetSlot);
                 }
                 
+                // Reward sender with gold for successful attack hit
                 if (m.senderId && m.attackType) {
                   const sender = players.get(m.senderId);
                   if (sender && sender.hp > 0) {
-                    const goldReward = Math.ceil(5 + wave * 0.5);
+                    const goldReward = Math.ceil(5 + wave * 0.5); // 5 base + 0.5 per wave
                     sender.gold += goldReward;
                     safeSend(sender.ws, { t: "attackHit", gold: goldReward, target: p.name });
                   }
                 }
                 
                 if (m.explosive) {
+                  // Bomber explosion damages nearby asteroids too
                   for (const m2 of missiles) {
                     if (m2.dead || m2 === m) continue;
                     const d = Math.hypot(m2.x - m.x, m2.y - m.y);
@@ -1068,21 +1197,25 @@ function tick() {
             }
           }
         } else {
+          // Target is dead, just remove the asteroid
           m.dead = true;
         }
       }
     }
 
-    // Bullet collision
+  // Bullet collision
     for (const b of bullets) {
+      // All bullets now have perfect homing - but ONLY within owner's segment
       if (b.magnet) {
         let nearest = null;
-        let nearestDist = 300;
+        let nearestDist = 300; // REDUCED from 400 to 300 (75%)
         const { x0: ownerX0, x1: ownerX1 } = segmentBounds(b.ownerSlot);
         
         for (const m of missiles) {
           if (m.dead || m.isPhased) continue;
+          // Only target asteroids within the bullet owner's segment
           if (m.x < ownerX0 || m.x > ownerX1) continue;
+          // Spawned mobs must also be targeting this player
           if (m.attackType && m.targetSlot !== b.ownerSlot) continue;
           
           const d = Math.hypot(m.x - b.x, m.y - b.y);
@@ -1095,9 +1228,11 @@ function tick() {
           const dx = nearest.x - b.x;
           const dy = nearest.y - b.y;
           const len = Math.hypot(dx, dy) || 1;
+          // Strong homing - bullets curve sharply toward targets
           const homingStrength = 1500 * DT;
           b.vx += (dx / len) * homingStrength;
           b.vy += (dy / len) * homingStrength;
+          // Normalize to maintain consistent speed
           const speed = Math.hypot(b.vx, b.vy);
           const targetSpeed = BULLET_SPEED * 1.2;
           b.vx = (b.vx / speed) * targetSpeed;
@@ -1112,6 +1247,7 @@ function tick() {
 
       let didRicochet = false;
       
+      // Bullets can only exist in their owner's segment (hard walls)
       const { x0: ownerX0, x1: ownerX1 } = segmentBounds(b.ownerSlot);
       if (b.x < ownerX0) { 
         if (b.ricochet > 0) { b.x = ownerX0; b.vx = -b.vx; b.ricochet--; didRicochet = true; } 
@@ -1131,9 +1267,11 @@ function tick() {
       const { x0: ownerX0, x1: ownerX1 } = segmentBounds(b.ownerSlot);
       for (const m of missiles) {
         if (m.dead) continue;
+        // Bullets can only hit asteroids within their owner's segment
         if (m.x < ownerX0 || m.x > ownerX1) continue;
+        // Spawned mobs must also be targeting this player
         if (m.attackType && m.targetSlot !== b.ownerSlot) continue;
-        if (m.isPhased && Math.random() > 0.3) continue;
+        if (m.isPhased && Math.random() > 0.3) continue; // Phased asteroids have 70% evasion
         if (b.hitList && b.hitList.includes(m.id)) continue;
         const dx = m.x - b.x;
         const dy = m.y - b.y;
@@ -1146,6 +1284,7 @@ function tick() {
           addDamageNumber(m.x, m.y - m.r, b.dmg, b.isCrit);
           const owner = players.get(b.ownerId);
           
+          // Track damage dealt (total and wave)
           if (owner) {
             owner.damageDealt = (owner.damageDealt || 0) + b.dmg;
             owner.waveDamage = (owner.waveDamage || 0) + b.dmg;
@@ -1158,6 +1297,7 @@ function tick() {
             if (owner) {
               owner.score = (owner.score || 0) + 50;
               owner.kills = (owner.kills || 0) + 1;
+              // Only natural asteroids give gold, not player-spawned attacks
               if (!m.attackType) {
                 const goldMult = owner.upgrades?.goldMult ?? 1;
                 const goldReward = m.type === "large" ? 4 : m.type === "medium" ? 2 : 1;
@@ -1165,7 +1305,9 @@ function tick() {
               }
             }
             
+            // Handle splitter
             if (m.splits > 0) {
+              // Split children HP scales with wave (weaker than parent) + extreme scaling
               const extremeMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
               const splitHp = Math.ceil((1 + wave * 0.4) * extremeMult);
               for (let s = 0; s < m.splits; s++) {
@@ -1208,82 +1350,77 @@ function tick() {
     missiles = missiles.filter((m) => !m.dead);
     bullets = bullets.filter((b) => !b.dead);
 
+    // Check for game over (PvP: last player standing)
     if (checkGameOver()) return;
 
+    // Check if wave is complete (all asteroids destroyed AND spawn queue empty)
     if (missiles.length === 0 && spawnQueue.length === 0) {
       if (waveClearedTime === 0) {
         waveClearedTime = Date.now();
       } else if (Date.now() - waveClearedTime >= WAVE_CLEAR_DELAY) {
-        waveClearedTime = 0;
-        queueUpgradesAndNextWave();
+        waveClearedTime = 0; // Reset for next wave
+        queueUpgradesAndNextWave(); // Queue upgrades and immediately start next wave
       }
     } else {
-      waveClearedTime = 0;
+      waveClearedTime = 0; // Reset if new asteroids appear or queue not empty
     }
 
-    // OPTIMIZED: Only broadcast every BROADCAST_INTERVAL ticks (10Hz instead of 30Hz)
-    if (tickCount % BROADCAST_INTERVAL === 0) {
-      broadcast({
-        t: "state",
-        ts: Date.now(),
-        phase,
-        wave,
-        world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
-        missiles: missiles.map((m) => ({
-          id: m.id, x: m.x, y: m.y, r: m.r, hp: m.hp, maxHp: m.maxHp, type: m.type,
-          rotation: m.rotation, vertices: m.vertices, attackType: m.attackType, isPhased: m.isPhased,
-          inFTL: m.inFTL
-        })),
-        bullets: bullets.map((b) => ({
-          id: b.id, x: b.x, y: b.y, r: b.r, vx: b.vx, vy: b.vy,
-          slot: b.ownerSlot, isCrit: b.isCrit, lifespan: b.lifespan,
-          isTower: b.isTowerBullet, bulletType: b.bulletType
-        })),
-        particles: particles.map((p) => ({ x: p.x, y: p.y, life: p.life, maxLife: p.maxLife, color: p.color, size: p.size })),
-        damageNumbers: damageNumbers.map((d) => ({ x: d.x, y: d.y, amount: d.amount, isCrit: d.isCrit, life: d.life })),
-        // OPTIMIZED: Include events for client-side rendering
-        events: eventQueue,
-        players: lockedSlots.map((id) => {
-          const p = players.get(id);
-          if (!p) return { id, slot: -1 };
-          const u = p.upgrades || {};
-          return {
-            id: p.id, slot: p.slot,
-            name: p.name || `Player ${p.slot + 1}`,
-            score: p.score || 0,
-            gold: p.gold || 0,
-            hp: p.hp,
-            maxHp: p.maxHp,
-            turretAngle: p.turretAngle || -Math.PI / 2,
-            isManual: !!p.manualShooting,
-            towers: p.towers,
-            kills: p.kills || 0,
-            damageDealt: p.damageDealt || 0,
-            waveDamage: p.waveDamage || 0,
-            lastInterest: p.lastInterest || 0,
-            upgrades: {
-              shieldActive: u.shieldActive ?? 0,
-              slowfield: !!u.slowfield,
-              damageAdd: u.damageAdd ?? 0,
-              bulletSpeedMult: u.bulletSpeedMult ?? 1,
-              fireRateMult: u.fireRateMult ?? 1,
-              multishot: u.multishot ?? 1,
-              multishotDmgMult: u.multishotDmgMult ?? 1,
-              critChance: u.critChance ?? 0,
-              explosive: u.explosive ?? 0,
-              lifespanAdd: u.lifespanAdd ?? 0,
-              ricochet: u.ricochet ?? 0,
-              pierce: u.pierce ?? 0,
-              chain: !!u.chain,
-              goldMult: u.goldMult ?? 1,
-            },
-          };
-        }),
-      });
-      
-      // Clear event queue after broadcast
-      eventQueue = [];
-    }
+    broadcast({
+      t: "state",
+      ts: Date.now(),
+      phase,
+      wave,
+      world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
+      missiles: missiles.map((m) => ({
+        id: m.id, x: m.x, y: m.y, r: m.r, hp: m.hp, maxHp: m.maxHp, type: m.type,
+        rotation: m.rotation, vertices: m.vertices, attackType: m.attackType, isPhased: m.isPhased,
+        inFTL: m.inFTL
+      })),
+      bullets: bullets.map((b) => ({
+        id: b.id, x: b.x, y: b.y, r: b.r, vx: b.vx, vy: b.vy,
+        slot: b.ownerSlot, isCrit: b.isCrit, lifespan: b.lifespan,
+        isTower: b.isTowerBullet, bulletType: b.bulletType
+      })),
+      particles: particles.map((p) => ({ x: p.x, y: p.y, life: p.life, maxLife: p.maxLife, color: p.color, size: p.size })),
+      damageNumbers: damageNumbers.map((d) => ({ x: d.x, y: d.y, amount: d.amount, isCrit: d.isCrit, life: d.life })),
+      players: lockedSlots.map((id) => {
+        const p = players.get(id);
+        if (!p) return { id, slot: -1 };
+        const u = p.upgrades || {};
+        return {
+          id: p.id, slot: p.slot,
+          name: p.name || `Player ${p.slot + 1}`,
+          score: p.score || 0,
+          gold: p.gold || 0,
+          hp: p.hp,
+          maxHp: p.maxHp,
+          turretAngle: p.turretAngle || -Math.PI / 2,
+          isManual: !!p.manualShooting,
+          towers: p.towers,
+          kills: p.kills || 0,
+          damageDealt: p.damageDealt || 0,
+          waveDamage: p.waveDamage || 0,
+          lastInterest: p.lastInterest || 0,
+          upgrades: {
+            shieldActive: u.shieldActive ?? 0,
+            slowfield: !!u.slowfield,
+            // Stats for stat panel
+            damageAdd: u.damageAdd ?? 0,
+            bulletSpeedMult: u.bulletSpeedMult ?? 1,
+            fireRateMult: u.fireRateMult ?? 1,
+            multishot: u.multishot ?? 1,
+            multishotDmgMult: u.multishotDmgMult ?? 1,
+            critChance: u.critChance ?? 0,
+            explosive: u.explosive ?? 0,
+            lifespanAdd: u.lifespanAdd ?? 0,
+            ricochet: u.ricochet ?? 0,
+            pierce: u.pierce ?? 0,
+            chain: !!u.chain,
+            goldMult: u.goldMult ?? 1,
+          },
+        };
+      }),
+    });
   } catch (err) {
     console.error("Game loop error:", err);
   }
@@ -1339,6 +1476,7 @@ wss.on("connection", (ws) => {
     phase,
     attackTypes: ATTACK_TYPES
   });
+  // Send chat history to new player
   safeSend(ws, { t: "chatHistory", messages: chatHistory });
   broadcast({ t: "lobby", ...lobbySnapshot() });
 
@@ -1359,6 +1497,7 @@ wss.on("connection", (ws) => {
       return;
     }
     if (msg.t === "start") {
+      // Any ready player can start the game when all are ready
       if (phase === "lobby" && p.ready) {
         const snap = lobbySnapshot();
         if (snap.allReady) startGame();
@@ -1366,17 +1505,21 @@ wss.on("connection", (ws) => {
       return;
     }
     if (msg.t === "forceStart") {
+      // Force start with only ready players (kick idle ones)
       if (phase === "lobby" && p.ready) {
         const readyPlayers = Array.from(players.entries()).filter(([_, pl]) => pl.ready);
         if (readyPlayers.length >= 1) {
+          // Kick non-ready players
           const idlePlayers = Array.from(players.entries()).filter(([_, pl]) => !pl.ready);
           for (const [idleId, idlePlayer] of idlePlayers) {
             safeSend(idlePlayer.ws, { t: "kicked", reason: "Game started without you (idle)" });
             idlePlayer.ws.close();
             players.delete(idleId);
           }
+          // Reassign slots for remaining players
           const remaining = Array.from(players.values()).sort((a, b) => a.slot - b.slot);
           remaining.forEach((pl, i) => { pl.slot = i; });
+          // Update host if needed
           if (!players.has(hostId)) {
             hostId = players.size > 0 ? Array.from(players.keys())[0] : null;
           }
@@ -1387,8 +1530,9 @@ wss.on("connection", (ws) => {
       return;
     }
     if (msg.t === "startSolo") {
+      // Start solo game immediately (no need for ready)
       if (phase === "lobby") {
-        startGame(true);
+        startGame(true); // Pass true for solo mode
       }
       return;
     }
@@ -1399,6 +1543,7 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    // Pick upgrade from queue (works during gameplay now)
     if (msg.t === "pickUpgrade" && phase === "playing") {
       const pickKey = (msg.key || "").toString();
       const queue = pendingUpgrades.get(id);
@@ -1408,11 +1553,14 @@ wss.on("connection", (ws) => {
       const opt = current.options.find((o) => o.key === pickKey);
       if (!opt) return;
       
+      // Apply the upgrade
       applyUpgrade(p, opt);
       safeSend(p.ws, { t: "picked", key: pickKey });
       
+      // Remove this upgrade set from queue
       queue.shift();
       
+      // If more upgrades pending, send the next one
       if (queue.length > 0) {
         const next = queue[0];
         const rerollCost = getRerollCost(next.rerollCount);
@@ -1423,6 +1571,7 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    // Reroll upgrade cards (works during gameplay now)
     if (msg.t === "rerollUpgrades" && phase === "playing") {
       const queue = pendingUpgrades.get(id);
       if (!queue || queue.length === 0) return;
@@ -1435,12 +1584,15 @@ wss.on("connection", (ws) => {
         return;
       }
       
+      // Deduct gold and increment reroll count
       p.gold -= rerollCost;
       current.rerollCount++;
       
+      // Generate new options
       const newOptions = makeUpgradeOptions(p);
       current.options = newOptions;
       
+      // Calculate next reroll cost
       const nextRerollCost = getRerollCost(current.rerollCount);
       
       safeSend(p.ws, { 
@@ -1454,7 +1606,9 @@ wss.on("connection", (ws) => {
       return;
     }
 
+// Buy an additional upgrade option (Interrupts current flow)
     if (msg.t === "buyUpgrade" && phase === "playing") {
+      // Initialize queue if empty so we can buy upgrades even when no wave is pending
       if (!pendingUpgrades.has(id)) {
         pendingUpgrades.set(id, []);
       }
@@ -1466,19 +1620,25 @@ wss.on("connection", (ws) => {
         return;
       }
       
+      // Deduct gold
       p.gold -= cost;
       
+      // Generate a FULL NEW SET of options (standard 3 cards)
       const newEventOptions = makeUpgradeOptions(p);
       
+      // Create a new queue entry
+      // We use 'unshift' to put this at the FRONT of the queue
+      // This pushes any existing menu to index [1], effectively "saving" it for later
       const newEntry = { 
         wave: wave, 
         options: newEventOptions, 
         rerollCount: 0,
-        isPurchased: true
+        isPurchased: true // Optional flag if you want to track it
       };
       
       queue.unshift(newEntry);
       
+      // Send the new front-of-queue to the client immediately
       const nextRerollCost = getRerollCost(0);
       safeSend(p.ws, { 
         t: "upgrade", 
@@ -1491,11 +1651,13 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    // Return to lobby from game over screen
     if (msg.t === "returnToLobby" && phase === "gameover") {
-      resetToLobby();
+      resetLobby();
       return;
     }
 
+    // Chat message
     if (msg.t === "chat") {
       const text = (msg.text || "").toString().trim();
       if (text.length === 0 || text.length > 200) return;
@@ -1504,9 +1666,9 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    // Clear leaderboard with password
     if (msg.t === "clearLeaderboard") {
-      const password = process.env.LEADERBOARD_PASSWORD || "1122";
-      if (msg.password === password) {
+      if (msg.password === "1122") {
         leaderboard = [];
         saveLeaderboard();
         broadcast({ t: "lobby", ...lobbySnapshot() });
@@ -1514,10 +1676,12 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    // PvP: Buy attack to send at random ALIVE opponent (supports quantity: 1, 10, or "max")
     if (msg.t === "buyAttack" && (phase === "playing" || phase === "upgrades")) {
       const { attackType, quantity } = msg;
       if (!ATTACK_TYPES[attackType]) return;
       
+      // Get list of valid targets (ALIVE players that aren't the buyer)
       const validTargets = lockedSlots.filter(pid => {
         if (pid === id) return false;
         const targetPlayer = players.get(pid);
@@ -1531,6 +1695,7 @@ wss.on("connection", (ws) => {
       
       const unitCost = ATTACK_TYPES[attackType].cost;
       
+      // Calculate how many to buy based on quantity mode
       let toBuy = 1;
       if (quantity === "max") {
         toBuy = Math.floor(p.gold / unitCost);
@@ -1540,11 +1705,12 @@ wss.on("connection", (ws) => {
         toBuy = p.gold >= unitCost ? 1 : 0;
       }
       
-      if (toBuy <= 0) return;
+      if (toBuy <= 0) return; // Can't afford any
       
       const totalCost = unitCost * toBuy;
       p.gold -= totalCost;
       
+      // Queue attacks, distributing among random ALIVE targets
       for (let i = 0; i < toBuy; i++) {
         const targetId = validTargets[Math.floor(Math.random() * validTargets.length)];
         const targetPlayer = players.get(targetId);
@@ -1555,6 +1721,7 @@ wss.on("connection", (ws) => {
         }
         attackQueue.get(targetSlot).push({ type: attackType, senderId: id });
         
+        // Notify target (only first one to avoid spam)
         if (i === 0 && targetPlayer.ws) {
           safeSend(targetPlayer.ws, { t: "incomingAttack", attackType, from: p.name, count: toBuy });
         }
@@ -1621,8 +1788,10 @@ wss.on("connection", (ws) => {
         resetToLobby();
         return;
       }
+      // Mark disconnected player as dead for game over check
       const idx = lockedSlots.indexOf(id);
       if (idx !== -1) {
+        // Player left, set hp to 0 for game logic
         checkGameOver();
       }
       return;
@@ -1636,4 +1805,4 @@ wss.on("connection", (ws) => {
 setInterval(() => { tick(); }, 1000 / TICK_RATE);
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => { console.log(`Rogue Asteroid PvP (OPTIMIZED 10Hz): http://localhost:${PORT}`); });
+server.listen(PORT, () => { console.log(`Rogue Asteroid PvP server: http://localhost:${PORT}`); });
