@@ -7,7 +7,7 @@
 // - Asteroid vertices sent once on spawn, cached by client
 // - Asteroid rotation simulated client-side from rotSpeed
 // - Bullets send angle instead of vx/vy (50% less bullet data)
-// - Reduced bullet homing strength by 75%
+// - Initial homing 50% stronger (560), weakens to 375 after first hit
 
 const express = require("express");
 const http = require("http");
@@ -789,6 +789,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     ricochet: ricochet,
     pierce: pierce,
     hitList: [],
+    hasHit: false,  // Track if bullet has hit anything (for homing strength)
   });
 }
 
@@ -1105,7 +1106,9 @@ function tick() {
           const dx = nearest.x - b.x;
           const dy = nearest.y - b.y;
           const len = Math.hypot(dx, dy) || 1;
-          const homingStrength = 375 * DT;  // 75% weaker homing (was 1500)
+          // Initial homing is 50% stronger so bullet commits to aimed target
+          // After first hit (pierce), homing is weaker to allow seeking new targets
+          const homingStrength = (b.hasHit ? 375 : 560) * DT;
           b.vx += (dx / len) * homingStrength;
           b.vy += (dy / len) * homingStrength;
           const speed = Math.hypot(b.vx, b.vy);
@@ -1152,6 +1155,7 @@ function tick() {
           m.hp -= b.dmg;
           if (!b.hitList) b.hitList = [];
           b.hitList.push(m.id);
+          b.hasHit = true;  // Mark that bullet has hit something (weakens future homing)
           if (b.pierce > 0) { b.pierce--; } else { b.dead = true; }
           addDamageNumber(m.x, m.y - m.r, b.dmg, b.isCrit);
           const owner = players.get(b.ownerId);
