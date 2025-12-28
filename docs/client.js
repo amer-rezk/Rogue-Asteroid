@@ -35,11 +35,11 @@
 
   // PvP Attack Types
   const ATTACK_TYPES = {
-    swarm: { name: "Swarm", cost: 15, desc: "4 fast weak", color: "#ffcc00", icon: "🐝" },
-    bruiser: { name: "Bruiser", cost: 45, desc: "Very tanky", color: "#ff4444", icon: "🪨" },
-    bomber: { name: "Bomber", cost: 55, desc: "Explodes!", color: "#ff00ff", icon: "💣" },
-    splitter: { name: "Splitter", cost: 50, desc: "Splits x4", color: "#00ffff", icon: "💎" },
-    ghost: { name: "Ghost", cost: 40, desc: "Phases", color: "#8800ff", icon: "👻" }
+    swarm: { name: "Swarm", cost: 15, desc: "6 fast weak", color: "#ffcc00", icon: "🐝" },
+    bruiser: { name: "Bruiser", cost: 35, desc: "Very tanky", color: "#ff4444", icon: "🪨" },
+    bomber: { name: "Bomber", cost: 55, desc: "Explodes 2dmg", color: "#ff00ff", icon: "💣" },
+    splitter: { name: "Splitter", cost: 50, desc: "Splits x15", color: "#00ffff", icon: "💎" },
+    ghost: { name: "Ghost", cost: 40, desc: "2 phasing", color: "#8800ff", icon: "👻" }
   };
 
   // ===== DOM Elements =====
@@ -236,6 +236,15 @@
         isHost = msg.isHost;
         world = msg.world;
         phase = "lobby";
+        // Update attack types from server if provided
+        if (msg.attackTypes) {
+          for (const [key, val] of Object.entries(msg.attackTypes)) {
+            if (ATTACK_TYPES[key]) {
+              ATTACK_TYPES[key].cost = val.cost;
+              ATTACK_TYPES[key].desc = val.desc || ATTACK_TYPES[key].desc;
+            }
+          }
+        }
         break;
 
       case "reject":
@@ -1413,8 +1422,17 @@
       drawNeonText(`WAVE ${wave}`, 20, 25, "#ff0", 18, "left");
       const myPlayer = lastSnap.players.find(p => p.id === myId);
       if (myPlayer) {
-        drawNeonText(`${myPlayer.gold} 🟡`, 120, 25, "#fd0", 18, "left");
-        drawNeonText(`${myPlayer.kills} 💀`, 210, 25, "#f44", 14, "left");
+        // Gold display with more spacing
+        drawNeonText(`${myPlayer.gold} 🟡`, 140, 25, "#fd0", 18, "left");
+        // Show last interest gained (if any)
+        if (myPlayer.lastInterest > 0) {
+          ctx.font = "bold 12px 'Courier New', monospace";
+          ctx.fillStyle = "#0f0";
+          ctx.textAlign = "left";
+          ctx.fillText(`+${myPlayer.lastInterest}`, 215, 25);
+        }
+        // Kills further right
+        drawNeonText(`${myPlayer.kills} 💀`, 270, 25, "#f44", 14, "left");
       }
 
       // Scoreboard
