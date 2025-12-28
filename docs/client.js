@@ -717,8 +717,10 @@
       return;
     }
 
-    // Handle buy upgrade button click
-    if (phase === "playing" && hoveredBuyUpgrade && !upgradePicked && upgradeOptions.length > 0) {
+// Handle buy upgrade button click
+    // Note: We removed "!upgradePicked" and "upgradeOptions.length > 0" checks
+    // because this button is now independent!
+    if (phase === "playing" && hoveredBuyUpgrade) {
       const myPlayer = lastSnap?.players.find(p => p.id === myId);
       if (myPlayer && myPlayer.gold >= buyUpgradeCost) {
         send({ t: "buyUpgrade", cost: buyUpgradeCost });
@@ -1945,6 +1947,48 @@
         ctx.textAlign = "left";
       }
 
+// ===== BUY UPGRADE BUTTON (Always visible in playing phase) =====
+      if (phase === "playing" && myPlayer) {
+        const canAffordBuy = myPlayer.gold >= buyUpgradeCost;
+        
+        // Position: Top Right corner (or wherever you prefer)
+        const buyW = 140;
+        const buyH = 40;
+        const buyX = canvas.width - buyW - 15;
+        const buyY = 60; // Below the score/wave HUD
+
+        const isBuyHovered = mouseX >= buyX && mouseX <= buyX + buyW && 
+                             mouseY >= buyY && mouseY <= buyY + buyH;
+        
+        // Store this for the click handler
+        hoveredBuyUpgrade = isBuyHovered; 
+        window.buyUpgradeBtnBounds = { x: buyX, y: buyY, w: buyW, h: buyH };
+
+        // Draw Button Body
+        ctx.fillStyle = isBuyHovered && canAffordBuy ? "rgba(100,255,150,0.4)" : 
+                        canAffordBuy ? "rgba(60,200,120,0.25)" : "rgba(40,40,60,0.4)";
+        ctx.strokeStyle = isBuyHovered && canAffordBuy ? "#7affaa" : 
+                          canAffordBuy ? "rgba(122,255,170,0.5)" : "#444";
+        ctx.lineWidth = isBuyHovered && canAffordBuy ? 2 : 1;
+        
+        ctx.beginPath();
+        ctx.roundRect(buyX, buyY, buyW, buyH, 6);
+        ctx.fill();
+        ctx.stroke();
+
+        // Draw Text
+        ctx.font = "bold 12px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        
+        ctx.fillStyle = canAffordBuy ? "#7affaa" : "#555";
+        ctx.fillText(`BUY UPGRADE (${buyUpgradeCost}g)`, buyX + buyW / 2, buyY + buyH / 2);
+        
+        // Reset text alignment defaults
+        ctx.textAlign = "left"; 
+        ctx.textBaseline = "alphabetic";
+      }
+      
       // ===== STATS PANEL BUTTON & PANEL =====
       if (phase === "playing" && myPlayer) {
         const btnW = 90;
@@ -2429,17 +2473,6 @@
         ctx.fillText("🎲", rerollBtnX + rerollBtnW / 2, rerollBtnY + 25);
         ctx.font = "bold 10px 'Courier New', monospace";
         ctx.fillText(`${currentRerollCost}g`, rerollBtnX + rerollBtnW / 2, rerollBtnY + 42);
-        
-        // Buy Upgrade button to the right of reroll
-        const canAffordBuy = myGold >= buyUpgradeCost;
-        const buyBtnW = 70;
-        const buyBtnH = 50;
-        const buyBtnX = rerollBtnX + rerollBtnW + 10;
-        const buyBtnY = rerollBtnY;
-        
-        const isBuyHovered = mouseX >= buyBtnX && mouseX <= buyBtnX + buyBtnW && 
-                             mouseY >= buyBtnY && mouseY <= buyBtnY + buyBtnH;
-        hoveredBuyUpgrade = isBuyHovered;
         
         // Buy button background
         ctx.fillStyle = isBuyHovered && canAffordBuy ? "rgba(100,255,150,0.4)" : 
