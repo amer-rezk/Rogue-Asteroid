@@ -610,6 +610,7 @@ function startGame(solo = false) {
       p.maxHp = solo ? 10 : BASE_HP_PER_PLAYER;
       p.ready = false;
       p.lastInterest = 0;
+	  p.incomeFromAttacks = 0; // Track income from minions
     }
   }
 
@@ -625,12 +626,21 @@ function queueUpgradesAndNextWave() {
   for (const id of lockedSlots) {
     const p = players.get(id);
     if (!p || p.hp <= 0) continue;
-    
-    const interest = Math.min(100, Math.floor(p.gold * 0.10));
-    p.lastInterest = interest;
-    if (interest > 0) {
-      p.gold += interest;
-      safeSend(p.ws, { t: "interest", amount: interest });
+
+    // 1. Existing Treasury Interest (10% of current gold, max 100)
+    const treasuryInterest = Math.min(100, Math.floor(p.gold * 0.10));
+
+    // 2. New Attack Income (Permanent income from attacks * Gold Multiplier Card)
+    const goldMult = p.upgrades?.goldMult ?? 1;
+    const attackIncome = Math.floor((p.incomeFromAttacks || 0) * goldMult);
+
+    const totalIncome = treasuryInterest + attackIncome;
+
+    p.lastInterest = totalIncome;
+    if (totalIncome > 0) {
+      p.gold += totalIncome;
+      // Send to client as 'interest' so the UI popup shows the total amount
+      safeSend(p.ws, { t: "interest", amount: totalIncome });
     }
   }
   
@@ -1861,6 +1871,9 @@ wss.on("connection", (ws) => {
       
       const totalCost = unitCost * toBuy;
       p.gold -= totalCost;
+      
+      // Add 10% of spent money to permanent income
+      p.incomeFromAttacks = (p.incomeFromAttacks || 0) + (totalCost * 0.10);
       
       for (let i = 0; i < toBuy; i++) {
         const targetId = validTargets[Math.floor(Math.random() * validTargets.length)];
