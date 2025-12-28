@@ -310,7 +310,7 @@ const RARITY_CONFIG = {
 const UPGRADE_DEFS = [
   { id: "dmg", name: "Heavy Rounds", cat: "offense", icon: "💥", desc: "+{val} Damage", stat: "damageAdd", base: 0.5, type: "add" },
   { id: "spd", name: "Velocity", cat: "offense", icon: "💨", desc: "+{val}% Bullet Speed", stat: "bulletSpeedMult", base: 0.08, type: "mult" },
-  { id: "fire", name: "Rapid Fire", cat: "offense", icon: "⚡", desc: "+{val}% Fire Rate", stat: "fireRateMult", base: 0.05, type: "mult" },
+  { id: "fire", name: "Rapid Fire", cat: "offense", icon: "🔥", desc: "+{val}% Fire Rate", stat: "fireRateMult", base: 0.05, type: "mult" },
   { id: "multi", name: "Multishot", cat: "offense", icon: "⚔️", desc: "+{val} Bullets (-{penalty}% dmg)", stat: "multishot", base: 1, type: "multishot" },
   { id: "crit", name: "Crit Scope", cat: "offense", icon: "🎯", desc: "+{val}% Crit Chance", stat: "critChance", base: 0.05, type: "add_cap", cap: 1.0 },
   { id: "boom", name: "Explosive", cat: "offense", icon: "💣", desc: "Explosions size +{val}", stat: "explosive", base: 1, type: "add" },
@@ -427,9 +427,9 @@ function generateAsteroidShape(baseRadius) {
 }
 
 function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId = null) {
-  const sizeMap = { small: 10, medium: 13, large: 17 };
+  const sizeMap = { small: 10, medium: 13, large: 17, boss: 150 }; // Boss is HUGE (150 radius = 300 width)
   const r = sizeMap[type] || 12;
-  const speedMult = attackType ? (ATTACK_TYPES[attackType]?.speed || 1) : 1;
+  const speedMult = type === "boss" ? 0.3 : (attackType ? (ATTACK_TYPES[attackType]?.speed || 1) : 1); // Boss moves slow
   
   let waveSpeedBonus = wave >= 5 ? 1 + (wave - 5) * 0.02 : 1;
   if (wave >= 20) {
@@ -453,6 +453,7 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
     x, y, vx, vy, r, type,
     hp: hp,
     maxHp: hp,
+    lastSpawnHp: hp, // Track HP for boss spawns
     rotation: rand(0, Math.PI * 2),
     rotSpeed: rotSpeed,
     vertices: vertices,
@@ -475,6 +476,34 @@ function spawnWave() {
   damageNumbers = [];
   spawnQueue = [];
   spawnTimer = 0;
+
+  // NEW: BOSS ROUND CHECK (Every 10 waves)
+  if (wave % 10 === 0) {
+    const playerCount = lockedSlots.length;
+    for (let playerIdx = 0; playerIdx < playerCount; playerIdx++) {
+      const playerId = lockedSlots[playerIdx];
+      const player = players.get(playerId);
+      if (!player || player.hp <= 0) continue;
+
+      const targetSlot = playerIdx;
+      const { x0 } = segmentBounds(targetSlot);
+      
+      // Boss HP Calculation
+      const bossHp = 400 + (wave * 50); 
+      
+      spawnQueue.push({ 
+        x: x0 + SEGMENT_W / 2, 
+        y: -180, // Start high above screen
+        type: "boss", 
+        hp: bossHp, 
+        targetSlot, 
+        attackType: null 
+      });
+    }
+    // Announce Boss
+    broadcast({ t: "chatMsg", id: uid(), from: "SYSTEM", text: "⚠️ GIANT ASTEROID DETECTED ⚠️", timestamp: Date.now() });
+    return; // Skip normal spawns
+  }
 
   for (const id of lockedSlots) {
     const p = players.get(id);
@@ -1250,7 +1279,8 @@ function tick() {
             for (const id of lockedSlots) {
               const p = players.get(id);
               if (p && p.slot === targetSlot) {
-                const damage = m.explosive ? 2 : 1;
+                // If Boss, deal 9999 damage. Otherwise normal damage.
+                const damage = m.type === "boss" ? 9999 : (m.explosive ? 2 : 1);
                 const wasAlive = p.hp > 0;
                 p.hp = Math.max(0, p.hp - damage);
                 createExplosion(m.x, GROUND_Y - 5, m.explosive ? 60 : 40, m.explosive ? "#ff00ff" : "#f44");
@@ -1323,6 +1353,25 @@ function tick() {
         const rr = m.r + b.r;
         if (dx * dx + dy * dy <= rr * rr) {
           m.hp -= b.dmg;
+
+          // BOSS MECHANIC: Spawn 5 minions every 10% HP lost
+          if (m.type === "boss") {
+            const threshold = m.maxHp * 0.10;
+            if (m.hp < m.lastSpawnHp - threshold) {
+              m.lastSpawnHp -= threshold;
+              for(let k=0; k<5; k++) {
+                missiles.push(createAsteroid(
+                  m.x + rand(-50, 50), 
+                  m.y + rand(20, 100), 
+                  "medium", 
+                  Math.max(2, wave), 
+                  m.targetSlot
+                ));
+              }
+              createExplosion(m.x, m.y, 60, "#ff0000");
+            }
+          }
+
           if (!b.hitList) b.hitList = [];
           b.hitList.push(m.id);
           

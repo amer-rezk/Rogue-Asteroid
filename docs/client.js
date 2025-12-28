@@ -1800,7 +1800,8 @@
         const r = m.r * sx;
 
         // Color based on attack type
-        let baseColor = m.type === "large" ? "#ff4444" : m.type === "medium" ? "#ff8800" : "#ffcc00";
+        // Boss is Dark Red, others are standard colors
+        let baseColor = m.type === "boss" ? "#880000" : m.type === "large" ? "#ff4444" : m.type === "medium" ? "#ff8800" : "#ffcc00";
         if (m.attackType && ATTACK_TYPES[m.attackType]) {
           baseColor = ATTACK_TYPES[m.attackType].color;
         }
@@ -2675,7 +2676,7 @@
             { label: "Multishot", value: `${u.multishot || 1}x`, color: "#66ffff" },
             { label: "Pierce", value: `${u.pierce || 0}`, color: "#ffff66" },
             { label: "Ricochet", value: `${u.ricochet || 0}`, color: "#ff9966" },
-            { label: "Chain", value: u.chain ? "Yes" : "No", color: "#9966ff" },
+            { label: "Chain Chance", value: `${((u.chainChance || 0) * 100).toFixed(0)}%`, color: "#9966ff" },
             { label: "Explosive", value: `${u.explosive || 0}`, color: "#ff4444" },
             { label: "Gold Mult", value: `${((u.goldMult || 1) * 100).toFixed(0)}%`, color: "#ffd700" },
           ];
