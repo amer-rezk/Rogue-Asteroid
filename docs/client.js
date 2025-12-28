@@ -112,6 +112,12 @@
   let interestFeedback = null; // Feedback for wave interest
   let refundFeedback = null; // Feedback for attack refund
   let gameOverData = null;
+  
+  // Spectator mode
+  let isSpectator = false;
+  let spectatorCount = 0;
+  let canSpectate = false;
+  let spectateReason = "";
 
   // Chat system
   let chatMessages = [];
@@ -474,6 +480,10 @@
         isHost = msg.isHost;
         world = msg.world;
         phase = "lobby";
+        // Reset spectator state
+        isSpectator = false;
+        canSpectate = false;
+        hideSpectateOption();
         // Update attack types from server if provided
         if (msg.attackTypes) {
           for (const [key, val] of Object.entries(msg.attackTypes)) {
@@ -497,6 +507,53 @@
           forcedDisconnect = false;
           if (statusLED) statusLED.className = "led yellow";
         }
+        break;
+      
+      case "spectateOffer":
+        // Server is offering spectator mode
+        canSpectate = msg.canSpectate;
+        spectateReason = msg.reason;
+        spectatorCount = msg.spectatorCount || 0;
+        if (statusText) {
+          statusText.textContent = msg.reason.toUpperCase();
+          statusText.className = "status-text";
+        }
+        if (statusLED) statusLED.className = "led yellow";
+        // Show spectate button if game in progress
+        if (canSpectate) {
+          showSpectateOption();
+        }
+        break;
+      
+      case "spectateStart":
+        // Now spectating
+        isSpectator = true;
+        phase = "playing";
+        world = msg.world;
+        wave = msg.wave;
+        spectatorCount = msg.spectatorCount || 0;
+        ATTACK_TYPES = msg.attackTypes || {};
+        // Clear client-side caches
+        clientParticles = [];
+        clientDamageNumbers = [];
+        asteroidCache.clear();
+        missileStates.clear();
+        bulletStates.clear();
+        showGame();
+        break;
+      
+      case "spectateEnd":
+        // Game ended, reconnect to join lobby
+        isSpectator = false;
+        if (statusText) {
+          statusText.textContent = "GAME ENDED - RECONNECTING...";
+          statusText.className = "status-text";
+        }
+        setTimeout(() => connect(), 1500);
+        break;
+      
+      case "spectatorUpdate":
+        spectatorCount = msg.count || 0;
         break;
 
       case "kicked":
@@ -684,6 +741,9 @@
         phase = msg.phase;
         wave = msg.wave;
         world = msg.world;
+        if (msg.spectatorCount !== undefined) {
+          spectatorCount = msg.spectatorCount;
+        }
         break;
 
       case "attackQueued":
@@ -701,6 +761,13 @@
         phase = "gameover";
         gameOverData = msg;
         buildMenuOpen = null;
+        // If spectating, auto-reconnect after showing results
+        if (isSpectator || msg.wasSpectating) {
+          setTimeout(() => {
+            isSpectator = false;
+            connect();
+          }, 6000);
+        }
         break;
 
       case "chatHistory":
@@ -738,6 +805,36 @@
     menuScreen.style.display = "none";
     gameScreen.style.display = "block";
     resizeCanvas();
+  }
+  
+  function showSpectateOption() {
+    // Show a "Watch Game" button in the menu
+    let spectateBtn = document.getElementById("spectateBtn");
+    if (!spectateBtn) {
+      spectateBtn = document.createElement("button");
+      spectateBtn.id = "spectateBtn";
+      spectateBtn.className = "btn spectate";
+      spectateBtn.textContent = "👁 WATCH GAME";
+      spectateBtn.style.cssText = "margin-top: 15px; background: linear-gradient(180deg, #444 0%, #222 100%); border: 2px solid #666;";
+      spectateBtn.onclick = () => {
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({ t: "spectate" }));
+        }
+      };
+      // Insert after status area
+      const statusArea = document.querySelector(".status-area");
+      if (statusArea && statusArea.parentNode) {
+        statusArea.parentNode.insertBefore(spectateBtn, statusArea.nextSibling);
+      }
+    }
+    spectateBtn.style.display = "block";
+    const countText = spectatorCount > 0 ? ` (${spectatorCount} watching)` : "";
+    spectateBtn.textContent = `👁 WATCH GAME${countText}`;
+  }
+  
+  function hideSpectateOption() {
+    const spectateBtn = document.getElementById("spectateBtn");
+    if (spectateBtn) spectateBtn.style.display = "none";
   }
 
   function updateLobbyUI() {
@@ -1093,7 +1190,7 @@
 
   // ===== Input Loop =====
   function sendInput() {
-    if (phase !== "playing" || !lastSnap) return;
+    if (phase !== "playing" || !lastSnap || isSpectator) return;
     const scale = getScale();
     const worldX = (mouseX - scale.offsetX) / scale.sx;
     const worldY = (mouseY - scale.offsetY) / scale.sy;
@@ -1884,6 +1981,25 @@
       ctx.fillStyle = "rgba(0,0,0,0.7)";
       ctx.fillRect(0, 0, canvas.width, 50);
       drawNeonText(`WAVE ${wave}`, 20, 25, "#ff0", 18, "left");
+      
+      // Spectator indicator
+      if (isSpectator) {
+        ctx.fillStyle = "rgba(255,100,100,0.9)";
+        ctx.fillRect(canvas.width / 2 - 80, 5, 160, 25);
+        ctx.font = "bold 14px 'Courier New', monospace";
+        ctx.fillStyle = "#fff";
+        ctx.textAlign = "center";
+        ctx.fillText("👁 SPECTATING", canvas.width / 2, 22);
+        ctx.textAlign = "left";
+      } else if (spectatorCount > 0) {
+        // Show spectator count for players
+        ctx.font = "12px 'Courier New', monospace";
+        ctx.fillStyle = "#888";
+        ctx.textAlign = "center";
+        ctx.fillText(`👁 ${spectatorCount}`, canvas.width / 2, 42);
+        ctx.textAlign = "left";
+      }
+      
       const myPlayer = lastSnap.players.find(p => p.id === myId);
       if (myPlayer) {
         // Gold display with more spacing

@@ -162,6 +162,14 @@ function safeSend(ws, obj) {
 function broadcast(obj) {
   for (const p of players.values()) safeSend(p.ws, obj);
 }
+function broadcastAll(obj) {
+  // Send to both players and spectators
+  for (const p of players.values()) safeSend(p.ws, obj);
+  for (const ws of spectators) safeSend(ws, obj);
+}
+
+// Spectator tracking
+const spectators = new Set();
 
 // OPTIMIZED: Queue an event for client-side visual effects
 function queueEvent(type, data) {
@@ -255,7 +263,7 @@ function lobbySnapshot() {
     }));
   const readyCount = list.filter(p => p.ready).length;
   const allReady = list.length > 0 && list.every(p => p.ready);
-  return { players: list, hostId, allReady, readyCount, leaderboard };
+  return { players: list, hostId, allReady, readyCount, leaderboard, spectatorCount: spectators.size };
 }
 
 // ===== Roguelike Upgrades System =====
@@ -635,6 +643,12 @@ function resetToLobby() {
     eventQueue = [];
     wave = 0;
 
+    // Notify spectators that game ended and they should reconnect to join lobby
+    for (const ws of spectators) {
+      safeSend(ws, { t: "spectateEnd", reason: "Game ended - reconnect to join lobby" });
+    }
+    spectators.clear();
+
     const arr = Array.from(players.values()).sort((a, b) => a.slot - b.slot);
     arr.forEach((p, i) => {
       p.slot = i;
@@ -704,6 +718,10 @@ function endGame(winnerId) {
   saveLeaderboard();
 
   broadcast({ t: "gameOver", wave, scores, winnerId, solo: soloMode });
+  // Also notify spectators
+  for (const ws of spectators) {
+    safeSend(ws, { t: "gameOver", wave, scores, winnerId, solo: soloMode, wasSpectating: true });
+  }
 
   setTimeout(() => {
     if (phase === "gameover") resetToLobby();
@@ -1237,11 +1255,12 @@ function tick() {
 
     // OPTIMIZED: Only broadcast every BROADCAST_INTERVAL ticks (15Hz instead of 30Hz)
     if (tickCount % BROADCAST_INTERVAL === 0) {
-      broadcast({
+      broadcastAll({
         t: "state",
         ts: Date.now(),
         phase,
         wave,
+        spectatorCount: spectators.size,
         world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
         // OPTIMIZED: No vertices/rotation - client caches from spawn events
         // Include velocity for client-side prediction
@@ -1326,10 +1345,51 @@ wss.on("connection", (ws) => {
   if (phase === "gameover") resetToLobby();
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
-  if (phase !== "lobby") { safeSend(ws, { t: "reject", reason: "Game in progress" }); ws.close(); return; }
+  
+  // Check if they can join as a player
+  const canJoinAsPlayer = phase === "lobby" && assignSlot() >= 0;
+  
+  // If game in progress or full, offer spectator mode
+  if (!canJoinAsPlayer) {
+    const reason = phase !== "lobby" ? "Game in progress" : "Game full (max 4)";
+    safeSend(ws, { 
+      t: "spectateOffer", 
+      reason,
+      canSpectate: phase === "playing",
+      spectatorCount: spectators.size
+    });
+    
+    // Set up spectator message handler
+    ws.on("message", (data) => {
+      let msg;
+      try { msg = JSON.parse(data.toString()); } catch { return; }
+      
+      if (msg.t === "spectate" && phase === "playing") {
+        // Add as spectator
+        spectators.add(ws);
+        safeSend(ws, { 
+          t: "spectateStart",
+          world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
+          wave,
+          attackTypes: ATTACK_TYPES,
+          spectatorCount: spectators.size
+        });
+        // Notify players of new spectator
+        broadcast({ t: "spectatorUpdate", count: spectators.size });
+      }
+    });
+    
+    ws.on("close", () => {
+      if (spectators.has(ws)) {
+        spectators.delete(ws);
+        broadcast({ t: "spectatorUpdate", count: spectators.size });
+      }
+    });
+    return;
+  }
+  
+  // Normal player join
   const slot = assignSlot();
-  if (slot < 0) { safeSend(ws, { t: "reject", reason: "Game full (max 4)" }); ws.close(); return; }
-
   const id = uid();
   const player = {
     id, ws, slot,
