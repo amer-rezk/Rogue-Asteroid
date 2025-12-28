@@ -163,6 +163,13 @@
   let clientDamageNumbers = [];  // Damage numbers generated from events
   let asteroidCache = new Map(); // Cache: id -> {vertices, rotSpeed, rotation, color}
   let lastUpdateTime = Date.now();
+  
+  // CLIENT-SIDE PREDICTION for smooth movement
+  let lastServerTime = Date.now();
+  let missileStates = new Map();  // id -> {x, y, vx, vy, lastX, lastY}
+  let bulletStates = new Map();   // id -> {x, y, vx, vy}
+  const BULLET_SPEED = 175;       // Must match server
+  const PREDICTION_ENABLED = true;
 
   // ===== Utilities =====
   function hexToRgba(hex, alpha) {
@@ -281,6 +288,72 @@
     for (const [id, data] of asteroidCache) {
       data.rotation += data.rotSpeed * dt;
     }
+    
+    // CLIENT-SIDE PREDICTION: Move objects between server updates
+    if (PREDICTION_ENABLED && lastSnap) {
+      // Check which players have slowfield active
+      const slowfieldSlots = new Set();
+      if (lastSnap.players) {
+        for (const p of lastSnap.players) {
+          if (p.upgrades?.slowfield) {
+            slowfieldSlots.add(p.slot);
+          }
+        }
+      }
+      
+      // Build a map of missile FTL states from lastSnap
+      const missileInFTL = new Map();
+      if (lastSnap.missiles) {
+        for (const m of lastSnap.missiles) {
+          missileInFTL.set(m.id, m.inFTL);
+        }
+      }
+      
+      // Predict missile positions
+      for (const [id, state] of missileStates) {
+        const inFTL = missileInFTL.get(id);
+        
+        if (inFTL) {
+          // FTL mode: fast vertical, slow horizontal
+          state.x += state.vx * dt * 0.3;
+          state.y += state.vy * dt * 8;
+        } else {
+          // Normal mode: check if in slowfield
+          const segmentWidth = world.segmentWidth || 360;
+          const missileSlot = Math.floor(state.x / segmentWidth);
+          const speedMult = slowfieldSlots.has(missileSlot) ? 0.75 : 1.0;
+          
+          state.x += state.vx * dt * speedMult;
+          state.y += state.vy * dt * speedMult;
+        }
+      }
+      
+      // Predict bullet positions  
+      for (const [id, state] of bulletStates) {
+        state.x += state.vx * dt;
+        state.y += state.vy * dt;
+      }
+      
+      // Apply predicted positions to lastSnap for rendering
+      if (lastSnap.missiles) {
+        for (const m of lastSnap.missiles) {
+          const state = missileStates.get(m.id);
+          if (state) {
+            m.x = state.x;
+            m.y = state.y;
+          }
+        }
+      }
+      if (lastSnap.bullets) {
+        for (const b of lastSnap.bullets) {
+          const state = bulletStates.get(b.id);
+          if (state) {
+            b.x = state.x;
+            b.y = state.y;
+          }
+        }
+      }
+    }
   }
 
   function processServerEvents(events) {
@@ -289,13 +362,24 @@
     for (const ev of events) {
       switch (ev.t) {
         case "spawn":
-          // Cache asteroid visual data
+          // Cache asteroid visual data and initial velocity
           asteroidCache.set(ev.id, {
             vertices: ev.vertices,
             rotSpeed: ev.rotSpeed,
             rotation: Math.random() * Math.PI * 2,
             color: ev.color || "#fa0"
           });
+          // Initialize prediction state with spawn velocity
+          if (PREDICTION_ENABLED) {
+            missileStates.set(ev.id, {
+              serverX: ev.x,
+              serverY: ev.y,
+              x: ev.x,
+              y: ev.y,
+              vx: ev.vx || 0,
+              vy: ev.vy || 30
+            });
+          }
           break;
           
         case "explosion":
@@ -459,6 +543,10 @@
         clientParticles = [];
         clientDamageNumbers = [];
         asteroidCache.clear();
+        // Clear prediction states
+        missileStates.clear();
+        bulletStates.clear();
+        lastServerTime = Date.now();
         showGame();
         break;
 
@@ -470,6 +558,9 @@
         screenShake = 10;
         // Clear particles between waves for cleaner visuals
         clientParticles = [];
+        // Clear prediction states for new wave
+        missileStates.clear();
+        bulletStates.clear();
         break;
 
       case "upgrade":
@@ -517,6 +608,46 @@
           processServerEvents(msg.events);
         }
         
+        // Calculate time delta for velocity estimation
+        const now = Date.now();
+        const serverDt = (now - lastServerTime) / 1000;
+        lastServerTime = now;
+        
+        // Update missile states with velocity for prediction
+        if (msg.missiles && PREDICTION_ENABLED) {
+          const newMissileStates = new Map();
+          for (const m of msg.missiles) {
+            // Use server-provided velocity directly
+            newMissileStates.set(m.id, {
+              serverX: m.x,
+              serverY: m.y,
+              x: m.x,
+              y: m.y,
+              vx: m.vx || 0,
+              vy: m.vy || 30
+            });
+          }
+          missileStates = newMissileStates;
+        }
+        
+        // Update bullet states for prediction
+        if (msg.bullets && PREDICTION_ENABLED) {
+          const newBulletStates = new Map();
+          for (const b of msg.bullets) {
+            const speed = BULLET_SPEED * 1.1; // Slight overestimate for smoothness
+            const vx = Math.cos(b.angle) * speed;
+            const vy = Math.sin(b.angle) * speed;
+            newBulletStates.set(b.id, {
+              serverX: b.x,
+              serverY: b.y,
+              x: b.x,
+              y: b.y,
+              vx, vy
+            });
+          }
+          bulletStates = newBulletStates;
+        }
+        
         // Augment missiles with cached vertices/rotation
         if (msg.missiles) {
           for (const m of msg.missiles) {
@@ -534,7 +665,7 @@
         if (msg.bullets) {
           for (const b of msg.bullets) {
             if (b.angle !== undefined) {
-              const speed = 175; // BULLET_SPEED
+              const speed = BULLET_SPEED;
               b.vx = Math.cos(b.angle) * speed;
               b.vy = Math.sin(b.angle) * speed;
             }
