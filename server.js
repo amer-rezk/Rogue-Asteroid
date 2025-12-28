@@ -45,12 +45,12 @@ const ATTACK_TYPES = {
   swarm: { 
     name: "Swarm", 
     cost: 15, 
-    count: 6, // Increased from 3
+    count: 6,
     baseHp: 0.1,
-    hpScale: 1, // Scales normally
+    hpScale: 1,
     size: "small", 
     speed: 1.3,
-    desc: "5 fast weak asteroids",
+    desc: "6 fast weak asteroids",
     color: "#ffcc00",
     icon: "🐝"
   },
@@ -59,7 +59,7 @@ const ATTACK_TYPES = {
     cost: 35,
     count: 1, 
     baseHp: 7.5,
-    hpScale: 1.5, // Scales 50% faster than wave - very tanky
+    hpScale: 1.5,
     size: "large", 
     speed: 0.6,
     desc: "Very tanky asteroid",
@@ -71,12 +71,12 @@ const ATTACK_TYPES = {
     cost: 55, 
     count: 1, 
     baseHp: 3,
-    hpScale: 1.0, // Normal scaling
+    hpScale: 1.0,
     size: "medium", 
     speed: 1.0,
     explosive: true,
-    explosionDamage: 2, // Damage dealt when exploding
-    desc: "Explodes dealing damage",
+    explosionDamage: 2,
+    desc: "Explodes dealing 2 damage",
     color: "#ff00ff",
     icon: "💣"
   },
@@ -85,11 +85,11 @@ const ATTACK_TYPES = {
     cost: 50, 
     count: 1, 
     baseHp: 5,
-    hpScale: 1.3, // Scales 30% faster
+    hpScale: 1.3,
     size: "large", 
     speed: 0.75,
-    splits: 15, // Now splits into 4
-    desc: "Splits into 4 on death",
+    splits: 15,
+    desc: "Splits into 15 on death",
     color: "#00ffff",
     icon: "💎"
   },
@@ -102,7 +102,7 @@ const ATTACK_TYPES = {
     size: "medium",
     speed: 1.1,
     phasing: true,
-    desc: "Phases through hits",
+    desc: "2 phasing asteroids",
     color: "#8800ff",
     icon: "👻"
   }
@@ -232,6 +232,23 @@ function segmentBounds(slot) {
   return { x0, x1 };
 }
 
+// Check if a player slot is alive
+function isSlotAlive(slot) {
+  if (!lockedSlots || slot < 0 || slot >= lockedSlots.length) return false;
+  const playerId = lockedSlots[slot];
+  const player = players.get(playerId);
+  return player && player.hp > 0;
+}
+
+// Get list of alive player slots
+function getAliveSlots() {
+  if (!lockedSlots) return [];
+  return lockedSlots.map((id, idx) => {
+    const p = players.get(id);
+    return (p && p.hp > 0) ? idx : -1;
+  }).filter(slot => slot >= 0);
+}
+
 function turretPositions(slot) {
   const { x0 } = segmentBounds(slot);
   const cx = x0 + SEGMENT_W / 2;
@@ -359,7 +376,7 @@ function applyUpgrade(player, card) {
     u[eff.stat] = true;
   } else if (eff.type === "multishot") {
     // Add bullets but reduce damage
-    u.multishot = (u.multishot || 0) + eff.val;
+    u.multishot = (u.multishot || 1) + eff.val; // Start from 1, add more
     // Apply damage penalty multiplicatively
     u.multishotDmgMult = (u.multishotDmgMult || 1) * (1 - eff.penalty);
   }
@@ -501,9 +518,7 @@ function spawnWave() {
   // Queue player-purchased attack asteroids (spawn slightly after natural ones)
   for (const [targetSlot, attacks] of attackQueue.entries()) {
     // Skip attacks on dead players - refund the sender
-    const targetPlayerId = lockedSlots[targetSlot];
-    const targetPlayer = players.get(targetPlayerId);
-    if (!targetPlayer || targetPlayer.hp <= 0) {
+    if (!isSlotAlive(targetSlot)) {
       // Refund attacks since target is dead
       for (const attack of attacks) {
         const sender = players.get(attack.senderId);
@@ -572,7 +587,7 @@ function startGame(solo = false) {
     if (p) {
       p.upgrades = {};
       p.towers = [null, null, null, null];
-      p.gold = solo ? 0 : 0; // No starting gold
+      p.gold = 0; // No starting gold
       p.cooldown = 0;
       p.targetX = null;
       p.targetY = null;
@@ -582,9 +597,10 @@ function startGame(solo = false) {
       p.kills = 0;
       p.damageDealt = 0;
       p.waveDamage = 0;
-      p.hp = solo ? 10 : BASE_HP_PER_PLAYER; // More HP for solo
+      p.hp = solo ? 10 : BASE_HP_PER_PLAYER;
       p.maxHp = solo ? 10 : BASE_HP_PER_PLAYER;
       p.ready = false;
+      p.lastInterest = 0; // Track last interest earned
     }
   }
 
@@ -599,6 +615,7 @@ function queueUpgradesAndNextWave() {
     if (!p || p.hp <= 0) continue;
     
     const interest = Math.floor(p.gold * 0.10);
+    p.lastInterest = interest; // Store for display
     if (interest > 0) {
       p.gold += interest;
       safeSend(p.ws, { t: "interest", amount: interest });
@@ -817,12 +834,17 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
 function fireWithMultishot(owner, originX, originY, targetX, targetY) {
   const shots = owner.upgrades?.multishot ?? 1;
   const spread = 0.10;
-  fireBullet(owner, originX, originY, targetX, targetY, 0);
-  for (let i = 1; i < shots; i++) {
-    const side = (i % 2 === 1) ? -1 : 1;
-    const layer = Math.ceil(i / 2);
-    const offset = side * layer * spread;
-    fireBullet(owner, originX, originY, targetX, targetY, offset);
+  
+  if (shots <= 1) {
+    // Single shot
+    fireBullet(owner, originX, originY, targetX, targetY, 0);
+  } else {
+    // Multiple shots with spread
+    for (let i = 0; i < shots; i++) {
+      // Center the spread around 0
+      const offset = (i - (shots - 1) / 2) * spread;
+      fireBullet(owner, originX, originY, targetX, targetY, offset);
+    }
   }
 }
 
@@ -882,6 +904,21 @@ function createExplosion(x, y, radius, color) {
 
 function addDamageNumber(x, y, amount, isCrit) {
   damageNumbers.push({ x, y, amount, isCrit, life: 1.0, vy: -60 });
+}
+
+// Unified wall bounce function for all asteroids
+function bounceOffWalls(m) {
+  const { x0, x1 } = segmentBounds(m.targetSlot);
+  
+  // Bounce off segment walls
+  if (m.x - m.r < x0) { 
+    m.x = x0 + m.r; 
+    m.vx = Math.abs(m.vx); 
+  }
+  if (m.x + m.r > x1) { 
+    m.x = x1 - m.r; 
+    m.vx = -Math.abs(m.vx); 
+  }
 }
 
 function tick() {
@@ -1025,66 +1062,63 @@ function tick() {
       m.y += m.vy * DT * speedMult;
       m.rotation += m.rotSpeed * DT;
       
-      // Spawned mobs (attackType set) are confined to their target segment
-      // Natural asteroids can cross walls freely
-      if (m.attackType) {
-        const { x0: segX0, x1: segX1 } = segmentBounds(m.targetSlot);
-        if (m.x - m.r < segX0) { m.x = segX0 + m.r; m.vx = Math.abs(m.vx); }
-        if (m.x + m.r > segX1) { m.x = segX1 - m.r; m.vx = -Math.abs(m.vx); }
-      } else {
-        // Natural asteroids bounce off world edges only
-        if (m.x - m.r < 0) { m.x = m.r; m.vx = Math.abs(m.vx); }
-        if (m.x + m.r > worldW) { m.x = worldW - m.r; m.vx = -Math.abs(m.vx); }
-      }
+      // ALL asteroids are confined to their target segment (unified wall behavior)
+      bounceOffWalls(m);
       
       // Hit ground - damage target player
       if (m.y + m.r >= GROUND_Y) {
         let blocked = false;
-        const targetSlot = m.targetSlot !== undefined ? m.targetSlot : Math.floor(m.x / SEGMENT_W);
+        const targetSlot = m.targetSlot;
         
-        for (const id of lockedSlots) {
-          const p = players.get(id);
-          if (!p?.upgrades?.shieldActive || p.slot !== targetSlot) continue;
-          if (p.upgrades.shieldActive > 0) {
-            p.upgrades.shieldActive--;
-            blocked = true;
-            createExplosion(m.x, GROUND_Y - 5, 30, "#0ff");
-            break;
-          }
-        }
-        
-        m.dead = true;
-        
-        if (!blocked) {
-          // Find player for this slot and damage them
+        // Only damage if target slot is alive
+        if (isSlotAlive(targetSlot)) {
           for (const id of lockedSlots) {
             const p = players.get(id);
-            if (p && p.slot === targetSlot) {
-              const damage = m.explosive ? 2 : 1;
-              p.hp = Math.max(0, p.hp - damage);
-              createExplosion(m.x, GROUND_Y - 5, m.explosive ? 60 : 40, m.explosive ? "#ff00ff" : "#f44");
-              
-              // Reward sender with gold for successful attack hit
-              if (m.senderId && m.attackType) {
-                const sender = players.get(m.senderId);
-                if (sender && sender.hp > 0) {
-                  const goldReward = Math.ceil(5 + wave * 0.5); // 5 base + 0.5 per wave
-                  sender.gold += goldReward;
-                  safeSend(sender.ws, { t: "attackHit", gold: goldReward, target: p.name });
-                }
-              }
-              
-              if (m.explosive) {
-                // Bomber explosion damages nearby asteroids too
-                for (const m2 of missiles) {
-                  if (m2.dead || m2 === m) continue;
-                  const d = Math.hypot(m2.x - m.x, m2.y - m.y);
-                  if (d < 50) { m2.hp -= 2; if (m2.hp <= 0) m2.dead = true; }
-                }
-              }
+            if (!p?.upgrades?.shieldActive || p.slot !== targetSlot) continue;
+            if (p.upgrades.shieldActive > 0) {
+              p.upgrades.shieldActive--;
+              blocked = true;
+              createExplosion(m.x, GROUND_Y - 5, 30, "#0ff");
               break;
             }
           }
+          
+          m.dead = true;
+          
+          if (!blocked) {
+            // Find player for this slot and damage them
+            for (const id of lockedSlots) {
+              const p = players.get(id);
+              if (p && p.slot === targetSlot) {
+                const damage = m.explosive ? 2 : 1;
+                p.hp = Math.max(0, p.hp - damage);
+                createExplosion(m.x, GROUND_Y - 5, m.explosive ? 60 : 40, m.explosive ? "#ff00ff" : "#f44");
+                
+                // Reward sender with gold for successful attack hit
+                if (m.senderId && m.attackType) {
+                  const sender = players.get(m.senderId);
+                  if (sender && sender.hp > 0) {
+                    const goldReward = Math.ceil(5 + wave * 0.5); // 5 base + 0.5 per wave
+                    sender.gold += goldReward;
+                    safeSend(sender.ws, { t: "attackHit", gold: goldReward, target: p.name });
+                  }
+                }
+                
+                if (m.explosive) {
+                  // Bomber explosion damages nearby asteroids too
+                  for (const m2 of missiles) {
+                    if (m2.dead || m2 === m) continue;
+                    const d = Math.hypot(m2.x - m.x, m2.y - m.y);
+                    if (d < 50) { m2.hp -= 2; if (m2.hp <= 0) m2.dead = true; }
+                  }
+                }
+                break;
+              }
+            }
+          }
+        } else {
+          // Target is dead, just remove the asteroid
+          m.dead = true;
         }
       }
     }
@@ -1285,6 +1319,7 @@ function tick() {
           kills: p.kills || 0,
           damageDealt: p.damageDealt || 0,
           waveDamage: p.waveDamage || 0,
+          lastInterest: p.lastInterest || 0,
           upgrades: {
             shieldActive: p.upgrades?.shieldActive ?? 0,
             slowfield: !!p.upgrades?.slowfield,
@@ -1334,6 +1369,7 @@ wss.on("connection", (ws) => {
     hp: BASE_HP_PER_PLAYER,
     maxHp: BASE_HP_PER_PLAYER,
     kills: 0,
+    lastInterest: 0,
   };
 
   players.set(id, player);
@@ -1501,19 +1537,22 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    // PvP: Buy attack to send at random opponent (supports quantity: 1, 10, or "max")
+    // PvP: Buy attack to send at random ALIVE opponent (supports quantity: 1, 10, or "max")
     if (msg.t === "buyAttack" && (phase === "playing" || phase === "upgrades")) {
       const { attackType, quantity } = msg;
       if (!ATTACK_TYPES[attackType]) return;
       
-      // Get list of valid targets (alive players that aren't the buyer)
+      // Get list of valid targets (ALIVE players that aren't the buyer)
       const validTargets = lockedSlots.filter(pid => {
         if (pid === id) return false;
         const targetPlayer = players.get(pid);
         return targetPlayer && targetPlayer.hp > 0;
       });
       
-      if (validTargets.length === 0) return; // No valid targets
+      if (validTargets.length === 0) {
+        safeSend(ws, { t: "attackFailed", reason: "No valid targets" });
+        return;
+      }
       
       const unitCost = ATTACK_TYPES[attackType].cost;
       
@@ -1532,7 +1571,7 @@ wss.on("connection", (ws) => {
       const totalCost = unitCost * toBuy;
       p.gold -= totalCost;
       
-      // Queue attacks, distributing among random targets
+      // Queue attacks, distributing among random ALIVE targets
       for (let i = 0; i < toBuy; i++) {
         const targetId = validTargets[Math.floor(Math.random() * validTargets.length)];
         const targetPlayer = players.get(targetId);
