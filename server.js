@@ -930,13 +930,14 @@ function tick() {
     if (spawnQueue.length > 0) {
       spawnTimer -= DT;
       if (spawnTimer <= 0) {
-        // Spawn 1-2 asteroids at a time for variety
-        const spawnCount = Math.min(spawnQueue.length, Math.random() < 0.7 ? 1 : 2);
+        // Spawn 1-3 asteroids at a time for variety
+        const spawnCount = Math.min(spawnQueue.length, Math.random() < 0.5 ? 1 : Math.random() < 0.8 ? 2 : 3);
         for (let i = 0; i < spawnCount && spawnQueue.length > 0; i++) {
           const queued = spawnQueue.shift();
           missiles.push(createAsteroid(queued.x, queued.y, queued.type, queued.hp, queued.targetSlot, queued.attackType, queued.senderId));
         }
-        spawnTimer = SPAWN_INTERVAL + rand(-0.1, 0.1); // Add slight randomness
+        // Random delay between 0.1 and 0.5 seconds
+        spawnTimer = 0.1 + Math.random() * 0.4;
       }
     }
 
@@ -1306,6 +1307,7 @@ function tick() {
       players: lockedSlots.map((id) => {
         const p = players.get(id);
         if (!p) return { id, slot: -1 };
+        const u = p.upgrades || {};
         return {
           id: p.id, slot: p.slot,
           name: p.name || `Player ${p.slot + 1}`,
@@ -1321,8 +1323,21 @@ function tick() {
           waveDamage: p.waveDamage || 0,
           lastInterest: p.lastInterest || 0,
           upgrades: {
-            shieldActive: p.upgrades?.shieldActive ?? 0,
-            slowfield: !!p.upgrades?.slowfield,
+            shieldActive: u.shieldActive ?? 0,
+            slowfield: !!u.slowfield,
+            // Stats for stat panel
+            damageAdd: u.damageAdd ?? 0,
+            bulletSpeedMult: u.bulletSpeedMult ?? 1,
+            fireRateMult: u.fireRateMult ?? 1,
+            multishot: u.multishot ?? 1,
+            multishotDmgMult: u.multishotDmgMult ?? 1,
+            critChance: u.critChance ?? 0,
+            explosive: u.explosive ?? 0,
+            lifespanAdd: u.lifespanAdd ?? 0,
+            ricochet: u.ricochet ?? 0,
+            pierce: u.pierce ?? 0,
+            chain: !!u.chain,
+            goldMult: u.goldMult ?? 1,
           },
         };
       }),
