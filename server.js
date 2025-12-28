@@ -1,4 +1,4 @@
-// server.js - Rogue Asteroid PvP (OPTIMIZED v3)
+// server.js - Rogue Asteroid PvP (OPTIMIZED v4)
 // Competitive asteroid defense with attack purchasing
 // 
 // OPTIMIZATIONS:
@@ -7,7 +7,8 @@
 // - Asteroid vertices sent once on spawn, cached by client
 // - Asteroid rotation simulated client-side from rotSpeed
 // - Client uses simple interpolation for smooth rendering
-// - Initial homing 50% stronger (560), weakens to 375 after first hit
+// - PREDICTIVE AIMING: No homing - bullets aim at intercept point
+// - Multishot bullets can target different asteroids
 
 const express = require("express");
 const http = require("http");
@@ -825,26 +826,54 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     lifespan: lifespan,
     isTowerBullet: !isPlayerBullet,
     bulletType: bulletType,
-    magnet: true,
     chainChance: chainChance,
     ricochet: ricochet,
     pierce: pierce,
     hitList: [],
-    hasHit: false,  // Track if bullet has hit anything (for homing strength)
   });
 }
 
-function fireWithMultishot(owner, originX, originY, targetX, targetY) {
+// PREDICTIVE AIMING: Fire bullets at intercept points, each bullet can target different asteroid
+function fireWithMultishot(owner, originX, originY, targetX, targetY, isManual = false) {
   const shots = owner.upgrades?.multishot ?? 1;
-  const spread = 0.10;
+  const bulletSpeed = BULLET_SPEED * (owner.upgrades?.bulletSpeedMult ?? 1);
   
-  if (shots <= 1) {
-    fireBullet(owner, originX, originY, targetX, targetY, 0);
-  } else {
-    for (let i = 0; i < shots; i++) {
-      const offset = (i - (shots - 1) / 2) * spread;
-      fireBullet(owner, originX, originY, targetX, targetY, offset);
+  if (isManual) {
+    // Manual shooting: all bullets go to cursor with spread
+    const spread = 0.10;
+    if (shots <= 1) {
+      fireBullet(owner, originX, originY, targetX, targetY, 0);
+    } else {
+      for (let i = 0; i < shots; i++) {
+        const offset = (i - (shots - 1) / 2) * spread;
+        fireBullet(owner, originX, originY, targetX, targetY, offset);
+      }
     }
+    return;
+  }
+  
+  // Auto-aim: find targets and calculate intercept points
+  const targets = findMultipleTargets(originX, originY, owner.slot, shots);
+  
+  if (targets.length === 0) {
+    // No targets, fire at default position
+    fireBullet(owner, originX, originY, targetX, targetY, 0);
+    return;
+  }
+  
+  // Fire each bullet at a different target (or cycle through if fewer targets)
+  for (let i = 0; i < shots; i++) {
+    const target = targets[i % targets.length];
+    const intercept = calculateInterceptPoint(originX, originY, bulletSpeed, target);
+    
+    // Small spread between bullets aimed at same target
+    let spread = 0;
+    if (targets.length < shots) {
+      const sameTargetIndex = Math.floor(i / targets.length);
+      spread = (sameTargetIndex - 0.5) * 0.05;
+    }
+    
+    fireBullet(owner, originX, originY, intercept.x, intercept.y, spread);
   }
 }
 
@@ -867,6 +896,93 @@ function findBestTarget(x0, x1, turretX, turretY, rangeMult = 1.0, ownerSlot = 0
     }
   }
   return best;
+}
+
+// Find multiple targets for multishot, excluding already-targeted missiles
+function findMultipleTargets(turretX, turretY, ownerSlot, count, excludeIds = new Set()) {
+  const targets = [];
+  const { x0: segX0, x1: segX1 } = segmentBounds(ownerSlot);
+  
+  // Score all valid targets
+  const scored = [];
+  for (const m of missiles) {
+    if (m.dead || m.isPhased) continue;
+    if (m.x < segX0 || m.x > segX1) continue;
+    if (m.y < 0) continue;
+    if (m.attackType && m.targetSlot !== ownerSlot) continue;
+    if (excludeIds.has(m.id)) continue;
+    
+    const danger = m.y / GROUND_Y;
+    const dist = Math.hypot(m.x - turretX, m.y - turretY);
+    const score = danger * 1000 - dist * 0.1;
+    scored.push({ m, score });
+  }
+  
+  // Sort by score descending
+  scored.sort((a, b) => b.score - a.score);
+  
+  // Take top N targets
+  for (let i = 0; i < Math.min(count, scored.length); i++) {
+    targets.push(scored[i].m);
+  }
+  
+  return targets;
+}
+
+// Calculate intercept point for predictive aiming
+// Returns where to aim so bullet hits moving target
+function calculateInterceptPoint(turretX, turretY, bulletSpeed, target) {
+  // Target current position and velocity
+  const tx = target.x;
+  const ty = target.y;
+  const tvx = target.vx || 0;
+  const tvy = target.vy || 30; // Default downward velocity
+  
+  // Vector from turret to target
+  const dx = tx - turretX;
+  const dy = ty - turretY;
+  
+  // Quadratic coefficients for intercept time:
+  // |target_pos + target_vel * t - turret_pos| = bullet_speed * t
+  // (tvx² + tvy² - bulletSpeed²)t² + 2(dx*tvx + dy*tvy)t + (dx² + dy²) = 0
+  const a = tvx * tvx + tvy * tvy - bulletSpeed * bulletSpeed;
+  const b = 2 * (dx * tvx + dy * tvy);
+  const c = dx * dx + dy * dy;
+  
+  let t = 0;
+  
+  if (Math.abs(a) < 0.001) {
+    // Linear case (bullet speed ≈ target speed)
+    if (Math.abs(b) > 0.001) {
+      t = -c / b;
+    }
+  } else {
+    // Quadratic case
+    const discriminant = b * b - 4 * a * c;
+    if (discriminant >= 0) {
+      const sqrtD = Math.sqrt(discriminant);
+      const t1 = (-b - sqrtD) / (2 * a);
+      const t2 = (-b + sqrtD) / (2 * a);
+      
+      // Pick smallest positive time
+      if (t1 > 0.01 && t2 > 0.01) {
+        t = Math.min(t1, t2);
+      } else if (t1 > 0.01) {
+        t = t1;
+      } else if (t2 > 0.01) {
+        t = t2;
+      }
+    }
+  }
+  
+  // Clamp intercept time to reasonable range
+  t = Math.max(0, Math.min(t, 3.0)); // Max 3 seconds prediction
+  
+  // Calculate intercept point
+  return {
+    x: tx + tvx * t,
+    y: ty + tvy * t
+  };
 }
 
 function clampAimAngle(turretX, turretY, targetX, targetY) {
@@ -966,6 +1082,8 @@ function tick() {
       const baseCooldown = BULLET_COOLDOWN / (p.upgrades?.fireRateMult ?? 1);
 
       let targetX, targetY, clamped;
+      const bulletSpeed = BULLET_SPEED * (p.upgrades?.bulletSpeedMult ?? 1);
+      
       if (p.manualShooting && p.targetX != null && p.targetY != null) {
         clamped = clampAimAngle(pos.main.x, pos.main.y, p.targetX, p.targetY);
         targetX = clamped.x;
@@ -973,7 +1091,9 @@ function tick() {
       } else {
         const target = findBestTarget(x0, x1, pos.main.x, pos.main.y, 1.0, p.slot);
         if (target) {
-          clamped = clampAimAngle(pos.main.x, pos.main.y, target.x, target.y);
+          // Calculate intercept point for turret visual
+          const intercept = calculateInterceptPoint(pos.main.x, pos.main.y, bulletSpeed, target);
+          clamped = clampAimAngle(pos.main.x, pos.main.y, intercept.x, intercept.y);
         } else {
           clamped = clampAimAngle(pos.main.x, pos.main.y, pos.main.x, 50);
         }
@@ -984,7 +1104,7 @@ function tick() {
       const shouldFire = p.manualShooting || findBestTarget(x0, x1, pos.main.x, pos.main.y, 1.0, p.slot);
       if (shouldFire && p.cooldown <= 0) {
         p.cooldown = baseCooldown;
-        fireWithMultishot(p, pos.main.x, pos.main.y, clamped.x, clamped.y);
+        fireWithMultishot(p, pos.main.x, pos.main.y, clamped.x, clamped.y, p.manualShooting);
       }
 
       // Tower shooting
@@ -1001,7 +1121,13 @@ function tick() {
           const target = findBestTarget(x0, x1, towerPos.x, towerPos.y, rangeMult, p.slot);
           
           if (target) {
-            const aim = clampAimAngle(towerPos.x, towerPos.y, target.x, target.y);
+            // Calculate bullet speed for this tower
+            const u = p.upgrades || {};
+            const towerBulletSpeed = BULLET_SPEED * (1 + ((u.bulletSpeedMult ?? 1) - 1) * 0.5) * (stats.bulletType === "sniper" ? 1.5 : 1);
+            
+            // Calculate intercept point for tower
+            const intercept = calculateInterceptPoint(towerPos.x, towerPos.y, towerBulletSpeed, target);
+            const aim = clampAimAngle(towerPos.x, towerPos.y, intercept.x, intercept.y);
             tower.angle = aim.angle;
             
             if (tower.cd <= 0) {
@@ -1009,7 +1135,6 @@ function tick() {
               const fireRateBonus = ((p.upgrades?.fireRateMult ?? 1) - 1) * 0.5 + 1;
               tower.cd = stats.cooldown / levelBonus / fireRateBonus;
               
-              const u = p.upgrades || {};
               const towerProps = {
                 ...stats,
                 level: tower.level,
@@ -1125,39 +1250,8 @@ function tick() {
       }
     }
 
-    // Bullet collision
+    // Bullet update (no homing - predictive aiming handles targeting)
     for (const b of bullets) {
-      if (b.magnet) {
-        let nearest = null;
-        let nearestDist = 300;
-        const { x0: ownerX0, x1: ownerX1 } = segmentBounds(b.ownerSlot);
-        
-        for (const m of missiles) {
-          if (m.dead || m.isPhased) continue;
-          if (m.x < ownerX0 || m.x > ownerX1) continue;
-          if (m.attackType && m.targetSlot !== b.ownerSlot) continue;
-          
-          const d = Math.hypot(m.x - b.x, m.y - b.y);
-          if (d < nearestDist) {
-            nearestDist = d;
-            nearest = m;
-          }
-        }
-        if (nearest) {
-          const dx = nearest.x - b.x;
-          const dy = nearest.y - b.y;
-          const len = Math.hypot(dx, dy) || 1;
-          // Initial homing is 50% stronger so bullet commits to aimed target
-          // After first hit (pierce), homing is weaker to allow seeking new targets
-          const homingStrength = (b.hasHit ? 375 : 560) * DT;
-          b.vx += (dx / len) * homingStrength;
-          b.vy += (dy / len) * homingStrength;
-          const speed = Math.hypot(b.vx, b.vy);
-          const targetSpeed = BULLET_SPEED * 1.2;
-          b.vx = (b.vx / speed) * targetSpeed;
-          b.vy = (b.vy / speed) * targetSpeed;
-        }
-      }
       b.x += b.vx * DT;
       b.y += b.vy * DT;
 
@@ -1196,7 +1290,6 @@ function tick() {
           m.hp -= b.dmg;
           if (!b.hitList) b.hitList = [];
           b.hitList.push(m.id);
-          b.hasHit = true;  // Mark that bullet has hit something (weakens future homing)
           
           // Tesla Coil: chance to consume bullet and create chain lightning
           const triggeredLightning = b.chainChance > 0 && Math.random() < b.chainChance;
@@ -1338,7 +1431,7 @@ function tick() {
           vx: m.vx, vy: m.vy,
           attackType: m.attackType, isPhased: m.isPhased, inFTL: m.inFTL
         })),
-        // Bullets - send full vx/vy since homing changes direction constantly
+        // Bullets with vx/vy for client interpolation (no homing, predictive aim)
         bullets: bullets.map((b) => ({
           id: b.id, x: b.x, y: b.y, r: b.r, vx: b.vx, vy: b.vy,
           slot: b.ownerSlot, isCrit: b.isCrit, lifespan: b.lifespan,

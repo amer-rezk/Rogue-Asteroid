@@ -578,7 +578,15 @@
         world = msg.world;
         wave = msg.wave;
         spectatorCount = msg.spectatorCount || 0;
-        ATTACK_TYPES = msg.attackTypes || {};
+        // Update attack types from server
+        if (msg.attackTypes) {
+          for (const [key, val] of Object.entries(msg.attackTypes)) {
+            if (ATTACK_TYPES[key]) {
+              ATTACK_TYPES[key].cost = val.cost;
+              ATTACK_TYPES[key].desc = val.desc || ATTACK_TYPES[key].desc;
+            }
+          }
+        }
         // Clear client-side caches
         clientParticles = [];
         clientDamageNumbers = [];
