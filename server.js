@@ -16,7 +16,7 @@ const WORLD_H = 600;
 const GROUND_Y = 560;
 const SEGMENT_W = 360;
 
-const BASE_HP_PER_PLAYER = 8; // Increased for PvP
+const BASE_HP_PER_PLAYER = 20; // Increased for PvP
 
 const BULLET_R = 2.5;
 const BULLET_SPEED = 175; // Slowed to 25% of original (was 700)
@@ -46,7 +46,7 @@ const ATTACK_TYPES = {
     name: "Swarm", 
     cost: 15, 
     count: 5, // Increased from 3
-    baseHp: 0.5,
+    baseHp: 0.3,
     hpScale: 1.1, // Scales 10% faster than wave
     size: "small", 
     speed: 1.3,
@@ -58,7 +58,7 @@ const ATTACK_TYPES = {
     name: "Bruiser", 
     cost: 45, 
     count: 1, 
-    baseHp: 5,
+    baseHp: 7.5,
     hpScale: 1.5, // Scales 50% faster than wave - very tanky
     size: "large", 
     speed: 0.6,
@@ -312,7 +312,7 @@ function makeUpgradeOptions(player) {
     if (def.type === "multishot") {
       // Multishot scales with rarity: 1/1/2/3
       val = rarityKey === "legendary" ? 3 : rarityKey === "epic" ? 2 : 1;
-      // Damage penalty: +1 = 35%, +2 = 60%, +3 = 85%
+      // Damage penalty: +1 = 15%, +2 = 25%, +3 = 40%
       const penalty = val === 1 ? 15 : val === 2 ? 25 : 40;
       desc = def.desc.replace("{val}", val).replace("{penalty}", penalty);
       effect.val = val;
