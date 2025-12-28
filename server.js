@@ -392,8 +392,8 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
   const rotSpeed = rand(-3, 3);
   const color = attackType ? (ATTACK_TYPES[attackType]?.color || "#fa0") : "#fa0";
 
-  // OPTIMIZED: Send spawn event with vertices/rotSpeed so client can cache
-  queueEvent("spawn", { id, x, y, r, type, attackType, vertices, rotSpeed, color });
+  // OPTIMIZED: Send spawn event with vertices/rotSpeed/velocity so client can cache and predict
+  queueEvent("spawn", { id, x, y, r, type, attackType, vertices, rotSpeed, color, vx, vy });
 
   return {
     id,
@@ -1240,8 +1240,10 @@ function tick() {
         wave,
         world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
         // OPTIMIZED: No vertices/rotation - client caches from spawn events
+        // Include velocity for client-side prediction
         missiles: missiles.map((m) => ({
           id: m.id, x: m.x, y: m.y, r: m.r, hp: m.hp, maxHp: m.maxHp, type: m.type,
+          vx: m.vx, vy: m.vy,
           attackType: m.attackType, isPhased: m.isPhased, inFTL: m.inFTL
         })),
         // OPTIMIZED: Send angle instead of vx/vy (1 float vs 2)
