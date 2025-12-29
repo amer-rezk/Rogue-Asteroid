@@ -90,32 +90,39 @@
   };
   let bossImagesLoaded = false;
   let imagesLoadedCount = 0;
+  let imagesSuccessCount = 0;
   const totalImages = 6;
   
-  function onBossImageLoad() {
+  function onBossImageLoad(name) {
     imagesLoadedCount++;
+    imagesSuccessCount++;
+    console.log(`✓ Boss image loaded: ${name} (${imagesSuccessCount}/${totalImages} successful)`);
     if (imagesLoadedCount >= totalImages) {
-      bossImagesLoaded = true;
-      console.log("Boss images loaded successfully");
+      bossImagesLoaded = imagesSuccessCount > 0; // Only mark loaded if at least one succeeded
+      console.log(`Boss images ready: ${imagesSuccessCount}/${totalImages} loaded`);
     }
   }
   
   function onBossImageError(name) {
-    console.warn(`Failed to load boss image: ${name}`);
+    console.warn(`✗ Failed to load boss image: ${name} - Check that file exists in docs/images/`);
     imagesLoadedCount++;
     if (imagesLoadedCount >= totalImages) {
-      console.log("Boss image loading complete (some may have failed)");
+      bossImagesLoaded = imagesSuccessCount > 0;
+      console.log(`Boss images ready: ${imagesSuccessCount}/${totalImages} loaded`);
     }
   }
   
-  bossImages.boss.onload = onBossImageLoad;
+  // Load boss image
+  bossImages.boss.onload = () => onBossImageLoad("Boss.png");
   bossImages.boss.onerror = () => onBossImageError("Boss.png");
   bossImages.boss.src = "images/Boss.png";
   
+  // Load boss ad images (1-5)
   for (let i = 1; i <= 5; i++) {
-    bossImages[`ad${i}`].onload = onBossImageLoad;
-    bossImages[`ad${i}`].onerror = () => onBossImageError(`boss-ad-${i}.png`);
-    bossImages[`ad${i}`].src = `images/boss-ad-${i}.png`;
+    const imgName = `boss-ad-${i}.png`;
+    bossImages[`ad${i}`].onload = () => onBossImageLoad(imgName);
+    bossImages[`ad${i}`].onerror = () => onBossImageError(imgName);
+    bossImages[`ad${i}`].src = `images/${imgName}`;
   }
 
   // ===== State =====
@@ -1829,16 +1836,14 @@
         const isBossAd = m.isBossAd;
         const bossAdVariant = m.bossAdVariant;
         
-        // Determine which image to use (if any)
+        // Determine which image to use (if any) - check individual image directly
         let bossImage = null;
-        if (bossImagesLoaded) {
-          if (isBoss && bossImages.boss.complete) {
-            bossImage = bossImages.boss;
-          } else if (isBossAd && bossAdVariant >= 1 && bossAdVariant <= 5) {
-            const adImg = bossImages[`ad${bossAdVariant}`];
-            if (adImg && adImg.complete) {
-              bossImage = adImg;
-            }
+        if (isBoss && bossImages.boss && bossImages.boss.complete && bossImages.boss.naturalWidth > 0) {
+          bossImage = bossImages.boss;
+        } else if (isBossAd && bossAdVariant >= 1 && bossAdVariant <= 5) {
+          const adImg = bossImages[`ad${bossAdVariant}`];
+          if (adImg && adImg.complete && adImg.naturalWidth > 0) {
+            bossImage = adImg;
           }
         }
 

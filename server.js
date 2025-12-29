@@ -498,8 +498,8 @@ function spawnWave() {
       const targetSlot = playerIdx;
       const { x0 } = segmentBounds(targetSlot);
       
-      // Boss HP Calculation (reduced by 87.5% total)
-      const bossHp = 50 + (wave * 6); 
+      // Boss HP Calculation (reduced by 50% again)
+      const bossHp = 25 + (wave * 3); 
       
       spawnQueue.push({ 
         x: x0 + SEGMENT_W / 2, 
