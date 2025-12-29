@@ -125,6 +125,36 @@
     bossImages[`ad${i}`].src = `images/${imgName}`;
   }
 
+  // ===== Main Turret Sprites =====
+  const turretImages = {
+    base: new Image(),
+    barrel: new Image()
+  };
+  let turretImagesLoaded = false;
+  let turretImagesCount = 0;
+  
+  function onTurretImageLoad(name) {
+    turretImagesCount++;
+    console.log(`✓ Turret image loaded: ${name}`);
+    if (turretImagesCount >= 2) {
+      turretImagesLoaded = true;
+      console.log("Turret images ready");
+    }
+  }
+  
+  function onTurretImageError(name) {
+    console.warn(`✗ Failed to load turret image: ${name}`);
+    turretImagesCount++;
+  }
+  
+  turretImages.base.onload = () => onTurretImageLoad("turret-main-base.png");
+  turretImages.base.onerror = () => onTurretImageError("turret-main-base.png");
+  turretImages.base.src = "images/turret-main-base.png";
+  
+  turretImages.barrel.onload = () => onTurretImageLoad("turret-main-barrel.png");
+  turretImages.barrel.onerror = () => onTurretImageError("turret-main-barrel.png");
+  turretImages.barrel.src = "images/turret-main-barrel.png";
+
   // ===== State =====
   let ws = null;
   let myId = null;
@@ -2361,25 +2391,71 @@
           ctx.restore();
         }
 
-        // Main turret
-        const turretAlpha = isDead ? 0.3 : 0.8;
-        const baseW = 24 * sx;
-        const baseH = 14 * sy;
-        ctx.fillStyle = hexToRgba(color.main, turretAlpha);
-        ctx.strokeStyle = color.main;
-        ctx.lineWidth = 1.5;
-        if (!isDead) setShadow(ctx, color.main, 15);
-        ctx.beginPath();
-        ctx.roundRect(cx - baseW / 2, 560 * sy - baseH, baseW, baseH, 3);
-        ctx.fill();
-        ctx.stroke();
-        ctx.save();
-        ctx.translate(cx, 560 * sy - baseH / 2);
-        ctx.rotate(p.turretAngle + Math.PI / 2);
-        ctx.fillStyle = hexToRgba(color.main, turretAlpha);
-        ctx.fillRect(-2.5 * sx, -22 * sy, 5 * sx, 22 * sy);
-        ctx.restore();
-        clearShadow(ctx);
+        // Main turret using sprites
+        const turretAlpha = isDead ? 0.3 : 1;
+        const turretCenterX = cx;
+        const turretCenterY = 560 * sy - 20 * sy; // Center point of the turret
+        
+        // Check if turret images are loaded
+        const hasBase = turretImages.base.complete && turretImages.base.naturalWidth > 0;
+        const hasBarrel = turretImages.barrel.complete && turretImages.barrel.naturalWidth > 0;
+        
+        if (hasBase && hasBarrel) {
+          // Sprite-based rendering
+          const baseSize = 50 * sx; // Size of the base sprite
+          const barrelW = 24 * sx;  // Width of barrel sprite
+          const barrelH = 50 * sy;  // Height of barrel sprite
+          
+          ctx.save();
+          ctx.globalAlpha = turretAlpha;
+          
+          // Draw glow effect behind turret
+          if (!isDead) {
+            setShadow(ctx, color.main, 15);
+          }
+          
+          // Draw the rotating barrel first (so base appears on top)
+          ctx.save();
+          ctx.translate(turretCenterX, turretCenterY);
+          ctx.rotate(p.turretAngle + Math.PI / 2); // Rotate to face target
+          // Barrel's bottom-center should be at origin, so draw it offset upward
+          ctx.drawImage(turretImages.barrel, -barrelW / 2, -barrelH, barrelW, barrelH);
+          ctx.restore();
+          
+          clearShadow(ctx);
+          
+          // Draw the base on top (doesn't rotate)
+          ctx.drawImage(turretImages.base, turretCenterX - baseSize / 2, turretCenterY - baseSize / 2, baseSize, baseSize);
+          
+          // Add player color tint overlay
+          ctx.globalCompositeOperation = "multiply";
+          ctx.fillStyle = color.main;
+          ctx.beginPath();
+          ctx.arc(turretCenterX, turretCenterY, baseSize * 0.35, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalCompositeOperation = "source-over";
+          
+          ctx.restore();
+        } else {
+          // Fallback to procedural rendering if sprites not loaded
+          const baseW = 24 * sx;
+          const baseH = 14 * sy;
+          ctx.fillStyle = hexToRgba(color.main, turretAlpha);
+          ctx.strokeStyle = color.main;
+          ctx.lineWidth = 1.5;
+          if (!isDead) setShadow(ctx, color.main, 15);
+          ctx.beginPath();
+          ctx.roundRect(cx - baseW / 2, 560 * sy - baseH, baseW, baseH, 3);
+          ctx.fill();
+          ctx.stroke();
+          ctx.save();
+          ctx.translate(cx, 560 * sy - baseH / 2);
+          ctx.rotate(p.turretAngle + Math.PI / 2);
+          ctx.fillStyle = hexToRgba(color.main, turretAlpha);
+          ctx.fillRect(-2.5 * sx, -22 * sy, 5 * sx, 22 * sy);
+          ctx.restore();
+          clearShadow(ctx);
+        }
 
         // Tower slots
         const offsets = [-110, -50, 50, 110];
