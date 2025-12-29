@@ -254,9 +254,11 @@
   
   // SMOOTH INTERPOLATION for fluid movement
   let lastServerTime = Date.now();
-  let missileStates = new Map();  // id -> {x, y, targetX, targetY, vx, vy}
-  let bulletStates = new Map();   // id -> {x, y, targetX, targetY, vx, vy}
-  const INTERP_SPEED = 0.25;      // Increased for smoother catch-up to server position
+  let serverTimeDelta = 66; // Expected ms between server updates (15Hz = 66ms)
+  let missileStates = new Map();  // id -> {x, y, targetX, targetY, vx, vy, lastUpdate}
+  let bulletStates = new Map();   // id -> {x, y, targetX, targetY, vx, vy, lastUpdate}
+  const INTERP_SNAP_DIST = 100;   // Snap to server position if more than this far off
+  const PREDICTION_BLEND = 0.15;  // How fast to blend toward server position (lower = smoother but more latent)
 
   // ===== Utilities =====
   function hexToRgba(hex, alpha) {
@@ -404,35 +406,57 @@
       data.rotation += data.rotSpeed * dt;
     }
     
-    // SMOOTH INTERPOLATION: Frame-rate independent smoothing toward server positions
+    // SMOOTH INTERPOLATION: Client-side prediction with server reconciliation
     if (lastSnap) {
-      // Calculate frame-rate independent interpolation factor
-      // At 60fps (dt=0.0167), factor ≈ 0.25. At 30fps (dt=0.033), factor ≈ 0.44
-      const interpFactor = 1 - Math.pow(1 - INTERP_SPEED, dt * 60);
+      const now = Date.now();
       
-      // Interpolate missiles toward their target positions
+      // Interpolate missiles using velocity prediction + smooth blend to server
       for (const [id, state] of missileStates) {
-        // Move toward target with velocity-based prediction
+        // Pure velocity-based prediction
         state.x += state.vx * dt;
         state.y += state.vy * dt;
         
-        // Smoothly correct toward server target (frame-rate independent)
-        state.x += (state.targetX - state.x) * interpFactor;
-        state.y += (state.targetY - state.y) * interpFactor;
-        
-        // Also advance target by velocity (server is also moving it)
+        // Also advance target (server position) by velocity
         state.targetX += state.vx * dt;
         state.targetY += state.vy * dt;
+        
+        // Calculate distance to server position
+        const dx = state.targetX - state.x;
+        const dy = state.targetY - state.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        
+        // If too far off, snap closer; otherwise smoothly blend
+        if (dist > INTERP_SNAP_DIST) {
+          // Snap partway to avoid jarring teleport
+          state.x += dx * 0.5;
+          state.y += dy * 0.5;
+        } else if (dist > 1) {
+          // Smooth blend toward server position
+          const blend = Math.min(1, PREDICTION_BLEND * dt * 60);
+          state.x += dx * blend;
+          state.y += dy * blend;
+        }
       }
       
-      // Interpolate bullets toward their target positions
+      // Interpolate bullets (same logic but bullets move faster)
       for (const [id, state] of bulletStates) {
         state.x += state.vx * dt;
         state.y += state.vy * dt;
-        state.x += (state.targetX - state.x) * interpFactor;
-        state.y += (state.targetY - state.y) * interpFactor;
         state.targetX += state.vx * dt;
         state.targetY += state.vy * dt;
+        
+        const dx = state.targetX - state.x;
+        const dy = state.targetY - state.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        
+        if (dist > INTERP_SNAP_DIST * 0.5) {
+          state.x += dx * 0.5;
+          state.y += dy * 0.5;
+        } else if (dist > 1) {
+          const blend = Math.min(1, PREDICTION_BLEND * 1.5 * dt * 60);
+          state.x += dx * blend;
+          state.y += dy * blend;
+        }
       }
       
       // Apply interpolated positions to lastSnap for rendering
@@ -495,6 +519,24 @@
         case "lightning":
           // Tesla coil lightning effect
           createLightningEffect(ev.points, ev.isCrit, ev.slot);
+          break;
+          
+        case "bulletSpawn":
+          // Immediately add bullet to local state for smooth rendering
+          if (!bulletStates.has(ev.id)) {
+            bulletStates.set(ev.id, {
+              x: ev.x,
+              y: ev.y,
+              targetX: ev.x,
+              targetY: ev.y,
+              vx: ev.vx,
+              vy: ev.vy,
+              lastUpdate: Date.now(),
+              slot: ev.slot,
+              isCrit: ev.isCrit,
+              bulletColor: ev.bulletColor
+            });
+          }
           break;
       }
     }
@@ -858,6 +900,12 @@
         
         // Calculate time delta for velocity estimation
         const now = Date.now();
+        // Track server update timing for jitter compensation
+        const timeSinceLastUpdate = now - lastServerTime;
+        if (timeSinceLastUpdate > 10 && timeSinceLastUpdate < 500) {
+          // Smooth the expected delta (rolling average)
+          serverTimeDelta = serverTimeDelta * 0.8 + timeSinceLastUpdate * 0.2;
+        }
         lastServerTime = now;
         
         // Update missile states - store server position as target
@@ -865,11 +913,13 @@
           for (const m of msg.missiles) {
             const prev = missileStates.get(m.id);
             if (prev) {
-              // Existing missile: update target, keep current interpolated position
+              // Existing missile: update target to server position
+              // Reset target to actual server position (not predicted)
               prev.targetX = m.x;
               prev.targetY = m.y;
               prev.vx = m.vx || 0;
               prev.vy = m.vy || 30;
+              prev.lastUpdate = now;
             } else {
               // New missile: start at server position
               missileStates.set(m.id, {
@@ -878,7 +928,8 @@
                 targetX: m.x,
                 targetY: m.y,
                 vx: m.vx || 0,
-                vy: m.vy || 30
+                vy: m.vy || 30,
+                lastUpdate: now
               });
             }
           }
@@ -898,6 +949,7 @@
               prev.targetY = b.y;
               prev.vx = b.vx;
               prev.vy = b.vy;
+              prev.lastUpdate = now;
             } else {
               bulletStates.set(b.id, {
                 x: b.x,
@@ -905,7 +957,8 @@
                 targetX: b.x,
                 targetY: b.y,
                 vx: b.vx,
-                vy: b.vy
+                vy: b.vy,
+                lastUpdate: now
               });
             }
           }
@@ -1569,14 +1622,25 @@
   }
 
   // ===== Input Loop =====
+  let lastInputX = 0, lastInputY = 0, lastInputShooting = false;
   function sendInput() {
     if (phase !== "playing" || !lastSnap || isSpectator) return;
     const scale = getScale();
     const worldX = (mouseX - scale.offsetX) / scale.sx;
     const worldY = (mouseY - scale.offsetY) / scale.sy;
-    send({ t: "input", x: worldX, y: worldY, shooting: mouseDown && !buildMenuOpen && !uiHovered });
+    const shooting = mouseDown && !buildMenuOpen && !uiHovered;
+    
+    // Only send if position changed significantly or shooting state changed
+    const dx = Math.abs(worldX - lastInputX);
+    const dy = Math.abs(worldY - lastInputY);
+    if (dx > 2 || dy > 2 || shooting !== lastInputShooting) {
+      send({ t: "input", x: worldX, y: worldY, shooting });
+      lastInputX = worldX;
+      lastInputY = worldY;
+      lastInputShooting = shooting;
+    }
   }
-  setInterval(sendInput, 33);
+  setInterval(sendInput, 50); // 20Hz input rate (down from 30Hz)
 
   // ===== Rendering =====
   function getScale() {
@@ -1938,13 +2002,13 @@
 
       // Player effects (slowfield, shield)
       for (const p of lastSnap.players) {
-        if (p.upgrades?.slowfield) {
+        if (p.slowfield) {
           ctx.fillStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.04);
           ctx.fillRect(p.slot * world.segmentWidth * sx, 0, world.segmentWidth * sx, 560 * sy);
         }
       }
       for (const p of lastSnap.players) {
-        if (p.upgrades?.shieldActive > 0) {
+        if (p.shieldActive > 0) {
           const cx = (p.slot * world.segmentWidth + world.segmentWidth / 2) * sx;
           ctx.strokeStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.5);
           ctx.lineWidth = 3;

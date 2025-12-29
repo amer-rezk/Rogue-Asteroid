@@ -19,7 +19,7 @@ const { WebSocketServer } = require("ws");
 // ===== Game constants =====
 const MAX_PLAYERS = 4;
 const TICK_RATE = 30;          // Physics at 30Hz
-const BROADCAST_RATE = 30;     // Network at 30Hz (Smoother, slightly more bandwidth)
+const BROADCAST_RATE = 15;     // Network at 15Hz (reduced bandwidth, client interpolates)
 const DT = 1 / TICK_RATE;
 const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 2 ticks
 
@@ -1125,7 +1125,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
 
   const isPlayerBullet = !overrideProps;
 
-  bullets.push({
+  const bullet = {
     id: uid(),
     ownerId: owner.id,
     ownerSlot: owner.slot,
@@ -1145,6 +1145,20 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     hitList: [],
     modules: modules, // Store modules for hit effects
     bulletColor: bulletColor, // Custom color for confetti
+  };
+  bullets.push(bullet);
+  
+  // Emit spawn event for immediate client prediction
+  eventQueue.push({
+    t: "bulletSpawn",
+    id: bullet.id,
+    x: bullet.x,
+    y: bullet.y,
+    vx: bullet.vx,
+    vy: bullet.vy,
+    slot: bullet.ownerSlot,
+    isCrit: bullet.isCrit,
+    bulletColor: bullet.bulletColor
   });
 }
 
@@ -2203,26 +2217,25 @@ function tick() {
             turretAngle: p.turretAngle || -Math.PI / 2,
             isManual: !!p.manualShooting,
             towers: p.towers,
-            inventory: p.inventory || [], // Module cards in inventory
+            inventory: p.inventory || [],
             kills: p.kills || 0,
             damageDealt: p.damageDealt || 0,
             waveDamage: p.waveDamage || 0,
             lastInterest: p.lastInterest || 0,
+            // Flat properties for quick access (used in rendering)
+            shieldActive: u.shieldActive || 0,
+            slowfield: !!u.slowfield,
+            // Full upgrades for stats panel
             upgrades: {
-              shieldActive: u.shieldActive ?? 0,
-              slowfield: !!u.slowfield,
-              damageAdd: u.damageAdd ?? 0,
-              bulletSpeedMult: u.bulletSpeedMult ?? 1,
-              fireRateMult: u.fireRateMult ?? 1,
-              multishot: u.multishot ?? 1,
-              multishotDmgMult: u.multishotDmgMult ?? 1,
-              critChance: u.critChance ?? 0,
-              explosive: u.explosive ?? 0,
-              lifespanAdd: u.lifespanAdd ?? 0,
-              ricochet: u.ricochet ?? 0,
-              pierce: u.pierce ?? 0,
-              chainChance: u.chainChance ?? 0,
-              goldMult: u.goldMult ?? 1,
+              damageAdd: u.damageAdd || 0,
+              bulletSpeedMult: u.bulletSpeedMult || 1,
+              fireRateMult: u.fireRateMult || 1,
+              multishot: u.multishot || 1,
+              critChance: u.critChance || 0,
+              explosive: u.explosive || 0,
+              pierce: u.pierce || 0,
+              chainChance: u.chainChance || 0,
+              goldMult: u.goldMult || 1,
             },
           };
         }),
