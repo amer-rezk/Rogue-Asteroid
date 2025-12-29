@@ -476,13 +476,13 @@
     }
   }
 
-  function processServerEvents(events) {
+  function processServerEvents(events, skipVisualEffects = false) {
     if (!events || !Array.isArray(events)) return;
     
     for (const ev of events) {
       switch (ev.t) {
         case "spawn":
-          // Cache asteroid visual data and initial velocity
+          // Always process spawns - they cache visual data needed for rendering
           asteroidCache.set(ev.id, {
             vertices: ev.vertices,
             rotSpeed: ev.rotSpeed,
@@ -502,20 +502,27 @@
           break;
           
         case "explosion":
-          createClientParticle(ev.x, ev.y, ev.color, ev.radius > 30 ? 12 : 8, ev.radius / 25);
+          // Skip visual effects if tab was hidden
+          if (!skipVisualEffects) {
+            createClientParticle(ev.x, ev.y, ev.color, ev.radius > 30 ? 12 : 8, ev.radius / 25);
+          }
           break;
           
         case "damage":
-          createClientDamageNumber(ev.x, ev.y, ev.amount, ev.isCrit);
+          if (!skipVisualEffects) {
+            createClientDamageNumber(ev.x, ev.y, ev.amount, ev.isCrit);
+          }
           break;
           
         case "lightning":
           // Tesla coil lightning effect
-          createLightningEffect(ev.points, ev.isCrit, ev.slot);
+          if (!skipVisualEffects) {
+            createLightningEffect(ev.points, ev.isCrit, ev.slot);
+          }
           break;
           
         case "bulletSpawn":
-          // Immediately add bullet to local state for smooth rendering
+          // Always process bullet spawns - needed for rendering
           if (!bulletStates.has(ev.id)) {
             bulletStates.set(ev.id, {
               x: ev.x,
@@ -761,7 +768,6 @@
         // Clear prediction states
         missileStates.clear();
         bulletStates.clear();
-        lastServerTime = Date.now();
         showGame();
         break;
 
@@ -870,20 +876,10 @@
         break;
 
       case "state":
-        // Process server events first (spawns, explosions, damage)
+        // Process server events - skip visual effects if tab is hidden
         if (msg.events) {
-          processServerEvents(msg.events);
+          processServerEvents(msg.events, !isTabVisible);
         }
-        
-        // Calculate time delta for velocity estimation
-        const now = Date.now();
-        // Track server update timing for jitter compensation
-        const timeSinceLastUpdate = now - lastServerTime;
-        if (timeSinceLastUpdate > 10 && timeSinceLastUpdate < 500) {
-          // Smooth the expected delta (rolling average)
-          serverTimeDelta = serverTimeDelta * 0.8 + timeSinceLastUpdate * 0.2;
-        }
-        lastServerTime = now;
         
         // Update missile states - blend toward server position for smoothness
         if (msg.missiles) {
@@ -1823,8 +1819,15 @@
   
   // Handle visibility change - pause heavy rendering when tab is hidden
   document.addEventListener("visibilitychange", () => {
+    const wasHidden = !isTabVisible;
     isTabVisible = !document.hidden;
-    if (isTabVisible) {
+    
+    if (isTabVisible && wasHidden) {
+      // Clear all accumulated visual effects when returning to tab
+      // This prevents a burst of particles/numbers trying to render at once
+      clientParticles = [];
+      clientDamageNumbers = [];
+      clientLightning = [];
       lastFrameTime = performance.now(); // Reset to avoid huge dt jump
     }
   });
