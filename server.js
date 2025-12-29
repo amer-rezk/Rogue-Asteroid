@@ -53,9 +53,9 @@ const MAX_TOWER_LEVEL = 5;
 
 // ===== PvP Attack Units =====
 const ATTACK_TYPES = {
-  swarm: { name: "Swarm", cost: 25, count: 6, baseHp: 0.1, hpScale: 0.75, size: "small", speed: 1.3, desc: "6 fast weak asteroids", color: "#ffcc00", icon: "🐝" },
+  swarm: { name: "Swarm", cost: 25, count: 3, baseHp: 0.1, hpScale: 0.75, size: "small", speed: 1.3, desc: "3 fast weak asteroids", color: "#ffcc00", icon: "🐝" },
   bruiser: { name: "Bruiser", cost: 35, count: 1, baseHp: 7.5, hpScale: 1.5, size: "large", speed: 0.6, desc: "Very tanky asteroid", color: "#ff4444", icon: "🪨" },
-  bomber: { name: "Bomber", cost: 55, count: 1, baseHp: 3, hpScale: 1.0, size: "medium", speed: 1.0, explosive: true, explosionDamage: 2, desc: "Explodes dealing 2 damage", color: "#ff00ff", icon: "💣" },
+  carrier: { name: "Carrier", cost: 60, count: 1, baseHp: 6, hpScale: 1.3, size: "large", speed: 0.5, spawner: true, spawnInterval: 2.0, spawnCount: 2, desc: "Spawns minions!", color: "#ff00ff", icon: "👑" },
   splitter: { name: "Splitter", cost: 50, count: 1, baseHp: 5, hpScale: 1.3, size: "large", speed: 0.75, splits: 15, desc: "Splits into 15 on death", color: "#00ffff", icon: "💎" },
   ghost: { name: "Ghost", cost: 40, count: 2, baseHp: 2, hpScale: 1.2, size: "medium", speed: 1.1, phasing: true, desc: "2 phasing asteroids", color: "#8800ff", icon: "👻" }
 };
@@ -426,7 +426,7 @@ function generateAsteroidShape(baseRadius) {
   return points;
 }
 
-function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId = null) {
+function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId = null, bossAdVariant = null) {
   const sizeMap = { small: 10, medium: 13, large: 17, boss: 75 }; // Boss reduced to 75 radius
   const r = sizeMap[type] || 12;
   const speedMult = type === "boss" ? 0.3 : (attackType ? (ATTACK_TYPES[attackType]?.speed || 1) : 1); // Boss moves slow
@@ -444,9 +444,13 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
   const vertices = generateAsteroidShape(r);
   const rotSpeed = rand(-3, 3);
   const color = attackType ? (ATTACK_TYPES[attackType]?.color || "#fa0") : "#fa0";
+  
+  // Determine if this is a boss or boss ad (for image rendering)
+  const isBoss = type === "boss";
+  const isBossAd = bossAdVariant !== null;
 
   // OPTIMIZED: Send spawn event with vertices/rotSpeed/velocity so client can cache and predict
-  queueEvent("spawn", { id, x, y, r, type, attackType, vertices, rotSpeed, color, vx, vy });
+  queueEvent("spawn", { id, x, y, r, type, attackType, vertices, rotSpeed, color, vx, vy, isBoss, isBossAd, bossAdVariant });
 
   return {
     id,
@@ -462,7 +466,13 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
     senderId: senderId,
     phaseTimer: attackType === "ghost" ? 0 : null,
     splits: attackType === "splitter" ? (ATTACK_TYPES.splitter?.splits || 4) : 0,
-    explosive: attackType === "bomber",
+    accelerates: false, // Removed juggernaut
+    // Carrier spawner properties
+    isCarrier: attackType === "carrier",
+    carrierSpawnTimer: attackType === "carrier" ? ATTACK_TYPES.carrier.spawnInterval : null,
+    isBoss: isBoss,
+    isBossAd: isBossAd,
+    bossAdVariant: bossAdVariant,
     inFTL: true,
     ftlThreshold: ftlThreshold,
     ftlTrail: [],
@@ -1255,6 +1265,35 @@ function tick() {
       m.y += m.vy * DT * speedMult;
       m.rotation += m.rotSpeed * DT;
       
+      // Carrier: Spawns mini asteroids periodically
+      if (m.isCarrier && m.carrierSpawnTimer !== null && !m.inFTL) {
+        m.carrierSpawnTimer -= DT;
+        if (m.carrierSpawnTimer <= 0) {
+          // Spawn mini asteroids
+          const spawnCount = ATTACK_TYPES.carrier?.spawnCount || 2;
+          for (let i = 0; i < spawnCount; i++) {
+            const offsetX = (Math.random() - 0.5) * 30;
+            const miniHp = 0.5 + wave * 0.1; // Very weak minions
+            const mini = createAsteroid(
+              m.x + offsetX, 
+              m.y + m.r, 
+              "small", 
+              miniHp, 
+              m.targetSlot, 
+              null, // No attack type - just regular small asteroid
+              m.senderId
+            );
+            mini.inFTL = false; // Spawn immediately, no FTL effect
+            mini.vy = Math.abs(m.vy) * 1.2; // Slightly faster than parent
+            missiles.push(mini);
+          }
+          // Reset timer
+          m.carrierSpawnTimer = ATTACK_TYPES.carrier?.spawnInterval || 2.0;
+          // Visual feedback
+          createExplosion(m.x, m.y + m.r, 15, ATTACK_TYPES.carrier?.color || "#ff00ff");
+        }
+      }
+      
       bounceOffWalls(m);
       
       if (m.y + m.r >= GROUND_Y) {
@@ -1279,11 +1318,11 @@ function tick() {
             for (const id of lockedSlots) {
               const p = players.get(id);
               if (p && p.slot === targetSlot) {
-                // If Boss, deal 9999 damage. Otherwise normal damage.
-                const damage = m.type === "boss" ? 9999 : (m.explosive ? 2 : 1);
+                // If Boss, deal 9999 damage. Otherwise 1 damage.
+                const damage = m.type === "boss" ? 9999 : 1;
                 const wasAlive = p.hp > 0;
                 p.hp = Math.max(0, p.hp - damage);
-                createExplosion(m.x, GROUND_Y - 5, m.explosive ? 60 : 40, m.explosive ? "#ff00ff" : "#f44");
+                createExplosion(m.x, GROUND_Y - 5, 40, "#f44");
                 
                 if (wasAlive && p.hp <= 0) {
                   redistributeAsteroids(targetSlot);
@@ -1295,14 +1334,6 @@ function tick() {
                     const goldReward = Math.ceil(5 + wave * 0.5);
                     sender.gold += goldReward;
                     safeSend(sender.ws, { t: "attackHit", gold: goldReward, target: p.name });
-                  }
-                }
-                
-                if (m.explosive) {
-                  for (const m2 of missiles) {
-                    if (m2.dead || m2 === m) continue;
-                    const d = Math.hypot(m2.x - m.x, m2.y - m.y);
-                    if (d < 50) { m2.hp -= 2; if (m2.hp <= 0) m2.dead = true; }
                   }
                 }
                 break;
@@ -1360,12 +1391,16 @@ function tick() {
             if (m.hp < m.lastSpawnHp - threshold) {
               m.lastSpawnHp -= threshold;
               for(let k=0; k<5; k++) {
+                const bossAdVariant = (k % 5) + 1; // Cycle through 1-5
                 missiles.push(createAsteroid(
                   m.x + rand(-50, 50), 
                   m.y + rand(20, 100), 
                   "medium", 
                   Math.max(2, wave), 
-                  m.targetSlot
+                  m.targetSlot,
+                  null,  // attackType
+                  null,  // senderId
+                  bossAdVariant  // bossAdVariant (1-5)
                 ));
               }
               createExplosion(m.x, m.y, 60, "#ff0000");
@@ -1513,7 +1548,8 @@ function tick() {
         missiles: missiles.map((m) => ({
           id: m.id, x: m.x, y: m.y, r: m.r, hp: m.hp, maxHp: m.maxHp, type: m.type,
           vx: m.vx, vy: m.vy,
-          attackType: m.attackType, isPhased: m.isPhased, inFTL: m.inFTL
+          attackType: m.attackType, isPhased: m.isPhased, inFTL: m.inFTL,
+          isBoss: m.isBoss, isBossAd: m.isBossAd, bossAdVariant: m.bossAdVariant
         })),
         // Bullets with vx/vy for client interpolation (no homing, predictive aim)
         bullets: bullets.map((b) => ({
