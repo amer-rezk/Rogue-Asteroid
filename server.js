@@ -53,7 +53,7 @@ const PLAYER_COLORS = [
 
 // ===== Tower Definitions =====
 const TOWER_TYPES = {
-  0: { name: "Gatling", cost: 50, damage: 0.25, cooldown: 0.25, rangeMult: 0.8, color: "#ffff00", upgradeCost: 40, bulletType: "gatling" },
+  0: { name: "Gatling", cost: 50, damage: 0.5, cooldown: 0.25, rangeMult: 0.8, color: "#ffff00", upgradeCost: 40, bulletType: "gatling" },
   1: { name: "Sniper", cost: 120, damage: 5, cooldown: 1.2, rangeMult: 1.5, color: "#00ff00", upgradeCost: 80, bulletType: "sniper" },
   2: { name: "Missile", cost: 250, damage: 8, cooldown: 2.0, rangeMult: 1.0, color: "#ff0000", explosive: 1, upgradeCost: 150, bulletType: "missile" }
 };
@@ -1216,8 +1216,11 @@ function findBestTarget(x0, x1, turretX, turretY, rangeMult = 1.0, ownerSlot = 0
     if (m.attackType && m.targetSlot !== ownerSlot) continue;
     
     const danger = m.y / GROUND_Y;
-    const dist = Math.hypot(m.x - turretX, m.y - turretY);
-    const score = danger * 1000 - dist * 0.1;
+    const dx = m.x - turretX;
+    const dy = m.y - turretY;
+    // Use squared distance (sqrt not needed for comparison)
+    const distSq = dx * dx + dy * dy;
+    const score = danger * 1000 - distSq * 0.0001; // Adjusted weight for squared
     if (score > bestScore) {
       bestScore = score;
       best = m;
@@ -1241,8 +1244,11 @@ function findMultipleTargets(turretX, turretY, ownerSlot, count, excludeIds = ne
     if (excludeIds.has(m.id)) continue;
     
     const danger = m.y / GROUND_Y;
-    const dist = Math.hypot(m.x - turretX, m.y - turretY);
-    const score = danger * 1000 - dist * 0.1;
+    const dx = m.x - turretX;
+    const dy = m.y - turretY;
+    // Use squared distance (sqrt not needed for comparison)
+    const distSq = dx * dx + dy * dy;
+    const score = danger * 1000 - distSq * 0.0001; // Adjusted weight for squared
     scored.push({ m, score });
   }
   
@@ -1400,16 +1406,17 @@ function tick() {
 
       let targetX, targetY, clamped;
       const bulletSpeed = BULLET_SPEED * (p.upgrades?.bulletSpeedMult ?? 1);
+      let mainTarget = null; // Store target to avoid double lookup
       
       if (p.manualShooting && p.targetX != null && p.targetY != null) {
         clamped = clampAimAngle(pos.main.x, pos.main.y, p.targetX, p.targetY);
         targetX = clamped.x;
         targetY = clamped.y;
       } else {
-        const target = findBestTarget(x0, x1, pos.main.x, pos.main.y, 1.0, p.slot);
-        if (target) {
+        mainTarget = findBestTarget(x0, x1, pos.main.x, pos.main.y, 1.0, p.slot);
+        if (mainTarget) {
           // Calculate intercept point for turret visual
-          const intercept = calculateInterceptPoint(pos.main.x, pos.main.y, bulletSpeed, target);
+          const intercept = calculateInterceptPoint(pos.main.x, pos.main.y, bulletSpeed, mainTarget);
           clamped = clampAimAngle(pos.main.x, pos.main.y, intercept.x, intercept.y);
         } else {
           clamped = clampAimAngle(pos.main.x, pos.main.y, pos.main.x, 50);
@@ -1418,21 +1425,23 @@ function tick() {
         targetY = clamped.y;
       }
       p.turretAngle = clamped.angle;
-      const shouldFire = p.manualShooting || findBestTarget(x0, x1, pos.main.x, pos.main.y, 1.0, p.slot);
+      const shouldFire = p.manualShooting || mainTarget; // Reuse stored target
       if (shouldFire && p.cooldown <= 0) {
         p.cooldown = baseCooldown;
         fireWithMultishot(p, pos.main.x, pos.main.y, clamped.x, clamped.y, p.manualShooting);
       }
 
-      // Tower shooting
+      // Tower shooting - use simple for loop instead of forEach
       if (p.towers) {
-        p.towers.forEach((tower, idx) => {
-          if (!tower) return;
+        const towers = p.towers;
+        for (let idx = 0; idx < towers.length; idx++) {
+          const tower = towers[idx];
+          if (!tower) continue;
           const towerPos = pos.slots[idx];
-          if (!towerPos) return;
+          if (!towerPos) continue;
 
           const stats = TOWER_TYPES[tower.type];
-          if (!stats) return;
+          if (!stats) continue;
 
           const rangeMult = stats.rangeMult || 1.0;
           const target = findBestTarget(x0, x1, towerPos.x, towerPos.y, rangeMult, p.slot);
@@ -1452,8 +1461,13 @@ function tick() {
               const fireRateBonus = ((p.upgrades?.fireRateMult ?? 1) - 1) * 0.5 + 1;
               tower.cd = stats.cooldown / levelBonus / fireRateBonus;
               
-              // Collect active modules on this tower
-              const activeModules = tower.modules ? tower.modules.filter(m => m !== null) : [];
+              // Collect active modules on this tower (simple loop instead of filter)
+              const activeModules = [];
+              if (tower.modules) {
+                for (let mi = 0; mi < tower.modules.length; mi++) {
+                  if (tower.modules[mi] !== null) activeModules.push(tower.modules[mi]);
+                }
+              }
               
               const towerProps = {
                 ...stats,
@@ -1477,7 +1491,7 @@ function tick() {
           }
           
           tower.cd = Math.max(0, (tower.cd || 0) - DT);
-        });
+        }
       }
     }
 
@@ -1840,16 +1854,19 @@ function tick() {
             // Find 3 nearest enemies (excluding current target)
             const { x0: segX0, x1: segX1 } = segmentBounds(b.ownerSlot);
             const lightningTargets = [];
+            const rangeSq = 150 * 150; // Squared lightning range
             for (const m2 of missiles) {
               if (m2.dead || m2 === m) continue;
               if (m2.x < segX0 || m2.x > segX1) continue;
               if (m2.attackType && m2.targetSlot !== b.ownerSlot) continue;
-              const d = Math.hypot(m2.x - m.x, m2.y - m.y);
-              if (d < 150) { // Lightning range
-                lightningTargets.push({ m: m2, d });
+              const dx = m2.x - m.x;
+              const dy = m2.y - m.y;
+              const dSq = dx * dx + dy * dy;
+              if (dSq < rangeSq) { // Use squared distance
+                lightningTargets.push({ m: m2, dSq });
               }
             }
-            lightningTargets.sort((a, b) => a.d - b.d);
+            lightningTargets.sort((a, b) => a.dSq - b.dSq); // Sort by squared distance (same order)
             
             // Hit up to 3 targets with lightning (same damage as bullet)
             const chainPoints = [{ x: m.x, y: m.y }]; // Start from hit asteroid
@@ -1983,8 +2000,10 @@ function tick() {
             createExplosion(b.x, b.y, 35, "#fa0");
             for (const m2 of missiles) {
               if (m2.dead || m2 === m) continue;
-              const d = Math.hypot(m2.x - b.x, m2.y - b.y);
-              if (d < 35 + m2.r) { m2.hp -= 1; if (m2.hp <= 0) m2.dead = true; }
+              const dx = m2.x - b.x;
+              const dy = m2.y - b.y;
+              const touchR = 35 + m2.r;
+              if (dx * dx + dy * dy < touchR * touchR) { m2.hp -= 1; if (m2.hp <= 0) m2.dead = true; }
             }
           }
           createExplosion(b.x, b.y, 15, b.isCrit ? "#ff0" : "#0ff");
@@ -2023,8 +2042,10 @@ function tick() {
       }
     }
     
-    // Filter out expired shield explosions
-    shieldExplosions = shieldExplosions.filter(exp => exp.life > 0);
+    // In-place removal of expired shield explosions
+    for (let i = shieldExplosions.length - 1; i >= 0; i--) {
+      if (shieldExplosions[i].life <= 0) shieldExplosions.splice(i, 1);
+    }
 
     // Ghost Ally update - fly upward and damage enemies
     for (const ghost of ghostAllies) {
@@ -2051,27 +2072,36 @@ function tick() {
         }
       }
     }
-    ghostAllies = ghostAllies.filter(g => g.life > 0 && g.y > -50);
+    // In-place removal of expired ghost allies
+    for (let i = ghostAllies.length - 1; i >= 0; i--) {
+      if (ghostAllies[i].life <= 0 || ghostAllies[i].y <= -50) ghostAllies.splice(i, 1);
+    }
     
     // Gravity Well update - pull nearby enemies
     for (const well of gravityWells) {
       well.life -= DT;
+      const radiusSq = well.radius * well.radius;
       
       // Pull nearby enemies toward the well center
       for (const m of missiles) {
         if (m.dead) continue;
         const dx = well.x - m.x;
         const dy = well.y - m.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
+        const distSq = dx * dx + dy * dy;
         
-        if (dist < well.radius && dist > 5) {
+        // Quick squared distance check before expensive sqrt
+        if (distSq < radiusSq && distSq > 25) { // 25 = 5*5
+          const dist = Math.sqrt(distSq);
           const pullStrength = (well.strength / dist) * DT;
           m.x += (dx / dist) * pullStrength;
           m.y += (dy / dist) * pullStrength;
         }
       }
     }
-    gravityWells = gravityWells.filter(w => w.life > 0);
+    // In-place removal of expired gravity wells
+    for (let i = gravityWells.length - 1; i >= 0; i--) {
+      if (gravityWells[i].life <= 0) gravityWells.splice(i, 1);
+    }
     
     // Chain Reaction - check for static charged asteroid collisions
     for (const m1 of missiles) {
@@ -2111,8 +2141,14 @@ function tick() {
       }
     }
 
-    missiles = missiles.filter((m) => !m.dead);
-    bullets = bullets.filter((b) => !b.dead);
+    // In-place removal of dead missiles (avoids creating new array every tick)
+    for (let i = missiles.length - 1; i >= 0; i--) {
+      if (missiles[i].dead) missiles.splice(i, 1);
+    }
+    // In-place removal of dead bullets
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      if (bullets[i].dead) bullets.splice(i, 1);
+    }
 
     if (checkGameOver()) return;
 
