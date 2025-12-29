@@ -426,7 +426,7 @@ function generateAsteroidShape(baseRadius) {
   return points;
 }
 
-function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId = null, bossAdVariant = null) {
+function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId = null, bossAdVariant = null, noGold = false) {
   const sizeMap = { small: 10, medium: 13, large: 17, boss: 75 }; // Boss reduced to 75 radius
   const r = sizeMap[type] || 12;
   const speedMult = type === "boss" ? 0.3 : (attackType ? (ATTACK_TYPES[attackType]?.speed || 1) : 1); // Boss moves slow
@@ -458,6 +458,7 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
     hp: hp,
     maxHp: hp,
     lastSpawnHp: hp, // Track HP for boss spawns
+    bossSpawnCount: 0, // Track number of boss minion spawns (max 3)
     rotation: rand(0, Math.PI * 2),
     rotSpeed: rotSpeed,
     vertices: vertices,
@@ -473,6 +474,7 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
     isBoss: isBoss,
     isBossAd: isBossAd,
     bossAdVariant: bossAdVariant,
+    noGold: noGold || isBossAd, // Boss ads and spawned minions give no gold
     inFTL: true,
     ftlThreshold: ftlThreshold,
     ftlTrail: [],
@@ -1281,7 +1283,9 @@ function tick() {
               miniHp, 
               m.targetSlot, 
               null, // No attack type - just regular small asteroid
-              m.senderId
+              m.senderId,
+              null, // No boss variant
+              true  // noGold - carrier minions give no gold
             );
             mini.inFTL = false; // Spawn immediately, no FTL effect
             mini.vy = Math.abs(m.vy) * 1.2; // Slightly faster than parent
@@ -1297,46 +1301,83 @@ function tick() {
       bounceOffWalls(m);
       
       if (m.y + m.r >= GROUND_Y) {
-        let blocked = false;
         const targetSlot = m.targetSlot;
         
         if (isSlotAlive(targetSlot)) {
-          for (const id of lockedSlots) {
-            const p = players.get(id);
-            if (!p?.upgrades?.shieldActive || p.slot !== targetSlot) continue;
-            if (p.upgrades.shieldActive > 0) {
-              p.upgrades.shieldActive--;
-              blocked = true;
-              createExplosion(m.x, GROUND_Y - 5, 30, "#0ff");
-              break;
-            }
-          }
-          
           m.dead = true;
           
-          if (!blocked) {
+          // Boss ads don't deal damage (punishment is lost gold opportunity)
+          if (m.isBossAd) {
+            createExplosion(m.x, GROUND_Y - 5, 25, "#ff6600");
+            // No damage, just despawn
+          } 
+          // Boss deals 10 damage, reduced by shield
+          else if (m.type === "boss") {
             for (const id of lockedSlots) {
               const p = players.get(id);
               if (p && p.slot === targetSlot) {
-                // If Boss, deal 9999 damage. Otherwise 1 damage.
-                const damage = m.type === "boss" ? 9999 : 1;
-                const wasAlive = p.hp > 0;
-                p.hp = Math.max(0, p.hp - damage);
-                createExplosion(m.x, GROUND_Y - 5, 40, "#f44");
+                let bossDamage = 10;
+                const shieldCount = p.upgrades?.shieldActive || 0;
                 
-                if (wasAlive && p.hp <= 0) {
-                  redistributeAsteroids(targetSlot);
+                // Shield reduces boss damage (each shield absorbs 1 damage)
+                if (shieldCount > 0) {
+                  const absorbed = Math.min(shieldCount, bossDamage);
+                  p.upgrades.shieldActive -= absorbed;
+                  bossDamage -= absorbed;
+                  createExplosion(m.x, GROUND_Y - 5, 40, "#0ff");
                 }
                 
-                if (m.senderId && m.attackType) {
-                  const sender = players.get(m.senderId);
-                  if (sender && sender.hp > 0) {
-                    const goldReward = Math.ceil(5 + wave * 0.5);
-                    sender.gold += goldReward;
-                    safeSend(sender.ws, { t: "attackHit", gold: goldReward, target: p.name });
+                if (bossDamage > 0) {
+                  const wasAlive = p.hp > 0;
+                  p.hp = Math.max(0, p.hp - bossDamage);
+                  createExplosion(m.x, GROUND_Y - 5, 60, "#ff0000");
+                  
+                  if (wasAlive && p.hp <= 0) {
+                    redistributeAsteroids(targetSlot);
                   }
                 }
                 break;
+              }
+            }
+          }
+          // Normal asteroids deal 1 damage, shield blocks entirely
+          else {
+            let blocked = false;
+            for (const id of lockedSlots) {
+              const p = players.get(id);
+              if (!p?.upgrades?.shieldActive || p.slot !== targetSlot) continue;
+              if (p.upgrades.shieldActive > 0) {
+                p.upgrades.shieldActive--;
+                blocked = true;
+                createExplosion(m.x, GROUND_Y - 5, 30, "#0ff");
+                break;
+              }
+            }
+            
+            if (!blocked) {
+              for (const id of lockedSlots) {
+                const p = players.get(id);
+                if (p && p.slot === targetSlot) {
+                  const damage = 1;
+                  const wasAlive = p.hp > 0;
+                  p.hp = Math.max(0, p.hp - damage);
+                  createExplosion(m.x, GROUND_Y - 5, 40, "#f44");
+                  
+                  if (wasAlive && p.hp <= 0) {
+                    redistributeAsteroids(targetSlot);
+                  }
+                  
+                  // Gold reward for attacker if this was a player-sent attack
+                  if (m.senderId && m.attackType) {
+                    const sender = players.get(m.senderId);
+                    if (sender && sender.hp > 0) {
+                      const goldReward = Math.ceil(5 + wave * 0.5);
+                      sender.gold += goldReward;
+                      safeSend(sender.ws, { t: "attackHit", gold: goldReward, target: p.name });
+                    }
+                  }
+                  break;
+                }
               }
             }
           }
@@ -1385,11 +1426,12 @@ function tick() {
         if (dx * dx + dy * dy <= rr * rr) {
           m.hp -= b.dmg;
 
-          // BOSS MECHANIC: Spawn 5 minions every 10% HP lost
-          if (m.type === "boss") {
-            const threshold = m.maxHp * 0.10;
-            if (m.hp < m.lastSpawnHp - threshold) {
-              m.lastSpawnHp -= threshold;
+          // BOSS MECHANIC: Spawn 5 minions at 75%, 50%, 25% HP (3 times total)
+          if (m.type === "boss" && m.bossSpawnCount < 3) {
+            const hpPercent = m.hp / m.maxHp;
+            const nextThreshold = 1 - ((m.bossSpawnCount + 1) * 0.25); // 0.75, 0.50, 0.25
+            if (hpPercent <= nextThreshold) {
+              m.bossSpawnCount++;
               for(let k=0; k<5; k++) {
                 const bossAdVariant = (k % 5) + 1; // Cycle through 1-5
                 missiles.push(createAsteroid(
@@ -1400,7 +1442,8 @@ function tick() {
                   m.targetSlot,
                   null,  // attackType
                   null,  // senderId
-                  bossAdVariant  // bossAdVariant (1-5)
+                  bossAdVariant,  // bossAdVariant (1-5)
+                  true   // noGold - boss ads give no gold
                 ));
               }
               createExplosion(m.x, m.y, 60, "#ff0000");
@@ -1484,20 +1527,23 @@ function tick() {
             if (owner) {
               owner.score = (owner.score || 0) + 50;
               owner.kills = (owner.kills || 0) + 1;
-              if (!m.attackType) {
+              // No gold for attack asteroids OR spawned minions (splitter/carrier/boss ads)
+              if (!m.attackType && !m.noGold) {
                 const goldMult = owner.upgrades?.goldMult ?? 1;
                 const goldReward = m.type === "large" ? 4 : m.type === "medium" ? 2 : 1;
                 owner.gold = (owner.gold || 0) + Math.round(goldReward * goldMult);
               }
             }
             
+            // Splitter: spawn children with noGold flag
             if (m.splits > 0) {
               const extremeMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
               const splitHp = Math.ceil((1 + wave * 0.4) * extremeMult);
               for (let s = 0; s < m.splits; s++) {
                 const nx = m.x + rand(-30, 30);
                 const ny = m.y + rand(-20, 20);
-                missiles.push(createAsteroid(nx, ny, "small", splitHp, m.targetSlot, null));
+                const splitAsteroid = createAsteroid(nx, ny, "small", splitHp, m.targetSlot, null, m.senderId, null, true); // noGold=true
+                missiles.push(splitAsteroid);
               }
             }
           } else {
