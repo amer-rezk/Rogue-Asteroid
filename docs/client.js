@@ -182,6 +182,7 @@
   let mouseX = 0;
   let mouseY = 0;
   let mouseDown = false;
+  let uiHovered = false; // Track if mouse is over any UI element (prevents shooting)
   let hoveredUpgrade = -1;
   let forcedDisconnect = false;
 
@@ -1307,11 +1308,15 @@
   });
 
   function handleClick() {
+    // Track if we clicked on UI (to prevent shooting)
+    let uiClicked = false;
+    
     // Handle in-game chat button click
     if ((phase === "playing" || phase === "upgrades") && window.gameChatBtnBounds) {
       const btn = window.gameChatBtnBounds;
       if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) {
         toggleGameChat();
+        mouseDown = false;
         return;
       }
     }
@@ -1321,6 +1326,7 @@
       const btn = window.gameChatCloseBounds;
       if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) {
         chatOpen = false;
+        mouseDown = false;
         return;
       }
     }
@@ -1330,6 +1336,7 @@
       const btn = gameOverData.menuBtnBounds;
       if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) {
         send({ t: "returnToLobby" });
+        mouseDown = false;
         return;
       }
     }
@@ -1337,13 +1344,28 @@
     if (phase === "playing" && hoveredUpgrade >= 0 && !upgradePicked && upgradeOptions.length > 0) {
       const opt = upgradeOptions[hoveredUpgrade];
       if (opt) send({ t: "pickUpgrade", key: opt.key });
+      mouseDown = false;
       return;
     }
 
-    // Handle module card selection
+    // Handle module card selection (BEFORE buildMenuOpen check!)
     if (phase === "playing" && moduleCardPhase && hoveredModuleCard >= 0 && currentModulePicker === myId) {
       send({ t: "pickModuleCard", cardIndex: hoveredModuleCard });
+      mouseDown = false;
       return;
+    }
+    
+    // Check if clicking inside module card panel (even if not on a card)
+    if (phase === "playing" && moduleCardPhase && moduleCards.length > 0) {
+      const panelW = 220;
+      const panelX = 15;
+      const panelY = 80;
+      const panelH = Math.min(canvas.height - 160, 60 + moduleCards.length * 95 + 50);
+      if (mouseX >= panelX && mouseX <= panelX + panelW && mouseY >= panelY && mouseY <= panelY + panelH) {
+        // Clicked inside module card panel - don't process further
+        mouseDown = false;
+        return;
+      }
     }
 
     // Handle reroll button click
@@ -1352,6 +1374,7 @@
       if (myPlayer && myPlayer.gold >= currentRerollCost) {
         send({ t: "rerollUpgrades" });
       }
+      mouseDown = false;
       return;
     }
 
@@ -1366,12 +1389,14 @@
         const newCost = buyUpgradeCost + 10;
         buyUpgradeCost = Math.round(newCost * 1.10);
       }
+      mouseDown = false;
       return;
     }
 
     // Handle stats panel button click
     if (phase === "playing" && hoveredStatsBtn) {
       statsPanelOpen = !statsPanelOpen;
+      mouseDown = false;
       return;
     }
 
@@ -1381,6 +1406,7 @@
       if (mouseX >= b.x && mouseX <= b.x + b.w && mouseY >= b.y && mouseY <= b.y + b.h) {
         showDamageNumbers = !showDamageNumbers;
         localStorage.setItem("rogueAsteroidDmgNumbers", showDamageNumbers.toString());
+        mouseDown = false;
         return;
       }
     }
@@ -1388,6 +1414,7 @@
     // Handle quantity mode button clicks
     if (hoveredQuantityBtn && phase === "playing") {
       attackQuantityMode = hoveredQuantityBtn;
+      mouseDown = false;
       return;
     }
 
@@ -1399,56 +1426,80 @@
         send({ t: "buyAttack", attackType: hoveredAttack, quantity: attackQuantityMode });
         recentAttackSent = { type: hoveredAttack, time: Date.now(), quantity: attackQuantityMode };
       }
+      mouseDown = false;
       return;
+    }
+    
+    // Check if clicking on inventory panel
+    if (phase === "playing" && lastSnap) {
+      const myPlayer = lastSnap.players.find(p => p.id === myId);
+      const inv = myPlayer?.inventory || [];
+      if (inv.length > 0) {
+        const invPanelW = 180;
+        const invPanelH = 40 + Math.ceil(inv.length / 4) * 45;
+        const invPanelX = 15;
+        const invPanelY = canvas.height - invPanelH - 60;
+        if (mouseX >= invPanelX && mouseX <= invPanelX + invPanelW && mouseY >= invPanelY && mouseY <= invPanelY + invPanelH) {
+          // Clicked on inventory - select the module if hovering one
+          if (selectedInventoryModule) {
+            // Already selected one, keep it selected for slotting
+          }
+          mouseDown = false;
+          return;
+        }
+      }
     }
 
     // Handle build/upgrade menu clicks
     if (buildMenuOpen) {
+      // First check if we're clicking in any UI area - don't close menu if so
+      // Module card panel check
+      if (moduleCardPhase && moduleCards.length > 0) {
+        const panelW = 220, panelX = 15, panelY = 80;
+        const panelH = Math.min(canvas.height - 160, 60 + moduleCards.length * 95 + 50);
+        if (mouseX >= panelX && mouseX <= panelX + panelW && mouseY >= panelY && mouseY <= panelY + panelH) {
+          mouseDown = false;
+          return; // Don't close build menu, clicked in module panel
+        }
+      }
+      
       // Check if clicking on a module slot
       if (hoveredModuleSlot) {
         if (hoveredModuleSlot.hasModule && !hoveredModuleSlot.locked) {
           // Unslot the module
           send({ t: "unslotModule", towerIndex: hoveredModuleSlot.towerIndex, moduleSlot: hoveredModuleSlot.slotIndex });
+          mouseDown = false;
           return;
         } else if (!hoveredModuleSlot.hasModule && selectedInventoryModule) {
           // Slot module from inventory
           send({ t: "slotModule", towerIndex: hoveredModuleSlot.towerIndex, moduleSlot: hoveredModuleSlot.slotIndex, inventoryIndex: selectedInventoryModule.index });
           selectedInventoryModule = null;
+          mouseDown = false;
           return;
         }
+        mouseDown = false;
         return;
       }
       
       if (hoveredBuildOption === "upgrade") {
         send({ t: "upgradeTower", slotIndex: buildMenuOpen.slotIndex });
         buildMenuOpen = null;
+        mouseDown = false;
         return;
       } else if (hoveredBuildOption === "sell") {
         send({ t: "sellTower", slotIndex: buildMenuOpen.slotIndex });
         buildMenuOpen = null;
+        mouseDown = false;
         return;
       } else if (typeof hoveredBuildOption === "number" && hoveredBuildOption >= 0) {
         send({ t: "buyTower", slotIndex: buildMenuOpen.slotIndex, type: hoveredBuildOption });
         buildMenuOpen = null;
-        return;
-      } else if (hoveredModuleSlot) {
-        // Handle module slot click
-        const myPlayer = lastSnap?.players.find(p => p.id === myId);
-        const inv = myPlayer?.inventory || [];
-        
-        if (hoveredModuleSlot.hasModule) {
-          // Try to unslot the module
-          if (!hoveredModuleSlot.locked) {
-            send({ t: "unslotModule", towerIndex: hoveredModuleSlot.towerIndex, moduleSlot: hoveredModuleSlot.slotIndex });
-          }
-        } else if (selectedInventoryModule && inv.length > 0) {
-          // Slot the selected inventory module
-          send({ t: "slotModule", towerIndex: hoveredModuleSlot.towerIndex, moduleSlot: hoveredModuleSlot.slotIndex, inventoryIndex: selectedInventoryModule.index });
-          selectedInventoryModule = null;
-        }
+        mouseDown = false;
         return;
       } else {
+        // Clicking outside menu options - close menu
         buildMenuOpen = null;
+        mouseDown = false;
         return;
       }
     }
@@ -1456,12 +1507,6 @@
     // Handle inventory item click (select for slotting)
     if (phase === "playing" && selectedInventoryModule) {
       // If clicking outside tower menu, deselect
-      selectedInventoryModule = null;
-    }
-    
-    // Handle inventory card click (to select for slotting)
-    if (phase === "playing" && selectedInventoryModule && !buildMenuOpen) {
-      // Clicked somewhere else, deselect
       selectedInventoryModule = null;
     }
 
@@ -1499,7 +1544,7 @@
     const scale = getScale();
     const worldX = (mouseX - scale.offsetX) / scale.sx;
     const worldY = (mouseY - scale.offsetY) / scale.sy;
-    send({ t: "input", x: worldX, y: worldY, shooting: mouseDown && !buildMenuOpen });
+    send({ t: "input", x: worldX, y: worldY, shooting: mouseDown && !buildMenuOpen && !uiHovered });
   }
   setInterval(sendInput, 33);
 
@@ -1742,6 +1787,58 @@
       }
 
       if (!lastSnap) return;
+
+      // Reset UI hover state - will be set true if mouse is over any UI element
+      uiHovered = false;
+      
+      // Check UI bounds for hover blocking (prevents shooting when over UI)
+      const uiCheckPlayer = lastSnap.players?.find(p => p.id === myId);
+      
+      // Module card selection panel
+      if (moduleCardPhase && moduleCards.length > 0) {
+        const panelW = 220, panelX = 15, panelY = 80;
+        const panelH = Math.min(canvas.height - 160, 60 + moduleCards.length * 95 + 50);
+        if (mouseX >= panelX && mouseX <= panelX + panelW && mouseY >= panelY && mouseY <= panelY + panelH) {
+          uiHovered = true;
+        }
+      }
+      
+      // Upgrade cards panel
+      if (upgradeOptions.length > 0 && !upgradePicked) {
+        const cardW = 140, cardH = 100, cardGap = 15;
+        const totalW = upgradeOptions.length * cardW + (upgradeOptions.length - 1) * cardGap;
+        const startX = canvas.width / 2 - totalW / 2, cardY = 50;
+        if (mouseX >= startX - 10 && mouseX <= startX + totalW + 10 && mouseY >= cardY - 10 && mouseY <= cardY + cardH + 60) {
+          uiHovered = true;
+        }
+      }
+      
+      // Inventory panel
+      const uiCheckInv = uiCheckPlayer?.inventory || [];
+      if (uiCheckInv.length > 0) {
+        const invPanelW = 180;
+        const invPanelH = 40 + Math.ceil(uiCheckInv.length / 4) * 45;
+        const invPanelX = 15;
+        const invPanelY = canvas.height - invPanelH - 60;
+        if (mouseX >= invPanelX && mouseX <= invPanelX + invPanelW && mouseY >= invPanelY && mouseY <= invPanelY + invPanelH) {
+          uiHovered = true;
+        }
+      }
+      
+      // Attack panel (right side) - only in multiplayer
+      if (lastSnap.players?.length > 1) {
+        const panelX = canvas.width - 175 - 15;
+        const panelY = 10;
+        const panelH = 400; // approximate
+        if (mouseX >= panelX && mouseX <= canvas.width - 10 && mouseY >= panelY && mouseY <= panelY + panelH) {
+          uiHovered = true;
+        }
+      }
+      
+      // Build menu
+      if (buildMenuOpen) {
+        uiHovered = true;
+      }
 
       const { sx, sy, offsetX, offsetY } = getScale();
       ctx.save();
