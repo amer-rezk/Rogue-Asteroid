@@ -2401,10 +2401,10 @@
         const hasBarrel = turretImages.barrel.complete && turretImages.barrel.naturalWidth > 0;
         
         if (hasBase && hasBarrel) {
-          // Sprite-based rendering
-          const baseSize = 50 * sx; // Size of the base sprite
-          const barrelW = 24 * sx;  // Width of barrel sprite
-          const barrelH = 50 * sy;  // Height of barrel sprite
+          // Sprite-based rendering (scaled down 25%)
+          const baseSize = 37.5 * sx; // 50 * 0.75
+          const barrelW = 18 * sx;    // 24 * 0.75
+          const barrelH = 37.5 * sy;  // 50 * 0.75
           
           ctx.save();
           ctx.globalAlpha = turretAlpha;
@@ -2414,26 +2414,18 @@
             setShadow(ctx, color.main, 15);
           }
           
-          // Draw the rotating barrel first (so base appears on top)
-          ctx.save();
-          ctx.translate(turretCenterX, turretCenterY);
-          ctx.rotate(p.turretAngle + Math.PI / 2); // Rotate to face target
-          // Barrel's bottom-center should be at origin, so draw it offset upward
-          ctx.drawImage(turretImages.barrel, -barrelW / 2, -barrelH, barrelW, barrelH);
-          ctx.restore();
+          // Draw the base first (below barrel)
+          ctx.drawImage(turretImages.base, turretCenterX - baseSize / 2, turretCenterY - baseSize / 2, baseSize, baseSize);
           
           clearShadow(ctx);
           
-          // Draw the base on top (doesn't rotate)
-          ctx.drawImage(turretImages.base, turretCenterX - baseSize / 2, turretCenterY - baseSize / 2, baseSize, baseSize);
-          
-          // Add player color tint overlay
-          ctx.globalCompositeOperation = "multiply";
-          ctx.fillStyle = color.main;
-          ctx.beginPath();
-          ctx.arc(turretCenterX, turretCenterY, baseSize * 0.35, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.globalCompositeOperation = "source-over";
+          // Draw the rotating barrel on top
+          ctx.save();
+          ctx.translate(turretCenterX, turretCenterY);
+          ctx.rotate(p.turretAngle + Math.PI / 2); // Rotate to face target
+          // Barrel's image center at origin
+          ctx.drawImage(turretImages.barrel, -barrelW / 2, -barrelH / 2, barrelW, barrelH);
+          ctx.restore();
           
           ctx.restore();
         } else {
