@@ -780,11 +780,19 @@
         // Next player's turn to pick
         currentModulePicker = msg.playerId;
         modulePickTimeLeft = msg.timeLeft || 10;
+        // Update cards list from server
+        if (msg.remainingCards) {
+          moduleCards = msg.remainingCards;
+        }
         break;
 
       case "moduleCardPicked":
-        // A player picked a card
-        moduleCards = moduleCards.filter((c, i) => i !== msg.cardIndex);
+        // A player picked a card - use server's authoritative card list
+        if (msg.remainingCards) {
+          moduleCards = msg.remainingCards;
+        } else {
+          moduleCards = moduleCards.filter((c, i) => i !== msg.cardIndex);
+        }
         if (msg.playerId === myId) {
           // We picked - show confirmation
           moduleFeedback = { moduleId: msg.moduleId, time: Date.now() };
@@ -3432,108 +3440,130 @@
         ctx.textAlign = "left";
       }
 
-      // MODULE CARD SELECTION (after boss waves)
+      // MODULE CARD SELECTION (after boss waves) - Left panel
       if (phase === "playing" && moduleCardPhase && moduleCards.length > 0) {
         const MODULES = window.TOWER_MODULES || {};
         const isMyTurn = currentModulePicker === myId;
         
-        // Darken background
-        ctx.fillStyle = "rgba(0,0,0,0.7)";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        // Left panel dimensions
+        const panelW = 220;
+        const panelX = 15;
+        const panelY = 80;
+        const panelH = Math.min(canvas.height - 160, 60 + moduleCards.length * 95 + 50);
         
-        // Title
-        ctx.font = "bold 24px 'Courier New', monospace";
-        ctx.textAlign = "center";
-        ctx.fillStyle = "#ffd700";
-        ctx.shadowColor = "#ffd700";
-        ctx.shadowBlur = 20;
-        ctx.fillText("🏆 BOSS DEFEATED - CHOOSE YOUR REWARD 🏆", canvas.width / 2, 60);
+        // Panel background
+        ctx.fillStyle = "rgba(10,10,30,0.95)";
+        ctx.strokeStyle = isMyTurn ? "#ffd700" : "#666";
+        ctx.lineWidth = isMyTurn ? 3 : 2;
+        ctx.shadowColor = isMyTurn ? "#ffd700" : "#444";
+        ctx.shadowBlur = isMyTurn ? 20 : 10;
+        ctx.beginPath();
+        ctx.roundRect(panelX, panelY, panelW, panelH, 12);
+        ctx.fill();
+        ctx.stroke();
         ctx.shadowBlur = 0;
         
+        // Title
+        ctx.font = "bold 14px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#ffd700";
+        ctx.fillText("🏆 BOSS REWARD", panelX + panelW / 2, panelY + 25);
+        
         // Current picker info
-        ctx.font = "bold 16px 'Courier New', monospace";
+        ctx.font = "bold 11px 'Courier New', monospace";
         if (isMyTurn) {
           ctx.fillStyle = "#0f0";
-          ctx.fillText(`YOUR TURN! (${Math.ceil(modulePickTimeLeft)}s)`, canvas.width / 2, 90);
+          ctx.fillText(`YOUR TURN! (${Math.ceil(modulePickTimeLeft)}s)`, panelX + panelW / 2, panelY + 45);
         } else {
           const pickerName = modulePickOrder.find(p => p.id === currentModulePicker)?.name || "...";
           ctx.fillStyle = "#aaa";
-          ctx.fillText(`${pickerName}'s turn (${Math.ceil(modulePickTimeLeft)}s)`, canvas.width / 2, 90);
+          ctx.fillText(`${pickerName}'s turn`, panelX + panelW / 2, panelY + 45);
+          ctx.font = "10px 'Courier New', monospace";
+          ctx.fillText(`(${Math.ceil(modulePickTimeLeft)}s)`, panelX + panelW / 2, panelY + 58);
         }
         
-        // Module Cards
-        const modCardW = 160;
-        const modCardH = 200;
-        const modGap = 20;
-        const totalModW = moduleCards.length * modCardW + (moduleCards.length - 1) * modGap;
-        const modStartX = canvas.width / 2 - totalModW / 2;
-        const modCardY = 120;
+        // Module Cards - vertical list
+        const modCardW = panelW - 20;
+        const modCardH = 80;
+        const modGap = 10;
+        const modStartY = panelY + 65;
         
         hoveredModuleCard = -1;
         
         for (let i = 0; i < moduleCards.length; i++) {
           const card = moduleCards[i];
           const mod = MODULES[card.id] || card;
-          const cardX = modStartX + i * (modCardW + modGap);
-          const isHovered = isMyTurn && mouseX >= cardX && mouseX <= cardX + modCardW && mouseY >= modCardY && mouseY <= modCardY + modCardH;
+          const cardX = panelX + 10;
+          const cardY = modStartY + i * (modCardH + modGap);
+          
+          // Skip if card would be off screen
+          if (cardY + modCardH > panelY + panelH - 10) continue;
+          
+          const isHovered = isMyTurn && mouseX >= cardX && mouseX <= cardX + modCardW && mouseY >= cardY && mouseY <= cardY + modCardH;
           if (isHovered) hoveredModuleCard = i;
           
           // Card background
           ctx.save();
           ctx.shadowColor = mod.color || "#fff";
-          ctx.shadowBlur = isHovered ? 30 : 15;
+          ctx.shadowBlur = isHovered ? 15 : 8;
           
-          const modGrad = ctx.createLinearGradient(cardX, modCardY, cardX, modCardY + modCardH);
-          modGrad.addColorStop(0, isHovered ? "rgba(60,60,80,0.98)" : "rgba(20,20,35,0.95)");
-          modGrad.addColorStop(1, isHovered ? "rgba(45,45,65,0.98)" : "rgba(15,15,28,0.95)");
-          ctx.fillStyle = modGrad;
+          ctx.fillStyle = isHovered ? hexToRgba(mod.color, 0.3) : "rgba(20,20,40,0.9)";
+          ctx.strokeStyle = mod.color || "#fff";
+          ctx.lineWidth = isHovered ? 2 : 1;
           
           ctx.beginPath();
-          ctx.roundRect(cardX, modCardY, modCardW, modCardH, 10);
+          ctx.roundRect(cardX, cardY, modCardW, modCardH, 8);
           ctx.fill();
-          
-          ctx.strokeStyle = mod.color || "#fff";
-          ctx.lineWidth = isHovered ? 3 : 2;
           ctx.stroke();
           ctx.restore();
           
-          // Icon
-          ctx.font = "48px sans-serif";
+          // Icon (left side)
+          ctx.font = "32px sans-serif";
           ctx.textAlign = "center";
           ctx.fillStyle = "#fff";
-          ctx.fillText(mod.icon || "?", cardX + modCardW / 2, modCardY + 60);
+          ctx.fillText(mod.icon || "?", cardX + 30, cardY + 50);
           
-          // Name
-          ctx.font = "bold 12px 'Courier New', monospace";
+          // Name (right of icon)
+          ctx.font = "bold 11px 'Courier New', monospace";
+          ctx.textAlign = "left";
           ctx.fillStyle = mod.color || "#fff";
-          ctx.fillText(mod.name || card.id, cardX + modCardW / 2, modCardY + 90);
+          ctx.fillText(mod.name || card.id, cardX + 60, cardY + 22);
           
-          // Description (wrapped)
-          ctx.font = "10px 'Courier New', monospace";
-          ctx.fillStyle = "#ccc";
+          // Description (wrapped, smaller)
+          ctx.font = "9px 'Courier New', monospace";
+          ctx.fillStyle = "#aaa";
           const desc = mod.desc || "";
+          const maxLineW = modCardW - 70;
           const words = desc.split(" ");
           let line = "";
-          let lineY = modCardY + 110;
+          let lineY = cardY + 38;
           for (const word of words) {
             const testLine = line + (line ? " " : "") + word;
-            if (ctx.measureText(testLine).width > modCardW - 20) {
-              ctx.fillText(line, cardX + modCardW / 2, lineY);
+            if (ctx.measureText(testLine).width > maxLineW) {
+              ctx.fillText(line, cardX + 60, lineY);
               line = word;
-              lineY += 14;
+              lineY += 12;
+              if (lineY > cardY + modCardH - 10) break;
             } else {
               line = testLine;
             }
           }
-          if (line) ctx.fillText(line, cardX + modCardW / 2, lineY);
+          if (line && lineY <= cardY + modCardH - 10) ctx.fillText(line, cardX + 60, lineY);
           
           // Click hint
           if (isHovered) {
-            ctx.font = "bold 10px 'Courier New', monospace";
+            ctx.font = "bold 9px 'Courier New', monospace";
             ctx.fillStyle = "#0f0";
-            ctx.fillText("CLICK TO SELECT", cardX + modCardW / 2, modCardY + modCardH - 10);
+            ctx.textAlign = "right";
+            ctx.fillText("CLICK ►", cardX + modCardW - 8, cardY + modCardH - 8);
           }
         }
+        
+        // Cards remaining indicator
+        ctx.font = "9px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#666";
+        ctx.fillText(`${moduleCards.length} card${moduleCards.length !== 1 ? 's' : ''} remaining`, panelX + panelW / 2, panelY + panelH - 12);
         
         ctx.textAlign = "left";
       }

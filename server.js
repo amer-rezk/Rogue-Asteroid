@@ -193,6 +193,7 @@ const WAVE_CLEAR_DELAY = 500;
 let moduleCardPhase = false;
 let moduleCards = []; // 5 random cards to choose from
 let modulePickOrder = []; // Order of players picking (boss killer first)
+let modulePlayersPicked = new Set(); // Track who has picked
 let currentModulePicker = 0;
 let modulePickTimer = 0;
 const MODULE_PICK_TIME = 10; // 10 seconds per pick
@@ -862,6 +863,9 @@ function startModuleCardPhase() {
   const shuffled = [...MODULE_IDS].sort(() => Math.random() - 0.5);
   moduleCards = shuffled.slice(0, 5);
   
+  // Track which players have picked
+  modulePlayersPicked = new Set();
+  
   // Determine pick order: boss killer first, then by wave damage
   const alivePlayers = lockedSlots
     .map(id => players.get(id))
@@ -896,6 +900,7 @@ function endModuleCardPhase() {
   moduleCardPhase = false;
   moduleCards = [];
   modulePickOrder = [];
+  modulePlayersPicked = new Set();
   bossKillerId = null;
   
   broadcast({ t: "moduleCardPhaseEnd" });
@@ -1362,7 +1367,12 @@ function tick() {
         if (currentModulePicker >= modulePickOrder.length || moduleCards.length === 0) {
           endModuleCardPhase();
         } else {
-          broadcast({ t: "modulePickTurn", playerId: modulePickOrder[currentModulePicker], timeLeft: MODULE_PICK_TIME });
+          broadcast({ 
+            t: "modulePickTurn", 
+            playerId: modulePickOrder[currentModulePicker], 
+            timeLeft: MODULE_PICK_TIME,
+            remainingCards: moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }))
+          });
         }
       }
     }
@@ -2123,14 +2133,15 @@ function tick() {
 
     if (checkGameOver()) return;
 
-    if (missiles.length === 0 && spawnQueue.length === 0) {
+    // Don't trigger wave clear during module card selection
+    if (!moduleCardPhase && missiles.length === 0 && spawnQueue.length === 0) {
       if (waveClearedTime === 0) {
         waveClearedTime = Date.now();
       } else if (Date.now() - waveClearedTime >= WAVE_CLEAR_DELAY) {
         waveClearedTime = 0;
         queueUpgradesAndNextWave();
       }
-    } else {
+    } else if (!moduleCardPhase) {
       waveClearedTime = 0;
     }
 
@@ -2704,9 +2715,13 @@ wss.on("connection", (ws) => {
       const { cardIndex } = msg;
       if (cardIndex < 0 || cardIndex >= moduleCards.length) return;
       if (modulePickOrder[currentModulePicker] !== p.id) return; // Not your turn
+      if (modulePlayersPicked.has(p.id)) return; // Already picked
       
       const moduleId = moduleCards[cardIndex];
       if (!TOWER_MODULES[moduleId]) return;
+      
+      // Mark player as picked
+      modulePlayersPicked.add(p.id);
       
       // Add to player's inventory
       p.inventory.push(moduleId);
@@ -2714,8 +2729,15 @@ wss.on("connection", (ws) => {
       // Remove from available cards
       moduleCards.splice(cardIndex, 1);
       
-      // Announce pick
-      broadcast({ t: "moduleCardPicked", playerId: p.id, playerName: p.name, moduleId, cardIndex });
+      // Announce pick and send updated card list
+      broadcast({ 
+        t: "moduleCardPicked", 
+        playerId: p.id, 
+        playerName: p.name, 
+        moduleId, 
+        cardIndex,
+        remainingCards: moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }))
+      });
       
       // Move to next picker
       currentModulePicker++;
@@ -2726,7 +2748,12 @@ wss.on("connection", (ws) => {
         endModuleCardPhase();
       } else {
         // Notify next picker
-        broadcast({ t: "modulePickTurn", playerId: modulePickOrder[currentModulePicker], timeLeft: MODULE_PICK_TIME });
+        broadcast({ 
+          t: "modulePickTurn", 
+          playerId: modulePickOrder[currentModulePicker], 
+          timeLeft: MODULE_PICK_TIME,
+          remainingCards: moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }))
+        });
       }
     }
   });
