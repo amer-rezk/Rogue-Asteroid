@@ -40,7 +40,8 @@
     bruiser: { name: "Bruiser", cost: 35, desc: "Very tanky", color: "#ff4444", icon: "🪨" },
     carrier: { name: "Carrier", cost: 60, desc: "Spawns minions!", color: "#ff00ff", icon: "👑" },
     splitter: { name: "Splitter", cost: 50, desc: "Splits x15", color: "#00ffff", icon: "💎" },
-    ghost: { name: "Ghost", cost: 40, desc: "2 phasing", color: "#8800ff", icon: "👻" }
+    ghost: { name: "Ghost", cost: 40, desc: "2 phasing", color: "#8800ff", icon: "👻" },
+    berserker: { name: "Berserker", cost: 0, desc: "Speeds up!", color: "#ff2200", icon: "🔥" }
   };
 
   // ===== DOM Elements =====
@@ -490,7 +491,9 @@
             color: ev.color || "#fa0",
             isBoss: ev.isBoss || false,
             isBossAd: ev.isBossAd || false,
-            bossAdVariant: ev.bossAdVariant || null
+            bossAdVariant: ev.bossAdVariant || null,
+            isMiniBoss: ev.isMiniBoss || false,
+            isMiniBossAd: ev.isMiniBossAd || false
           });
           // Initialize interpolation state with spawn position
           missileStates.set(ev.id, {
@@ -2198,6 +2201,8 @@
           const isBossFTL = m.isBoss || m.type === "boss";
           const isBossAdFTL = m.isBossAd;
           const bossAdVariantFTL = m.bossAdVariant;
+          const isMiniBossFTL = m.isMiniBoss;
+          const isMiniBossAdFTL = m.isMiniBossAd;
           
           let ftlBossImage = null;
           if (isBossFTL && bossImages.boss && bossImages.boss.complete && bossImages.boss.naturalWidth > 0) {
@@ -2213,13 +2218,18 @@
           
           // Draw streak lines (simplified - no gradients for performance)
           const streakLength = 80 * sy;
-          const numStreaks = isBossFTL ? 8 : (isBossAdFTL ? 5 : 3);
+          const numStreaks = isBossFTL ? 8 : (isBossAdFTL ? 5 : (isMiniBossFTL ? 6 : (isMiniBossAdFTL ? 3 : 3)));
           const streakSpread = ftlBossImage ? r * 2 : r * 1.5;
           
-          // Use solid colors instead of gradients
-          const streakColor = isBossFTL ? "rgba(255,100,50,0.6)" : (isBossAdFTL ? "rgba(255,150,50,0.5)" : "rgba(180,200,255,0.5)");
+          // Use solid colors instead of gradients - mini-boss uses orange-red
+          let streakColor = "rgba(180,200,255,0.5)";
+          if (isBossFTL) streakColor = "rgba(255,100,50,0.6)";
+          else if (isBossAdFTL) streakColor = "rgba(255,150,50,0.5)";
+          else if (isMiniBossFTL) streakColor = "rgba(255,80,0,0.7)";
+          else if (isMiniBossAdFTL) streakColor = "rgba(255,120,0,0.5)";
+          
           ctx.strokeStyle = streakColor;
-          ctx.lineWidth = 2;
+          ctx.lineWidth = isMiniBossFTL ? 3 : 2;
           
           for (let i = 0; i < numStreaks; i++) {
             const offsetX = (i - numStreaks/2) * (streakSpread / numStreaks);
@@ -2283,6 +2293,12 @@
         const isBoss = m.isBoss || m.type === "boss";
         const isBossAd = m.isBossAd;
         const bossAdVariant = m.bossAdVariant;
+        const isMiniBoss = m.isMiniBoss || cached?.isMiniBoss;
+        const isMiniBossAd = m.isMiniBossAd || cached?.isMiniBossAd;
+        const isBerserker = m.attackType === "berserker" || m.isBerserker;
+        
+        // Calculate berserker rage intensity (0-1 based on HP loss)
+        const berserkerRage = isBerserker ? Math.max(0, 1 - (m.hp / m.maxHp)) : 0;
         
         // Determine which image to use (if any) - check individual image directly
         let bossImage = null;
@@ -2318,10 +2334,29 @@
         } else {
           // Standard procedural asteroid rendering
           ctx.rotate(rotation);
-          ctx.fillStyle = hexToRgba(baseColor, phaseAlpha);
-          ctx.strokeStyle = baseColor;
+          
+          // Special color for mini-boss
+          let renderColor = baseColor;
+          let glowSize = 8;
+          if (isMiniBoss) {
+            renderColor = "#ff4400";
+            glowSize = 15;
+          } else if (isMiniBossAd) {
+            renderColor = "#ff6600";
+            glowSize = 10;
+          } else if (isBerserker) {
+            // Berserker glows redder and more intensely as it loses HP
+            const r = Math.floor(255);
+            const g = Math.floor(100 * (1 - berserkerRage * 0.8));
+            const b = Math.floor(50 * (1 - berserkerRage));
+            renderColor = `rgb(${r},${g},${b})`;
+            glowSize = 8 + berserkerRage * 20;
+          }
+          
+          ctx.fillStyle = hexToRgba(renderColor, phaseAlpha);
+          ctx.strokeStyle = renderColor;
           ctx.lineWidth = 1.5;
-          setShadow(ctx, baseColor, 8);
+          setShadow(ctx, renderColor, glowSize);
 
           if (cached?.vertices && cached.vertices.length > 0) {
             ctx.beginPath();
@@ -2384,6 +2419,27 @@
           ctx.textAlign = "center";
           ctx.fillStyle = "#fff";
           ctx.fillText(ATTACK_TYPES[m.attackType].icon, x, y + r + 12 * sy);
+        }
+        
+        // Mini-boss indicator (skull icon above)
+        if (isMiniBoss && !isMiniBossAd) {
+          ctx.font = `${14 * sx}px sans-serif`;
+          ctx.textAlign = "center";
+          ctx.fillText("💀", x, y - r - 8 * sy);
+        }
+        
+        // Berserker rage flames (visual effect when enraged)
+        if (isBerserker && berserkerRage > 0.2) {
+          ctx.save();
+          ctx.globalAlpha = berserkerRage * 0.8;
+          const flameCount = Math.floor(3 + berserkerRage * 4);
+          for (let i = 0; i < flameCount; i++) {
+            const angle = (Date.now() * 0.008 + i * Math.PI * 2 / flameCount) % (Math.PI * 2);
+            const flameR = r * (1.0 + Math.random() * 0.3);
+            ctx.font = `${(8 + berserkerRage * 6) * sx}px sans-serif`;
+            ctx.fillText("🔥", x + Math.cos(angle) * flameR, y + Math.sin(angle) * flameR);
+          }
+          ctx.restore();
         }
       }
 

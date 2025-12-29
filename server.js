@@ -65,7 +65,8 @@ const ATTACK_TYPES = {
   bruiser: { name: "Bruiser", cost: 35, count: 1, baseHp: 3.75, hpScale: 1.125, size: "large", speed: 0.6, desc: "Very tanky asteroid", color: "#ff4444", icon: "🪨" },
   carrier: { name: "Carrier", cost: 60, count: 1, baseHp: 3, hpScale: 0.975, size: "large", speed: 0.5, spawner: true, spawnInterval: 2.0, spawnCount: 2, desc: "Spawns minions!", color: "#ff00ff", icon: "👑" },
   splitter: { name: "Splitter", cost: 50, count: 1, baseHp: 2.5, hpScale: 0.975, size: "large", speed: 0.75, splits: 15, desc: "Splits into 15 on death", color: "#00ffff", icon: "💎" },
-  ghost: { name: "Ghost", cost: 40, count: 2, baseHp: 1, hpScale: 0.9, size: "medium", speed: 1.1, phasing: true, desc: "2 phasing asteroids", color: "#8800ff", icon: "👻" }
+  ghost: { name: "Ghost", cost: 40, count: 2, baseHp: 1, hpScale: 0.9, size: "medium", speed: 1.1, phasing: true, desc: "2 phasing asteroids", color: "#8800ff", icon: "👻" },
+  berserker: { name: "Berserker", cost: 0, count: 1, baseHp: 3, hpScale: 1.2, size: "large", speed: 0.8, desc: "Speeds up when damaged!", color: "#ff2200", icon: "🔥" }
 };
 
 // ===== Tower Modules (Boss Rewards) =====
@@ -553,10 +554,10 @@ function generateAsteroidShape(baseRadius) {
   return points;
 }
 
-function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId = null, bossAdVariant = null, noGold = false) {
-  const sizeMap = { small: 10, medium: 13, large: 17, boss: 75 }; // Boss reduced to 75 radius
+function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId = null, bossAdVariant = null, noGold = false, isMiniBoss = false) {
+  const sizeMap = { small: 10, medium: 13, large: 17, boss: 75, miniboss: 19, minibossAd: 8 }; // Mini-boss is 75% smaller than boss
   const r = sizeMap[type] || 12;
-  const speedMult = type === "boss" ? 0.3 : (attackType ? (ATTACK_TYPES[attackType]?.speed || 1) : 1); // Boss moves slow
+  const speedMult = type === "boss" ? 0.3 : (type === "miniboss" ? 0.5 : (attackType ? (ATTACK_TYPES[attackType]?.speed || 1) : 1)); // Mini-boss slightly faster than boss
   
   let waveSpeedBonus = wave >= 5 ? 1 + (wave - 5) * 0.03125 : 1;  // +25% speed scaling (was 0.025)
   if (wave >= 20) {
@@ -570,14 +571,16 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
   const id = uid();
   const vertices = generateAsteroidShape(r);
   const rotSpeed = rand(-3, 3);
-  const color = attackType ? (ATTACK_TYPES[attackType]?.color || "#fa0") : "#fa0";
+  const color = attackType ? (ATTACK_TYPES[attackType]?.color || "#fa0") : (type === "miniboss" || type === "minibossAd" ? "#ff4400" : "#fa0");
   
   // Determine if this is a boss or boss ad (for image rendering)
   const isBoss = type === "boss";
   const isBossAd = bossAdVariant !== null;
+  const isMiniBossType = type === "miniboss" || isMiniBoss;
+  const isMiniBossAd = type === "minibossAd";
 
   // OPTIMIZED: Send spawn event with vertices/rotSpeed/velocity so client can cache and predict
-  queueEvent("spawn", { id, x, y, r, type, attackType, vertices, rotSpeed, color, vx, vy, isBoss, isBossAd, bossAdVariant });
+  queueEvent("spawn", { id, x, y, r, type, attackType, vertices, rotSpeed, color, vx, vy, isBoss, isBossAd, bossAdVariant, isMiniBoss: isMiniBossType, isMiniBossAd });
 
   return {
     id,
@@ -593,6 +596,7 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
     senderId: senderId,
     phaseTimer: attackType === "ghost" ? 0 : null,
     splits: attackType === "splitter" ? (ATTACK_TYPES.splitter?.splits || 4) : 0,
+    isBerserker: attackType === "berserker", // Berserker speeds up as HP drops
     accelerates: false, // Removed juggernaut
     // Carrier spawner properties
     isCarrier: attackType === "carrier",
@@ -600,6 +604,8 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
     isBoss: isBoss,
     isBossAd: isBossAd,
     bossAdVariant: bossAdVariant,
+    isMiniBoss: isMiniBossType,
+    isMiniBossAd: isMiniBossAd,
     noGold: noGold, // Only spawned minions from splitter/carrier give no gold
     inFTL: true,
     ftlThreshold: ftlThreshold,
@@ -675,6 +681,29 @@ function spawnWave() {
     const { x0, x1 } = segmentBounds(targetSlot);
     
     for (let i = 0; i < asteroidsPerPlayer; i++) {
+      // MINI-BOSS: 5% chance per minion after wave 10 (not on boss waves)
+      if (wave > 10 && Math.random() < 0.05) {
+        const x = rand(x0 + 30, x1 - 30);
+        const y = rand(-30, -20);
+        // Mini-boss has 20% of what a boss would have at this wave
+        let miniBossHp = 25 + (wave * 3);
+        if (wave > 10) {
+          miniBossHp += Math.floor(Math.pow(wave - 10, 1.5) * 3);
+        }
+        miniBossHp = Math.ceil(miniBossHp * 0.2); // 80% less HP
+        spawnQueue.push({ x, y, type: "miniboss", hp: miniBossHp, targetSlot, attackType: null, isMiniBoss: true });
+        continue; // Skip normal asteroid
+      }
+      
+      // BERSERKER: 3% chance per minion after wave 15
+      if (wave >= 15 && Math.random() < 0.03) {
+        const x = rand(x0 + 20, x1 - 20);
+        const y = rand(-20, -10);
+        const berserkerHp = Math.ceil(3 + waveHpScale * 1.2); // 20% more HP than large
+        spawnQueue.push({ x, y, type: "large", hp: berserkerHp, targetSlot, attackType: "berserker" });
+        continue; // Skip normal asteroid
+      }
+      
       let largeChance = Math.min(0.15 + wave * 0.015, 0.30);
       if (wave >= 20) {
         largeChance = Math.min(0.30 + (wave - 19) * 0.02, 0.60);
@@ -1392,7 +1421,10 @@ function tick() {
         const spawnCount = Math.min(spawnQueue.length, Math.random() < 0.5 ? 1 : Math.random() < 0.8 ? 2 : 3);
         for (let i = 0; i < spawnCount && spawnQueue.length > 0; i++) {
           const queued = spawnQueue.shift();
-          missiles.push(createAsteroid(queued.x, queued.y, queued.type, queued.hp, queued.targetSlot, queued.attackType, queued.senderId));
+          missiles.push(createAsteroid(
+            queued.x, queued.y, queued.type, queued.hp, queued.targetSlot, 
+            queued.attackType, queued.senderId, null, false, queued.isMiniBoss || false
+          ));
         }
         spawnTimer = 0.1 + Math.random() * 0.4;
       }
@@ -1764,6 +1796,44 @@ function tick() {
               createExplosion(m.x, m.y, 60, "#ff0000");
             }
           }
+          
+          // MINI-BOSS MECHANIC: Spawn 3 smaller minions at 75%, 50%, 25% HP (3 times total)
+          if (m.isMiniBoss && m.bossSpawnCount < 3) {
+            const hpPercent = m.hp / m.maxHp;
+            const nextThreshold = 1 - ((m.bossSpawnCount + 1) * 0.25); // 0.75, 0.50, 0.25
+            if (hpPercent <= nextThreshold) {
+              m.bossSpawnCount++;
+              for(let k=0; k<3; k++) {
+                // Smaller minions for mini-boss (minibossAd type)
+                const miniAdHp = Math.max(1, Math.ceil(wave * 0.3)); // Less HP than boss ads
+                const miniAd = createAsteroid(
+                  m.x + rand(-25, 25), 
+                  m.y + rand(10, 40), 
+                  "minibossAd", 
+                  miniAdHp, 
+                  m.targetSlot,
+                  null,  // attackType
+                  null,  // senderId
+                  null,  // bossAdVariant
+                  false  // Gives 1 gold each
+                );
+                miniAd.isMiniBossAd = true;
+                miniAd.inFTL = false; // Spawn immediately
+                missiles.push(miniAd);
+              }
+              createExplosion(m.x, m.y, 30, "#ff4400");
+            }
+          }
+          
+          // BERSERKER MECHANIC: Speed up when hit (max 2x speed at low HP)
+          if (m.isBerserker && m.hp > 0) {
+            const hpPercent = m.hp / m.maxHp;
+            const speedBoost = 1 + (1 - hpPercent) * 1.5; // 1x at full HP, up to 2.5x at low HP
+            const baseSpeed = Math.abs(m.vy) / speedBoost; // Get original base speed
+            m.vy = (m.vy > 0 ? 1 : -1) * baseSpeed * speedBoost;
+            // Also slightly increase horizontal movement
+            m.vx = m.vx * 1.02;
+          }
 
           if (!b.hitSet) b.hitSet = new Set();
           b.hitSet.add(m.id);
@@ -1945,12 +2015,50 @@ function tick() {
               if (m.isBossAd) {
                 owner.gold = (owner.gold || 0) + 1;
               }
+              // Mini-boss ads give 1 gold each
+              else if (m.isMiniBossAd) {
+                owner.gold = (owner.gold || 0) + 1;
+              }
+              // Mini-boss gives 5 gold
+              else if (m.isMiniBoss) {
+                owner.gold = (owner.gold || 0) + 5;
+                owner.score = (owner.score || 0) + 100; // Bonus score
+              }
+              // Berserker gives 3 gold
+              else if (m.isBerserker) {
+                owner.gold = (owner.gold || 0) + 3;
+              }
               // No gold for attack asteroids OR spawned minions (splitter/carrier)
               else if (!m.attackType && !m.noGold) {
                 const goldMult = owner.upgrades?.goldMult ?? 1;
                 const goldReward = m.type === "large" ? 4 : m.type === "medium" ? 2 : 1;
                 owner.gold = (owner.gold || 0) + Math.round(goldReward * goldMult);
               }
+            }
+            
+            // When mini-boss dies, spawn any remaining minion waves
+            if (m.isMiniBoss && m.bossSpawnCount < 3) {
+              const remainingSpawns = 3 - m.bossSpawnCount;
+              for (let spawnWave = 0; spawnWave < remainingSpawns; spawnWave++) {
+                for (let k = 0; k < 3; k++) {
+                  const miniAdHp = Math.max(1, Math.ceil(wave * 0.3));
+                  const miniAd = createAsteroid(
+                    m.x + rand(-25, 25),
+                    m.y + rand(10, 40),
+                    "minibossAd",
+                    miniAdHp,
+                    m.targetSlot,
+                    null,
+                    null,
+                    null,
+                    false
+                  );
+                  miniAd.isMiniBossAd = true;
+                  miniAd.inFTL = false;
+                  missiles.push(miniAd);
+                }
+              }
+              createExplosion(m.x, m.y, 40, "#ff4400");
             }
             
             // When boss dies, spawn any remaining minion waves
@@ -2200,6 +2308,9 @@ function tick() {
           if (m.isPhased) obj.isPhased = true;
           if (m.isBoss) obj.isBoss = true;
           if (m.isBossAd) { obj.isBossAd = true; obj.bossAdVariant = m.bossAdVariant; }
+          if (m.isMiniBoss) obj.isMiniBoss = true;
+          if (m.isMiniBossAd) obj.isMiniBossAd = true;
+          if (m.isBerserker) obj.isBerserker = true;
           if (m.staticCharge > 0) obj.staticCharge = m.staticCharge;
           return obj;
         }),
