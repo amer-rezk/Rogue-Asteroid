@@ -259,15 +259,29 @@
   let bulletStates = new Map();   // id -> {x, y, targetX, targetY, vx, vy, lastUpdate}
   const INTERP_SNAP_DIST = 100;   // Snap to server position if more than this far off
   const PREDICTION_BLEND = 0.15;  // How fast to blend toward server position (lower = smoother but more latent)
+  
+  // Reusable objects to reduce GC pressure
+  const tempIdSet = new Set();
+  const rgbaCache = new Map(); // Cache for hexToRgba results
 
   // ===== Utilities =====
   function hexToRgba(hex, alpha) {
+    // Use cache to avoid repeated string creation
+    const key = hex + alpha;
+    let result = rgbaCache.get(key);
+    if (result) return result;
+    
     let c = hex.replace("#", "");
     if (c.length === 3) c = c[0] + c[0] + c[1] + c[1] + c[2] + c[2];
     const r = parseInt(c.slice(0, 2), 16);
     const g = parseInt(c.slice(2, 4), 16);
     const b = parseInt(c.slice(4, 6), 16);
-    return `rgba(${r},${g},${b},${alpha})`;
+    result = `rgba(${r},${g},${b},${alpha})`;
+    
+    // Limit cache size to prevent memory leak
+    if (rgbaCache.size > 500) rgbaCache.clear();
+    rgbaCache.set(key, result);
+    return result;
   }
 
   function debounce(func, wait) {
@@ -932,11 +946,13 @@
         
         // Update missile states - store server position as target
         if (msg.missiles) {
+          // Reuse tempIdSet instead of creating new Set
+          tempIdSet.clear();
           for (const m of msg.missiles) {
+            tempIdSet.add(m.id);
             const prev = missileStates.get(m.id);
             if (prev) {
               // Existing missile: update target to server position
-              // Reset target to actual server position (not predicted)
               prev.targetX = m.x;
               prev.targetY = m.y;
               prev.vx = m.vx || 0;
@@ -956,15 +972,16 @@
             }
           }
           // Remove missiles that no longer exist
-          const currentIds = new Set(msg.missiles.map(m => m.id));
           for (const id of missileStates.keys()) {
-            if (!currentIds.has(id)) missileStates.delete(id);
+            if (!tempIdSet.has(id)) missileStates.delete(id);
           }
         }
         
         // Update bullet states - store server position as target  
         if (msg.bullets) {
+          tempIdSet.clear();
           for (const b of msg.bullets) {
+            tempIdSet.add(b.id);
             const prev = bulletStates.get(b.id);
             if (prev) {
               prev.targetX = b.x;
@@ -984,23 +1001,26 @@
               });
             }
           }
-          const currentIds = new Set(msg.bullets.map(b => b.id));
           for (const id of bulletStates.keys()) {
-            if (!currentIds.has(id)) bulletStates.delete(id);
+            if (!tempIdSet.has(id)) bulletStates.delete(id);
           }
         }
         
         // Augment missiles with cached vertices/rotation
         if (msg.missiles) {
+          tempIdSet.clear();
           for (const m of msg.missiles) {
+            tempIdSet.add(m.id);
             const cached = asteroidCache.get(m.id);
             if (cached) {
               m.vertices = cached.vertices;
               m.rotation = cached.rotation;
             }
           }
-          // Clean up cache for destroyed asteroids
-          cleanupAsteroidCache(msg.missiles.map(m => m.id));
+          // Clean up cache for destroyed asteroids (reuse tempIdSet)
+          for (const id of asteroidCache.keys()) {
+            if (!tempIdSet.has(id)) asteroidCache.delete(id);
+          }
         }
         
         // Bullets now come with vx/vy directly from server (homing changes direction)
@@ -2254,25 +2274,18 @@
           
           ctx.save();
           
-          // Draw streak lines (motion trails)
+          // Draw streak lines (simplified - no gradients for performance)
           const streakLength = 80 * sy;
-          const numStreaks = isBossFTL ? 12 : (isBossAdFTL ? 8 : 5);
+          const numStreaks = isBossFTL ? 8 : (isBossAdFTL ? 5 : 3);
           const streakSpread = ftlBossImage ? r * 2 : r * 1.5;
           
+          // Use solid colors instead of gradients
+          const streakColor = isBossFTL ? "rgba(255,100,50,0.6)" : (isBossAdFTL ? "rgba(255,150,50,0.5)" : "rgba(180,200,255,0.5)");
+          ctx.strokeStyle = streakColor;
+          ctx.lineWidth = 2;
+          
           for (let i = 0; i < numStreaks; i++) {
-            const offsetX = (Math.random() - 0.5) * streakSpread;
-            const alpha = 0.3 + Math.random() * 0.4;
-            
-            // Boss uses red/orange streaks, normal uses blue
-            const streakColor = isBossFTL ? "255, 100, 50" : (isBossAdFTL ? "255, 150, 50" : "180, 200, 255");
-            
-            const grad = ctx.createLinearGradient(x + offsetX, y - streakLength, x + offsetX, y);
-            grad.addColorStop(0, `rgba(${streakColor}, 0)`);
-            grad.addColorStop(0.5, `rgba(${streakColor}, ${alpha})`);
-            grad.addColorStop(1, `rgba(255, 255, 255, ${alpha + 0.2})`);
-            
-            ctx.strokeStyle = grad;
-            ctx.lineWidth = 1 + Math.random() * 2;
+            const offsetX = (i - numStreaks/2) * (streakSpread / numStreaks);
             ctx.beginPath();
             ctx.moveTo(x + offsetX, y - streakLength);
             ctx.lineTo(x + offsetX, y);
@@ -3015,13 +3028,21 @@
         }
 
         // ===== TOTAL RUN DPS PANEL =====
-        const playerCount = lastSnap.players.filter(p => p.slot >= 0).length;
-        const totalDmgPanelH = 55 + playerCount * 38; // 25% bigger
-        drawSectionPanel(panelX, currentY, panelW, totalDmgPanelH, "rgba(145,255,122,0.4)", "📊 TOTAL DAMAGE", "#91ff7a");
+        // Count active players without creating new array
+        let playerCount = 0;
+        let totalDamage = 0;
+        let maxDamage = 1;
+        for (const p of lastSnap.players) {
+          if (p.slot >= 0) {
+            playerCount++;
+            const dmg = p.damageDealt || 0;
+            totalDamage += dmg;
+            if (dmg > maxDamage) maxDamage = dmg;
+          }
+        }
         
-        // Calculate totals for run
-        const totalDamage = lastSnap.players.reduce((sum, p) => sum + (p.damageDealt || 0), 0);
-        const maxDamage = Math.max(...lastSnap.players.map(p => p.damageDealt || 0), 1);
+        const totalDmgPanelH = 55 + playerCount * 38;
+        drawSectionPanel(panelX, currentY, panelW, totalDmgPanelH, "rgba(145,255,122,0.4)", "📊 TOTAL DAMAGE", "#91ff7a");
         
         // Total damage number (centered, big)
         ctx.font = "bold 16px 'Orbitron', sans-serif";
@@ -3032,25 +3053,33 @@
         ctx.fillText(Math.round(totalDamage).toLocaleString(), panelX + panelW / 2, currentY + 45);
         ctx.shadowBlur = 0;
         
-        // Sort and draw players
-        const sortedByTotal = [...lastSnap.players]
-          .filter(p => p.slot >= 0)
-          .sort((a, b) => (b.damageDealt || 0) - (a.damageDealt || 0));
+        // Sort players by total damage (reuse sortedPlayers array)
+        const sortedByTotal = lastSnap.players.slice().sort((a, b) => (b.damageDealt || 0) - (a.damageDealt || 0));
         
-        sortedByTotal.forEach((p, i) => {
-          const rowY = currentY + 55 + i * 38; // 25% bigger row spacing
-          drawPlayerDamageRow(p, rowY, p.damageDealt || 0, maxDamage, totalDamage, i === 0, panelX, panelW);
-        });
+        let rowIndex = 0;
+        for (const p of sortedByTotal) {
+          if (p.slot < 0) continue;
+          const rowY = currentY + 55 + rowIndex * 38;
+          drawPlayerDamageRow(p, rowY, p.damageDealt || 0, maxDamage, totalDamage, rowIndex === 0, panelX, panelW);
+          rowIndex++;
+        }
         
         currentY += totalDmgPanelH + 10;
 
         // ===== CURRENT WAVE DPS PANEL =====
-        const waveDmgPanelH = 55 + playerCount * 38; // 25% bigger
-        drawSectionPanel(panelX, currentY, panelW, waveDmgPanelH, "rgba(122,224,255,0.4)", "🌊 WAVE " + wave + " DAMAGE", "#7ae0ff");
+        // Calculate wave totals
+        let totalWaveDamage = 0;
+        let maxWaveDamage = 1;
+        for (const p of lastSnap.players) {
+          if (p.slot >= 0) {
+            const dmg = p.waveDamage || 0;
+            totalWaveDamage += dmg;
+            if (dmg > maxWaveDamage) maxWaveDamage = dmg;
+          }
+        }
         
-        // Calculate totals for wave
-        const totalWaveDamage = lastSnap.players.reduce((sum, p) => sum + (p.waveDamage || 0), 0);
-        const maxWaveDamage = Math.max(...lastSnap.players.map(p => p.waveDamage || 0), 1);
+        const waveDmgPanelH = 55 + playerCount * 38;
+        drawSectionPanel(panelX, currentY, panelW, waveDmgPanelH, "rgba(122,224,255,0.4)", "🌊 WAVE " + wave + " DAMAGE", "#7ae0ff");
         
         // Wave damage number (centered, big)
         ctx.font = "bold 16px 'Orbitron', sans-serif";
@@ -3061,15 +3090,16 @@
         ctx.fillText(Math.round(totalWaveDamage).toLocaleString(), panelX + panelW / 2, currentY + 45);
         ctx.shadowBlur = 0;
         
-        // Sort and draw players by wave damage
-        const sortedByWave = [...lastSnap.players]
-          .filter(p => p.slot >= 0)
-          .sort((a, b) => (b.waveDamage || 0) - (a.waveDamage || 0));
+        // Sort players by wave damage
+        const sortedByWave = lastSnap.players.slice().sort((a, b) => (b.waveDamage || 0) - (a.waveDamage || 0));
         
-        sortedByWave.forEach((p, i) => {
-          const rowY = currentY + 55 + i * 38; // 25% bigger row spacing
-          drawPlayerDamageRow(p, rowY, p.waveDamage || 0, maxWaveDamage, totalWaveDamage, i === 0, panelX, panelW);
-        });
+        rowIndex = 0;
+        for (const p of sortedByWave) {
+          if (p.slot < 0) continue;
+          const rowY = currentY + 55 + rowIndex * 38;
+          drawPlayerDamageRow(p, rowY, p.waveDamage || 0, maxWaveDamage, totalWaveDamage, rowIndex === 0, panelX, panelW);
+          rowIndex++;
+        }
         
         ctx.textAlign = "left";
       }
@@ -3349,9 +3379,13 @@
         ctx.fillText(`${atkDef?.icon || "?"} ${atkDef?.name || "?"} QUEUED!${targetText}`, canvas.width / 2, canvas.height - 40);
       }
 
-      // Incoming attack warnings
+      // Incoming attack warnings - filter in place to avoid allocation
       const currentTime = Date.now();
-      incomingAttacks = incomingAttacks.filter(a => currentTime - a.time < 3000);
+      for (let i = incomingAttacks.length - 1; i >= 0; i--) {
+        if (currentTime - incomingAttacks[i].time >= 3000) {
+          incomingAttacks.splice(i, 1);
+        }
+      }
       for (let i = 0; i < incomingAttacks.length; i++) {
         const a = incomingAttacks[i];
         const age = (currentTime - a.time) / 3000;

@@ -1339,29 +1339,12 @@ function clampAimAngle(turretX, turretY, targetX, targetY) {
 function createExplosion(x, y, radius, color) {
   // Queue event for client-side rendering
   queueEvent("explosion", { x, y, radius, color });
-  
-  // Still create server-side particles for backwards compatibility
-  for (let i = 0; i < 8; i++) {
-    const angle = (i / 8) * Math.PI * 2 + Math.random() * 0.5;
-    particles.push({
-      x, y,
-      vx: Math.cos(angle) * rand(60, 120),
-      vy: Math.sin(angle) * rand(60, 120),
-      life: rand(0.3, 0.5),
-      maxLife: 0.5,
-      color: color || "#f80",
-      size: rand(2, 4),
-    });
-  }
 }
 
-// OPTIMIZED: Add damage number - now also queues event for client
+// OPTIMIZED: Add damage number - queues event for client
 function addDamageNumber(x, y, amount, isCrit) {
   // Queue event for client-side rendering
   queueEvent("damage", { x, y, amount, isCrit });
-  
-  // Still create server-side for backwards compatibility
-  damageNumbers.push({ x, y, amount, isCrit, life: 1.0, vy: -60 });
 }
 
 function bounceOffWalls(m) {
@@ -1409,21 +1392,6 @@ function tick() {
         spawnTimer = 0.1 + Math.random() * 0.4;
       }
     }
-
-    // Update particles
-    particles = particles.filter(p => {
-      p.x += p.vx * DT;
-      p.y += p.vy * DT;
-      p.life -= DT;
-      p.vx *= 0.95;
-      p.vy *= 0.95;
-      return p.life > 0;
-    });
-    damageNumbers = damageNumbers.filter(d => {
-      d.y += d.vy * DT;
-      d.life -= DT * 1.5;
-      return d.life > 0;
-    });
 
     // Player shooting
     for (const id of lockedSlots) {
