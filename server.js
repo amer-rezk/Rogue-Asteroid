@@ -23,6 +23,33 @@ const BROADCAST_RATE = 30;     // Network at 30Hz (same as physics, no client pr
 const DT = 1 / TICK_RATE;
 const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 1 tick (every frame)
 
+// PRE-ALLOCATED BROADCAST STATE - reused every frame to avoid GC pressure
+const broadcastState = {
+  t: "state",
+  ts: 0,
+  phase: "",
+  wave: 0,
+  spectatorCount: 0,
+  world: { width: 0, height: WORLD_H, segmentWidth: 0 },
+  missiles: [],
+  bullets: [],
+  events: [],
+  shieldExplosions: [],
+  ghostAllies: [],
+  gravityWells: [],
+  moduleCardPhase: false,
+  modulePickTimer: 0,
+  currentModulePicker: null,
+  players: []
+};
+// Pre-allocate arrays with capacity (will grow if needed)
+for (let i = 0; i < 200; i++) broadcastState.missiles.push({});
+for (let i = 0; i < 100; i++) broadcastState.bullets.push({});
+for (let i = 0; i < 10; i++) broadcastState.shieldExplosions.push({});
+for (let i = 0; i < 20; i++) broadcastState.ghostAllies.push({});
+for (let i = 0; i < 10; i++) broadcastState.gravityWells.push({});
+for (let i = 0; i < 4; i++) broadcastState.players.push({ upgrades: {} });
+
 const WORLD_H = 600;
 const GROUND_Y = 560;
 const SEGMENT_W = 360;
@@ -270,7 +297,11 @@ function safeSend(ws, obj) {
   if (ws.readyState === 1) ws.send(JSON.stringify(obj));
 }
 function safeSendRaw(ws, str) {
-  if (ws.readyState === 1) ws.send(str);
+  // Skip if WebSocket buffer is backed up (backpressure)
+  // This prevents server from getting overwhelmed sending to slow clients
+  if (ws.readyState === 1 && ws.bufferedAmount < 65536) {
+    ws.send(str);
+  }
 }
 function broadcast(obj) {
   const str = JSON.stringify(obj);
@@ -2156,10 +2187,14 @@ function tick() {
       }
     }
     
-    // In-place removal of expired shield explosions
-    for (let i = shieldExplosions.length - 1; i >= 0; i--) {
-      if (shieldExplosions[i].life <= 0) shieldExplosions.splice(i, 1);
+    // OPTIMIZED: O(1) removal for shield explosions
+    let seWriteIdx = 0;
+    for (let i = 0; i < shieldExplosions.length; i++) {
+      if (shieldExplosions[i].life > 0) {
+        shieldExplosions[seWriteIdx++] = shieldExplosions[i];
+      }
     }
+    shieldExplosions.length = seWriteIdx;
 
     // Ghost Ally update - fly upward and damage enemies
     for (const ghost of ghostAllies) {
@@ -2186,10 +2221,15 @@ function tick() {
         }
       }
     }
-    // In-place removal of expired ghost allies
-    for (let i = ghostAllies.length - 1; i >= 0; i--) {
-      if (ghostAllies[i].life <= 0 || ghostAllies[i].y <= -50) ghostAllies.splice(i, 1);
+    // OPTIMIZED: O(1) removal for ghost allies
+    let gaWriteIdx = 0;
+    for (let i = 0; i < ghostAllies.length; i++) {
+      const g = ghostAllies[i];
+      if (g.life > 0 && g.y > -50) {
+        ghostAllies[gaWriteIdx++] = g;
+      }
     }
+    ghostAllies.length = gaWriteIdx;
     
     // Gravity Well update - pull nearby enemies
     for (const well of gravityWells) {
@@ -2212,17 +2252,25 @@ function tick() {
         }
       }
     }
-    // In-place removal of expired gravity wells
-    for (let i = gravityWells.length - 1; i >= 0; i--) {
-      if (gravityWells[i].life <= 0) gravityWells.splice(i, 1);
+    // OPTIMIZED: O(1) removal for gravity wells
+    let gwWriteIdx = 0;
+    for (let i = 0; i < gravityWells.length; i++) {
+      if (gravityWells[i].life > 0) {
+        gravityWells[gwWriteIdx++] = gravityWells[i];
+      }
     }
+    gravityWells.length = gwWriteIdx;
     
     // Chain Reaction - check for static charged asteroid collisions
-    for (const m1 of missiles) {
+    // OPTIMIZED: Only iterate missiles with static charge (usually very few)
+    for (let i = 0; i < missiles.length; i++) {
+      const m1 = missiles[i];
       if (m1.dead || !m1.staticCharge) continue;
       
-      for (const m2 of missiles) {
-        if (m2.dead || m1 === m2) continue;
+      // Only check missiles after this one to avoid double-checking pairs
+      for (let j = i + 1; j < missiles.length; j++) {
+        const m2 = missiles[j];
+        if (m2.dead) continue;
         
         const dx = m2.x - m1.x;
         const dy = m2.y - m1.y;
@@ -2250,19 +2298,29 @@ function tick() {
           if (m2.hp <= 0) { m2.dead = true; createExplosion(m2.x, m2.y, 20, "#ffff00"); }
           
           queueEvent("staticDischarge", { x: (m1.x + m2.x) / 2, y: (m1.y + m2.y) / 2 });
-          break; // Only one collision per frame
+          break; // Only one collision per frame per charged asteroid
         }
       }
     }
 
-    // In-place removal of dead missiles (avoids creating new array every tick)
-    for (let i = missiles.length - 1; i >= 0; i--) {
-      if (missiles[i].dead) missiles.splice(i, 1);
+    // OPTIMIZED: O(1) removal using swap-and-pop instead of O(n) splice
+    // This prevents O(n²) behavior when many missiles die at once
+    let writeIdx = 0;
+    for (let i = 0; i < missiles.length; i++) {
+      if (!missiles[i].dead) {
+        missiles[writeIdx++] = missiles[i];
+      }
     }
-    // In-place removal of dead bullets
-    for (let i = bullets.length - 1; i >= 0; i--) {
-      if (bullets[i].dead) bullets.splice(i, 1);
+    missiles.length = writeIdx;
+    
+    // Same for bullets
+    writeIdx = 0;
+    for (let i = 0; i < bullets.length; i++) {
+      if (!bullets[i].dead) {
+        bullets[writeIdx++] = bullets[i];
+      }
     }
+    bullets.length = writeIdx;
 
     if (checkGameOver()) return;
 
@@ -2279,119 +2337,174 @@ function tick() {
     }
 
     // SERVER AUTHORITATIVE: Broadcast every tick (30Hz) - no client prediction
+    // OPTIMIZED: Reuse pre-allocated broadcastState to avoid GC pressure
     if (tickCount % BROADCAST_INTERVAL === 0) {
-      broadcastAll({
-        t: "state",
-        ts: Date.now(),
-        phase,
-        wave,
-        spectatorCount: spectators.size,
-        world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
-        // Server sends exact positions every frame - client renders directly
-        // vx/vy still needed for visual effects (bullet direction, FTL streaks)
-        missiles: missiles.map((m) => {
-          const obj = {
-            id: m.id, 
-            x: Math.round(m.x * 10) / 10, 
-            y: Math.round(m.y * 10) / 10, 
-            r: m.r, 
-            hp: Math.round(m.hp * 10) / 10, 
-            maxHp: m.maxHp, 
-            type: m.type,
-            vx: Math.round(m.vx * 10) / 10, 
-            vy: Math.round(m.vy * 10) / 10,
-            inFTL: m.inFTL
-          };
-          // Only include optional fields if set (reduces JSON size)
-          if (m.attackType) obj.attackType = m.attackType;
-          if (m.isPhased) obj.isPhased = true;
-          if (m.isBoss) obj.isBoss = true;
-          if (m.isBossAd) { obj.isBossAd = true; obj.bossAdVariant = m.bossAdVariant; }
-          if (m.isMiniBoss) obj.isMiniBoss = true;
-          if (m.isMiniBossAd) obj.isMiniBossAd = true;
-          if (m.isBerserker) obj.isBerserker = true;
-          if (m.staticCharge > 0) obj.staticCharge = m.staticCharge;
-          return obj;
-        }),
-        // Bullets: vx/vy needed for visual direction (trail rendering)
-        bullets: bullets.map((b) => {
-          const obj = {
-            id: b.id, 
-            x: Math.round(b.x * 10) / 10, 
-            y: Math.round(b.y * 10) / 10, 
-            r: b.r, 
-            vx: Math.round(b.vx * 10) / 10, 
-            vy: Math.round(b.vy * 10) / 10,
-            slot: b.ownerSlot,
-            lifespan: Math.round(b.lifespan * 10) / 10
-          };
-          if (b.isCrit) obj.isCrit = true;
-          if (b.isTowerBullet) obj.isTower = true;
-          if (b.bulletType && b.bulletType !== "gatling") obj.bulletType = b.bulletType;
-          if (b.bulletColor) obj.bulletColor = b.bulletColor;
-          return obj;
-        }),
-        // OPTIMIZED: Events for client-side particles/damage numbers
-        events: eventQueue,
-        // Shield explosion zones for visual rendering (round coordinates)
-        shieldExplosions: shieldExplosions.map(exp => ({
-          x: Math.round(exp.x), y: Math.round(exp.y), 
-          radius: Math.round(exp.radius), maxRadius: exp.maxRadius,
-          life: Math.round(exp.life * 10) / 10, duration: exp.duration, 
-          color: exp.color, slot: exp.slot
-        })),
-        // Ghost allies for necromancer module
-        ghostAllies: ghostAllies.map(g => ({
-          x: Math.round(g.x), y: Math.round(g.y), 
-          r: Math.round(g.r), life: Math.round(g.life * 10) / 10, 
-          ownerSlot: g.ownerSlot
-        })),
-        // Gravity wells for gravity module
-        gravityWells: gravityWells.map(w => ({
-          x: Math.round(w.x), y: Math.round(w.y), 
-          radius: w.radius, life: Math.round(w.life * 10) / 10
-        })),
-        // Module card phase data
-        moduleCardPhase: moduleCardPhase,
-        modulePickTimer: moduleCardPhase ? modulePickTimer : 0,
-        currentModulePicker: moduleCardPhase ? modulePickOrder[currentModulePicker] : null,
-        players: lockedSlots.map((id) => {
-          const p = players.get(id);
-          if (!p) return { id, slot: -1 };
-          const u = p.upgrades || {};
-          return {
-            id: p.id, slot: p.slot,
-            name: p.name || `Player ${p.slot + 1}`,
-            score: p.score || 0,
-            gold: p.gold || 0,
-            hp: p.hp,
-            maxHp: p.maxHp,
-            turretAngle: p.turretAngle || -Math.PI / 2,
-            isManual: !!p.manualShooting,
-            towers: p.towers,
-            inventory: p.inventory || [],
-            kills: p.kills || 0,
-            damageDealt: p.damageDealt || 0,
-            waveDamage: p.waveDamage || 0,
-            lastInterest: p.lastInterest || 0,
-            // Flat properties for quick access (used in rendering)
-            shieldActive: u.shieldActive || 0,
-            slowfield: !!u.slowfield,
-            // Full upgrades for stats panel
-            upgrades: {
-              damageAdd: u.damageAdd || 0,
-              bulletSpeedMult: u.bulletSpeedMult || 1,
-              fireRateMult: u.fireRateMult || 1,
-              multishot: u.multishot || 1,
-              critChance: u.critChance || 0,
-              explosive: u.explosive || 0,
-              pierce: u.pierce || 0,
-              chainChance: u.chainChance || 0,
-              goldMult: u.goldMult || 1,
-            },
-          };
-        }),
-      });
+      // Update scalar fields
+      broadcastState.ts = Date.now();
+      broadcastState.phase = phase;
+      broadcastState.wave = wave;
+      broadcastState.spectatorCount = spectators.size;
+      broadcastState.world.width = worldW;
+      broadcastState.world.segmentWidth = SEGMENT_W;
+      broadcastState.moduleCardPhase = moduleCardPhase;
+      broadcastState.modulePickTimer = moduleCardPhase ? modulePickTimer : 0;
+      broadcastState.currentModulePicker = moduleCardPhase ? modulePickOrder[currentModulePicker] : null;
+      
+      // Fill missiles array (reuse existing objects)
+      const missileCount = missiles.length;
+      // Grow array if needed
+      while (broadcastState.missiles.length < missileCount) {
+        broadcastState.missiles.push({});
+      }
+      for (let i = 0; i < missileCount; i++) {
+        const m = missiles[i];
+        const obj = broadcastState.missiles[i];
+        obj.id = m.id;
+        obj.x = Math.round(m.x * 10) / 10;
+        obj.y = Math.round(m.y * 10) / 10;
+        obj.r = m.r;
+        obj.hp = Math.round(m.hp * 10) / 10;
+        obj.maxHp = m.maxHp;
+        obj.type = m.type;
+        obj.vx = Math.round(m.vx * 10) / 10;
+        obj.vy = Math.round(m.vy * 10) / 10;
+        obj.inFTL = m.inFTL;
+        // Optional fields - set or delete
+        if (m.attackType) obj.attackType = m.attackType; else delete obj.attackType;
+        if (m.isPhased) obj.isPhased = true; else delete obj.isPhased;
+        if (m.isBoss) obj.isBoss = true; else delete obj.isBoss;
+        if (m.isBossAd) { obj.isBossAd = true; obj.bossAdVariant = m.bossAdVariant; } 
+        else { delete obj.isBossAd; delete obj.bossAdVariant; }
+        if (m.isMiniBoss) obj.isMiniBoss = true; else delete obj.isMiniBoss;
+        if (m.isMiniBossAd) obj.isMiniBossAd = true; else delete obj.isMiniBossAd;
+        if (m.isBerserker) obj.isBerserker = true; else delete obj.isBerserker;
+        if (m.staticCharge > 0) obj.staticCharge = m.staticCharge; else delete obj.staticCharge;
+      }
+      // Truncate array to actual size (JSON.stringify respects .length)
+      broadcastState.missiles.length = missileCount;
+      
+      // Fill bullets array
+      const bulletCount = bullets.length;
+      while (broadcastState.bullets.length < bulletCount) {
+        broadcastState.bullets.push({});
+      }
+      for (let i = 0; i < bulletCount; i++) {
+        const b = bullets[i];
+        const obj = broadcastState.bullets[i];
+        obj.id = b.id;
+        obj.x = Math.round(b.x * 10) / 10;
+        obj.y = Math.round(b.y * 10) / 10;
+        obj.r = b.r;
+        obj.vx = Math.round(b.vx * 10) / 10;
+        obj.vy = Math.round(b.vy * 10) / 10;
+        obj.slot = b.ownerSlot;
+        obj.lifespan = Math.round(b.lifespan * 10) / 10;
+        if (b.isCrit) obj.isCrit = true; else delete obj.isCrit;
+        if (b.isTowerBullet) obj.isTower = true; else delete obj.isTower;
+        if (b.bulletType && b.bulletType !== "gatling") obj.bulletType = b.bulletType; else delete obj.bulletType;
+        if (b.bulletColor) obj.bulletColor = b.bulletColor; else delete obj.bulletColor;
+      }
+      broadcastState.bullets.length = bulletCount;
+      
+      // Events - just reference the queue (will be cleared after)
+      broadcastState.events = eventQueue;
+      
+      // Fill shieldExplosions
+      const seCount = shieldExplosions.length;
+      while (broadcastState.shieldExplosions.length < seCount) {
+        broadcastState.shieldExplosions.push({});
+      }
+      for (let i = 0; i < seCount; i++) {
+        const exp = shieldExplosions[i];
+        const obj = broadcastState.shieldExplosions[i];
+        obj.x = Math.round(exp.x);
+        obj.y = Math.round(exp.y);
+        obj.radius = Math.round(exp.radius);
+        obj.maxRadius = exp.maxRadius;
+        obj.life = Math.round(exp.life * 10) / 10;
+        obj.duration = exp.duration;
+        obj.color = exp.color;
+        obj.slot = exp.slot;
+      }
+      broadcastState.shieldExplosions.length = seCount;
+      
+      // Fill ghostAllies
+      const gaCount = ghostAllies.length;
+      while (broadcastState.ghostAllies.length < gaCount) {
+        broadcastState.ghostAllies.push({});
+      }
+      for (let i = 0; i < gaCount; i++) {
+        const g = ghostAllies[i];
+        const obj = broadcastState.ghostAllies[i];
+        obj.x = Math.round(g.x);
+        obj.y = Math.round(g.y);
+        obj.r = Math.round(g.r);
+        obj.life = Math.round(g.life * 10) / 10;
+        obj.ownerSlot = g.ownerSlot;
+      }
+      broadcastState.ghostAllies.length = gaCount;
+      
+      // Fill gravityWells
+      const gwCount = gravityWells.length;
+      while (broadcastState.gravityWells.length < gwCount) {
+        broadcastState.gravityWells.push({});
+      }
+      for (let i = 0; i < gwCount; i++) {
+        const w = gravityWells[i];
+        const obj = broadcastState.gravityWells[i];
+        obj.x = Math.round(w.x);
+        obj.y = Math.round(w.y);
+        obj.radius = w.radius;
+        obj.life = Math.round(w.life * 10) / 10;
+      }
+      broadcastState.gravityWells.length = gwCount;
+      
+      // Fill players
+      const playerCount = lockedSlots.length;
+      while (broadcastState.players.length < playerCount) {
+        broadcastState.players.push({ upgrades: {} });
+      }
+      for (let i = 0; i < playerCount; i++) {
+        const id = lockedSlots[i];
+        const p = players.get(id);
+        const obj = broadcastState.players[i];
+        if (!p) {
+          obj.id = id;
+          obj.slot = -1;
+          continue;
+        }
+        const u = p.upgrades || {};
+        obj.id = p.id;
+        obj.slot = p.slot;
+        obj.name = p.name || `Player ${p.slot + 1}`;
+        obj.score = p.score || 0;
+        obj.gold = p.gold || 0;
+        obj.hp = p.hp;
+        obj.maxHp = p.maxHp;
+        obj.turretAngle = p.turretAngle || -Math.PI / 2;
+        obj.isManual = !!p.manualShooting;
+        obj.towers = p.towers;
+        obj.inventory = p.inventory || [];
+        obj.kills = p.kills || 0;
+        obj.damageDealt = p.damageDealt || 0;
+        obj.waveDamage = p.waveDamage || 0;
+        obj.lastInterest = p.lastInterest || 0;
+        obj.shieldActive = u.shieldActive || 0;
+        obj.slowfield = !!u.slowfield;
+        // Reuse upgrades object
+        obj.upgrades.damageAdd = u.damageAdd || 0;
+        obj.upgrades.bulletSpeedMult = u.bulletSpeedMult || 1;
+        obj.upgrades.fireRateMult = u.fireRateMult || 1;
+        obj.upgrades.multishot = u.multishot || 1;
+        obj.upgrades.critChance = u.critChance || 0;
+        obj.upgrades.explosive = u.explosive || 0;
+        obj.upgrades.pierce = u.pierce || 0;
+        obj.upgrades.chainChance = u.chainChance || 0;
+        obj.upgrades.goldMult = u.goldMult || 1;
+      }
+      broadcastState.players.length = playerCount;
+      
+      broadcastAll(broadcastState);
       
       // Clear event queue after broadcast
       eventQueue = [];
