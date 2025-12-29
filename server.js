@@ -1,12 +1,12 @@
-// server.js - Rogue Asteroid PvP (OPTIMIZED v4)
+// server.js - Rogue Asteroid PvP (SERVER AUTHORITATIVE v5)
 // Competitive asteroid defense with attack purchasing
 // 
-// OPTIMIZATIONS:
-// - Broadcast at 15Hz instead of 30Hz (50% less network traffic)
-// - Particles/damage numbers fully client-side (visual only, from events)
-// - Asteroid vertices sent once on spawn, cached by client
-// - Asteroid rotation simulated client-side from rotSpeed
-// - Client uses simple interpolation for smooth rendering
+// ARCHITECTURE:
+// - Server broadcasts at 30Hz (same as physics rate)
+// - Client renders server positions directly - NO prediction
+// - This eliminates all desync - client always matches server
+// - Particles/damage numbers are client-side (visual only)
+// - Asteroid vertices/rotation cached client-side from spawn events
 // - PREDICTIVE AIMING: No homing - bullets aim at intercept point
 // - Multishot bullets can target different asteroids
 
@@ -19,9 +19,9 @@ const { WebSocketServer } = require("ws");
 // ===== Game constants =====
 const MAX_PLAYERS = 4;
 const TICK_RATE = 30;          // Physics at 30Hz
-const BROADCAST_RATE = 15;     // Network at 15Hz (reduced bandwidth, client interpolates)
+const BROADCAST_RATE = 30;     // Network at 30Hz (same as physics, no client prediction needed)
 const DT = 1 / TICK_RATE;
-const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 2 ticks
+const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 1 tick (every frame)
 
 const WORLD_H = 600;
 const GROUND_Y = 560;
@@ -2278,7 +2278,7 @@ function tick() {
       waveClearedTime = 0;
     }
 
-    // OPTIMIZED: Only broadcast every BROADCAST_INTERVAL ticks (15Hz instead of 30Hz)
+    // SERVER AUTHORITATIVE: Broadcast every tick (30Hz) - no client prediction
     if (tickCount % BROADCAST_INTERVAL === 0) {
       broadcastAll({
         t: "state",
@@ -2287,9 +2287,8 @@ function tick() {
         wave,
         spectatorCount: spectators.size,
         world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
-        // OPTIMIZED: No vertices/rotation - client caches from spawn events
-        // Include velocity for client-side prediction
-        // Round coordinates to 1 decimal place to reduce JSON size
+        // Server sends exact positions every frame - client renders directly
+        // vx/vy still needed for visual effects (bullet direction, FTL streaks)
         missiles: missiles.map((m) => {
           const obj = {
             id: m.id, 
@@ -2314,7 +2313,7 @@ function tick() {
           if (m.staticCharge > 0) obj.staticCharge = m.staticCharge;
           return obj;
         }),
-        // Bullets with vx/vy for client interpolation (no homing, predictive aim)
+        // Bullets: vx/vy needed for visual direction (trail rendering)
         bullets: bullets.map((b) => {
           const obj = {
             id: b.id, 

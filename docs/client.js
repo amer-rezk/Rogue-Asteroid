@@ -254,8 +254,8 @@
   let lastUpdateTime = Date.now();
   
   // SMOOTH INTERPOLATION for fluid movement
-  let missileStates = new Map();  // id -> {x, y, vx, vy}
-  let bulletStates = new Map();   // id -> {x, y, vx, vy}
+  let missileStates = new Map();  // id -> true (tracking only, no position prediction)
+  let bulletStates = new Map();   // id -> true (tracking only, no position prediction)
   
   // Reusable objects to reduce GC pressure
   const tempIdSet = new Set();
@@ -440,41 +440,8 @@
       data.rotation += data.rotSpeed * dt;
     }
     
-    // SMOOTH INTERPOLATION: Pure velocity prediction between server updates
-    // Server sends position at 15Hz, client predicts between updates
-    if (lastSnap) {
-      // Missiles: predict forward using velocity
-      for (const [id, state] of missileStates) {
-        state.x += state.vx * dt;
-        state.y += state.vy * dt;
-      }
-      
-      // Bullets: predict forward using velocity
-      for (const [id, state] of bulletStates) {
-        state.x += state.vx * dt;
-        state.y += state.vy * dt;
-      }
-      
-      // Apply predicted positions to lastSnap for rendering
-      if (lastSnap.missiles) {
-        for (const m of lastSnap.missiles) {
-          const state = missileStates.get(m.id);
-          if (state) {
-            m.x = state.x;
-            m.y = state.y;
-          }
-        }
-      }
-      if (lastSnap.bullets) {
-        for (const b of lastSnap.bullets) {
-          const state = bulletStates.get(b.id);
-          if (state) {
-            b.x = state.x;
-            b.y = state.y;
-          }
-        }
-      }
-    }
+    // NO CLIENT PREDICTION: Server sends at 30Hz, we just render server positions
+    // This eliminates all desync - positions always match server exactly
   }
 
   function processServerEvents(events, skipVisualEffects = false) {
@@ -495,13 +462,8 @@
             isMiniBoss: ev.isMiniBoss || false,
             isMiniBossAd: ev.isMiniBossAd || false
           });
-          // Initialize interpolation state with spawn position
-          missileStates.set(ev.id, {
-            x: ev.x,
-            y: ev.y,
-            vx: ev.vx || 0,
-            vy: ev.vy || 30
-          });
+          // Just mark that we know about this missile (no position tracking)
+          missileStates.set(ev.id, true);
           break;
           
         case "explosion":
@@ -525,15 +487,9 @@
           break;
           
         case "bulletSpawn":
-          // Always process bullet spawns - needed for rendering
-          if (!bulletStates.has(ev.id)) {
-            bulletStates.set(ev.id, {
-              x: ev.x,
-              y: ev.y,
-              vx: ev.vx,
-              vy: ev.vy
-            });
-          }
+          // No longer tracking bullet positions - server sends at 30Hz
+          // Just mark that we know about this bullet
+          bulletStates.set(ev.id, true);
           break;
       }
     }
@@ -885,27 +841,12 @@
         }
         
         // Update missile states - blend toward server position for smoothness
+        // NO BLENDING: Server sends at 30Hz, use positions directly
+        // This eliminates desync - client always matches server exactly
         if (msg.missiles) {
           tempIdSet.clear();
           for (const m of msg.missiles) {
             tempIdSet.add(m.id);
-            const prev = missileStates.get(m.id);
-            if (prev) {
-              // Blend 80% toward server position to smooth out network jitter
-              // This adds ~13ms of perceived latency but eliminates most stutter
-              prev.x = prev.x * 0.2 + m.x * 0.8;
-              prev.y = prev.y * 0.2 + m.y * 0.8;
-              prev.vx = m.vx || 0;
-              prev.vy = m.vy || 30;
-            } else {
-              // New missile: start at server position
-              missileStates.set(m.id, {
-                x: m.x,
-                y: m.y,
-                vx: m.vx || 0,
-                vy: m.vy || 30
-              });
-            }
           }
           // Remove missiles that no longer exist
           for (const id of missileStates.keys()) {
@@ -913,26 +854,11 @@
           }
         }
         
-        // Update bullet states - blend toward server position
+        // Bullets: no blending, use server positions directly
         if (msg.bullets) {
           tempIdSet.clear();
           for (const b of msg.bullets) {
             tempIdSet.add(b.id);
-            const prev = bulletStates.get(b.id);
-            if (prev) {
-              // Bullets move fast so use stronger blend
-              prev.x = prev.x * 0.1 + b.x * 0.9;
-              prev.y = prev.y * 0.1 + b.y * 0.9;
-              prev.vx = b.vx;
-              prev.vy = b.vy;
-            } else {
-              bulletStates.set(b.id, {
-                x: b.x,
-                y: b.y,
-                vx: b.vx,
-                vy: b.vy
-              });
-            }
           }
           for (const id of bulletStates.keys()) {
             if (!tempIdSet.has(id)) bulletStates.delete(id);
@@ -2205,10 +2131,17 @@
           const isMiniBossAdFTL = m.isMiniBossAd;
           
           let ftlBossImage = null;
-          if (isBossFTL && bossImages.boss && bossImages.boss.complete && bossImages.boss.naturalWidth > 0) {
+          if ((isBossFTL || isMiniBossFTL) && bossImages.boss && bossImages.boss.complete && bossImages.boss.naturalWidth > 0) {
             ftlBossImage = bossImages.boss;
           } else if (isBossAdFTL && bossAdVariantFTL >= 1 && bossAdVariantFTL <= 5) {
             const adImg = bossImages[`ad${bossAdVariantFTL}`];
+            if (adImg && adImg.complete && adImg.naturalWidth > 0) {
+              ftlBossImage = adImg;
+            }
+          } else if (isMiniBossAdFTL) {
+            // Mini-boss ads use a random ad image (cycle based on id)
+            const adVariant = (parseInt(m.id, 36) % 5) + 1;
+            const adImg = bossImages[`ad${adVariant}`];
             if (adImg && adImg.complete && adImg.naturalWidth > 0) {
               ftlBossImage = adImg;
             }
@@ -2229,7 +2162,7 @@
           else if (isMiniBossAdFTL) streakColor = "rgba(255,120,0,0.5)";
           
           ctx.strokeStyle = streakColor;
-          ctx.lineWidth = isMiniBossFTL ? 3 : 2;
+          ctx.lineWidth = (isMiniBossFTL || isMiniBossAdFTL) ? 3 : 2;
           
           for (let i = 0; i < numStreaks; i++) {
             const offsetX = (i - numStreaks/2) * (streakSpread / numStreaks);
@@ -2244,9 +2177,9 @@
             ctx.translate(x, y);
             ctx.scale(1, 1.8); // Less stretch for image (2.5 distorts too much)
             
-            // Glow effect
-            const glowColor = isBossFTL ? "#ff4400" : "#ff8800";
-            setShadow(ctx, glowColor, 30);
+            // Glow effect - mini-boss uses orange, boss uses red
+            const glowColor = (isBossFTL) ? "#ff4400" : (isMiniBossFTL ? "#ff6600" : "#ff8800");
+            setShadow(ctx, glowColor, isMiniBossFTL ? 20 : 30);
             
             // Draw the image with slight transparency
             ctx.globalAlpha = 0.9;
@@ -2301,11 +2234,19 @@
         const berserkerRage = isBerserker ? Math.max(0, 1 - (m.hp / m.maxHp)) : 0;
         
         // Determine which image to use (if any) - check individual image directly
+        // Mini-boss and mini-boss ads use the same images as boss, just scaled down
         let bossImage = null;
-        if (isBoss && bossImages.boss && bossImages.boss.complete && bossImages.boss.naturalWidth > 0) {
+        if ((isBoss || isMiniBoss) && bossImages.boss && bossImages.boss.complete && bossImages.boss.naturalWidth > 0) {
           bossImage = bossImages.boss;
-        } else if (isBossAd && bossAdVariant >= 1 && bossAdVariant <= 5) {
+        } else if ((isBossAd || isMiniBossAd) && bossAdVariant >= 1 && bossAdVariant <= 5) {
           const adImg = bossImages[`ad${bossAdVariant}`];
+          if (adImg && adImg.complete && adImg.naturalWidth > 0) {
+            bossImage = adImg;
+          }
+        } else if (isMiniBossAd) {
+          // Mini-boss ads use a random ad image (cycle based on id)
+          const adVariant = (parseInt(m.id, 36) % 5) + 1;
+          const adImg = bossImages[`ad${adVariant}`];
           if (adImg && adImg.complete && adImg.naturalWidth > 0) {
             bossImage = adImg;
           }
@@ -2315,15 +2256,19 @@
         ctx.translate(x, y);
         
         if (bossImage) {
-          // Render boss/boss-ad using image
+          // Render boss/boss-ad/mini-boss using image
           ctx.rotate(rotation);
           ctx.globalAlpha = phaseAlpha + 0.3; // Slightly more visible for bosses
           
           // Draw glow effect behind boss
           if (isBoss) {
             setShadow(ctx, "#ff0000", 20);
+          } else if (isMiniBoss) {
+            setShadow(ctx, "#ff4400", 15); // Orange-red glow for mini-boss
           } else if (isBossAd) {
             setShadow(ctx, "#ff6600", 12);
+          } else if (isMiniBossAd) {
+            setShadow(ctx, "#ff6600", 8); // Smaller glow for mini-boss ads
           }
           
           // Draw the image centered and scaled to fit the radius
@@ -2413,19 +2358,19 @@
           ctx.fillRect(bx, by, bw * (m.hp / m.maxHp), bh);
         }
 
-        // Attack type indicator (skip for boss/boss-ads which use images)
-        if (!isBoss && !isBossAd && m.attackType && ATTACK_TYPES[m.attackType]) {
+        // Attack type indicator (skip for boss/boss-ads/mini-boss which use images)
+        if (!isBoss && !isBossAd && !isMiniBoss && !isMiniBossAd && m.attackType && ATTACK_TYPES[m.attackType]) {
           ctx.font = `${10 * sx}px sans-serif`;
           ctx.textAlign = "center";
           ctx.fillStyle = "#fff";
           ctx.fillText(ATTACK_TYPES[m.attackType].icon, x, y + r + 12 * sy);
         }
         
-        // Mini-boss indicator (skull icon above)
+        // Mini-boss indicator (skull icon below)
         if (isMiniBoss && !isMiniBossAd) {
-          ctx.font = `${14 * sx}px sans-serif`;
+          ctx.font = `${12 * sx}px sans-serif`;
           ctx.textAlign = "center";
-          ctx.fillText("💀", x, y - r - 8 * sy);
+          ctx.fillText("💀", x, y + r + 14 * sy);
         }
         
         // Berserker rage flames (visual effect when enraged)
