@@ -68,6 +68,92 @@ const ATTACK_TYPES = {
   ghost: { name: "Ghost", cost: 40, count: 2, baseHp: 1, hpScale: 0.9, size: "medium", speed: 1.1, phasing: true, desc: "2 phasing asteroids", color: "#8800ff", icon: "👻" }
 };
 
+// ===== Tower Modules (Boss Rewards) =====
+const TOWER_MODULES = {
+  fractalPrism: {
+    id: "fractalPrism",
+    name: "Fractal Prism",
+    icon: "💎",
+    color: "#00ffff",
+    desc: "Bullets shatter into 3 smaller bullets on hit",
+    effect: "shatter"
+  },
+  midasCapacitor: {
+    id: "midasCapacitor", 
+    name: "Midas Capacitor",
+    icon: "💰",
+    color: "#ffd700",
+    desc: "Deals 1% of your gold as bonus damage",
+    effect: "goldDamage"
+  },
+  necromancerDrive: {
+    id: "necromancerDrive",
+    name: "Necromancer Drive", 
+    icon: "💀",
+    color: "#8844ff",
+    desc: "Killing blows create ghost allies that damage enemies",
+    effect: "ghostAlly"
+  },
+  quantumDisplacer: {
+    id: "quantumDisplacer",
+    name: "Quantum Displacer",
+    icon: "⏳", 
+    color: "#ff44ff",
+    desc: "20% chance to teleport enemy back to top",
+    effect: "teleport"
+  },
+  russianRoulette: {
+    id: "russianRoulette",
+    name: "Russian Roulette",
+    icon: "🎲",
+    color: "#ff0000",
+    desc: "Random 0x-10x damage multiplier per shot",
+    effect: "randomDamage"
+  },
+  gravityWell: {
+    id: "gravityWell",
+    name: "Gravity Well",
+    icon: "🕳️",
+    color: "#440088",
+    desc: "Bullets pull nearby enemies together for 2s",
+    effect: "gravity"
+  },
+  vampiricNanobots: {
+    id: "vampiricNanobots",
+    name: "Vampiric Nanobots",
+    icon: "🩸",
+    color: "#cc0000",
+    desc: "-50% damage, but heal 1 HP per 100 damage dealt",
+    effect: "lifesteal"
+  },
+  matterCompressor: {
+    id: "matterCompressor",
+    name: "Matter Compressor",
+    icon: "🤏",
+    color: "#00ff88",
+    desc: "Shrinks enemies 10% per hit. <5px = instakill",
+    effect: "shrink"
+  },
+  chainReaction: {
+    id: "chainReaction",
+    name: "Chain Reaction",
+    icon: "⚡",
+    color: "#ffff00",
+    desc: "Charged enemies explode when touching others",
+    effect: "static"
+  },
+  confettiCannon: {
+    id: "confettiCannon",
+    name: "Confetti Cannon",
+    icon: "🎉",
+    color: "#ff88ff",
+    desc: "Each bullet has random stats (size, speed, damage)",
+    effect: "random"
+  }
+};
+
+const MODULE_IDS = Object.keys(TOWER_MODULES);
+
 // ===== Server state =====
 const app = express();
 app.use(express.static(path.join(__dirname, "docs")));
@@ -91,6 +177,8 @@ let bullets = [];
 let particles = [];
 let damageNumbers = [];
 let shieldExplosions = []; // Active shield explosions that deal damage
+let ghostAllies = []; // Necromancer ghost allies flying upward
+let gravityWells = []; // Active gravity wells pulling enemies
 
 // Shield sphere radius (as fraction of segment width)
 const SHIELD_RADIUS_MULT = 0.45;
@@ -100,6 +188,15 @@ let attackQueue = new Map();
 let pendingUpgrades = new Map();
 let waveClearedTime = 0;
 const WAVE_CLEAR_DELAY = 500;
+
+// Module card selection after boss waves
+let moduleCardPhase = false;
+let moduleCards = []; // 5 random cards to choose from
+let modulePickOrder = []; // Order of players picking (boss killer first)
+let currentModulePicker = 0;
+let modulePickTimer = 0;
+const MODULE_PICK_TIME = 10; // 10 seconds per pick
+let bossKillerId = null; // Track who killed the boss
 
 // Staggered spawn system
 let spawnQueue = [];
@@ -506,6 +603,8 @@ function spawnWave() {
   particles = [];
   damageNumbers = [];
   shieldExplosions = [];
+  ghostAllies = [];
+  gravityWells = [];
   spawnQueue = [];
   spawnTimer = 0;
 
@@ -688,6 +787,9 @@ function startGame(solo = false) {
 }
 
 function queueUpgradesAndNextWave() {
+  // Check if just finished a boss wave (wave is currently boss wave number)
+  const wasBossWave = wave % 10 === 0 && wave > 0;
+  
   for (const id of lockedSlots) {
     const p = players.get(id);
     if (!p || p.hp <= 0) continue;
@@ -707,8 +809,25 @@ function queueUpgradesAndNextWave() {
       // Send to client as 'interest' so the UI popup shows the total amount
       safeSend(p.ws, { t: "interest", amount: totalIncome });
     }
+    
+    // Decrement module lock waves on towers
+    for (const tower of p.towers) {
+      if (!tower) continue;
+      for (let i = 0; i < 3; i++) {
+        if (tower.moduleLockWaves[i] > 0) {
+          tower.moduleLockWaves[i]--;
+        }
+      }
+    }
   }
   
+  // After boss wave: Module card selection instead of normal upgrades
+  if (wasBossWave) {
+    startModuleCardPhase();
+    return; // Don't do normal upgrades or advance wave yet
+  }
+  
+  // Normal upgrade flow
   for (const id of lockedSlots) {
     const p = players.get(id);
     if (!p || p.hp <= 0) continue;
@@ -730,6 +849,58 @@ function queueUpgradesAndNextWave() {
     }
   }
   
+  wave += 1;
+  spawnWave();
+  broadcast({ t: "wave", wave });
+}
+
+// Start module card selection after boss wave
+function startModuleCardPhase() {
+  moduleCardPhase = true;
+  
+  // Generate 5 random module cards
+  const shuffled = [...MODULE_IDS].sort(() => Math.random() - 0.5);
+  moduleCards = shuffled.slice(0, 5);
+  
+  // Determine pick order: boss killer first, then by wave damage
+  const alivePlayers = lockedSlots
+    .map(id => players.get(id))
+    .filter(p => p && p.hp > 0);
+  
+  // Sort by boss killer first, then wave damage
+  alivePlayers.sort((a, b) => {
+    if (a.id === bossKillerId) return -1;
+    if (b.id === bossKillerId) return 1;
+    return (b.waveDamage || 0) - (a.waveDamage || 0);
+  });
+  
+  modulePickOrder = alivePlayers.map(p => p.id);
+  currentModulePicker = 0;
+  modulePickTimer = MODULE_PICK_TIME;
+  
+  // Broadcast module card phase start
+  broadcast({ 
+    t: "moduleCardPhase", 
+    cards: moduleCards.map(id => ({ id, ...TOWER_MODULES[id] })),
+    pickOrder: modulePickOrder.map(id => {
+      const p = players.get(id);
+      return { id, name: p?.name || "Unknown", isBossKiller: id === bossKillerId };
+    }),
+    currentPicker: modulePickOrder[0],
+    timeLeft: MODULE_PICK_TIME
+  });
+}
+
+// End module card selection and proceed to next wave
+function endModuleCardPhase() {
+  moduleCardPhase = false;
+  moduleCards = [];
+  modulePickOrder = [];
+  bossKillerId = null;
+  
+  broadcast({ t: "moduleCardPhaseEnd" });
+  
+  // Now do normal wave progression (no upgrades after boss)
   wave += 1;
   spawnWave();
   broadcast({ t: "wave", wave });
@@ -856,9 +1027,13 @@ function endGame(winnerId) {
 // ===== Simulation =====
 function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, overrideProps = null) {
   let dmg, speed, isCrit, explosive, lifespan, bulletType, ricochet, pierce, chainChance;
+  let modules = [];
+  let ownerGold = 0;
 
   if (overrideProps) {
     dmg = overrideProps.damage;
+    modules = overrideProps.modules || [];
+    ownerGold = overrideProps.ownerGold || 0;
     
     if (overrideProps.inheritedUpgrades) {
       speed = BULLET_SPEED * (overrideProps.bulletSpeedMult ?? 1) * (overrideProps.bulletType === "sniper" ? 1.5 : 1);
@@ -894,9 +1069,41 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     ricochet = owner.upgrades?.ricochet || 0;
     pierce = owner.upgrades?.pierce || 0;
     chainChance = owner.upgrades?.chainChance || 0;
+    ownerGold = owner.gold || 0;
   }
 
-  const finalDmg = isCrit ? dmg * 3 : dmg;
+  let finalDmg = isCrit ? dmg * 3 : dmg;
+  let bulletR = bulletType === "sniper" ? 4 : bulletType === "missile" ? 5 : BULLET_R;
+  let bulletColor = null;
+  
+  // Apply module effects on bullet creation
+  
+  // Confetti Cannon: randomize stats
+  if (modules.includes("confettiCannon")) {
+    speed *= 0.5 + Math.random() * 2; // 0.5x to 2.5x speed
+    finalDmg *= 0.3 + Math.random() * 3; // 0.3x to 3.3x damage
+    bulletR = 2 + Math.random() * 8; // 2 to 10 size
+    bulletColor = `hsl(${Math.random() * 360}, 100%, 60%)`; // Random color
+  }
+  
+  // Russian Roulette: random 0x-10x damage
+  if (modules.includes("russianRoulette")) {
+    const rouletteMult = Math.random() * 10; // 0 to 10
+    finalDmg *= rouletteMult;
+    if (rouletteMult >= 8) {
+      queueEvent("rouletteCrit", { x: originX, y: originY });
+    }
+  }
+  
+  // Midas Capacitor: add 1% of gold as damage
+  if (modules.includes("midasCapacitor")) {
+    finalDmg += ownerGold * 0.01;
+  }
+  
+  // Vampiric Nanobots: -50% damage
+  if (modules.includes("vampiricNanobots")) {
+    finalDmg *= 0.5;
+  }
 
   let dx = targetX - originX;
   let dy = targetY - originY;
@@ -920,7 +1127,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     x: originX,
     y: originY - 6,
     vx, vy,
-    r: bulletType === "sniper" ? 4 : bulletType === "missile" ? 5 : BULLET_R,
+    r: bulletR,
     dmg: finalDmg,
     isCrit,
     explosive: explosive,
@@ -931,6 +1138,8 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     ricochet: ricochet,
     pierce: pierce,
     hitList: [],
+    modules: modules, // Store modules for hit effects
+    bulletColor: bulletColor, // Custom color for confetti
   });
 }
 
@@ -1142,6 +1351,22 @@ function tick() {
   try {
     tickCount++;
     
+    // Module card pick timer
+    if (moduleCardPhase) {
+      modulePickTimer -= DT;
+      if (modulePickTimer <= 0) {
+        // Time's up for current picker, skip to next
+        currentModulePicker++;
+        modulePickTimer = MODULE_PICK_TIME;
+        
+        if (currentModulePicker >= modulePickOrder.length || moduleCards.length === 0) {
+          endModuleCardPhase();
+        } else {
+          broadcast({ t: "modulePickTurn", playerId: modulePickOrder[currentModulePicker], timeLeft: MODULE_PICK_TIME });
+        }
+      }
+    }
+    
     // Process spawn queue
     if (spawnQueue.length > 0) {
       spawnTimer -= DT;
@@ -1236,6 +1461,9 @@ function tick() {
               const fireRateBonus = ((p.upgrades?.fireRateMult ?? 1) - 1) * 0.5 + 1;
               tower.cd = stats.cooldown / levelBonus / fireRateBonus;
               
+              // Collect active modules on this tower
+              const activeModules = tower.modules ? tower.modules.filter(m => m !== null) : [];
+              
               const towerProps = {
                 ...stats,
                 level: tower.level,
@@ -1248,6 +1476,8 @@ function tick() {
                 pierce: (stats.bulletType === "sniper" ? 1 : 0) + Math.floor((u.pierce ?? 0) * 0.5),
                 chainChance: (u.chainChance ?? 0) * 0.5,
                 inheritedUpgrades: true,
+                modules: activeModules, // Tower modules
+                ownerGold: p.gold, // For Midas Capacitor
               };
               fireBullet(p, towerPos.x, towerPos.y, aim.x, aim.y, 0, towerProps);
             }
@@ -1525,6 +1755,88 @@ function tick() {
           if (!b.hitList) b.hitList = [];
           b.hitList.push(m.id);
           
+          // ===== TOWER MODULE EFFECTS ON HIT =====
+          const bulletModules = b.modules || [];
+          const owner = players.get(b.ownerId);
+          
+          // Fractal Prism: Shatter into 3 smaller bullets behind target
+          if (bulletModules.includes("fractalPrism")) {
+            for (let i = 0; i < 3; i++) {
+              const angle = Math.PI + (i - 1) * 0.5; // Spread behind
+              const shardVx = Math.cos(angle) * 100;
+              const shardVy = Math.sin(angle) * 100;
+              bullets.push({
+                id: uid(),
+                ownerId: b.ownerId,
+                ownerSlot: b.ownerSlot,
+                x: m.x,
+                y: m.y,
+                vx: shardVx,
+                vy: shardVy,
+                r: 2,
+                dmg: b.dmg * 0.3,
+                isCrit: false,
+                explosive: 0,
+                lifespan: 1.0,
+                isTowerBullet: true,
+                bulletType: "shard",
+                chainChance: 0,
+                ricochet: 0,
+                pierce: 0,
+                hitList: [m.id],
+                modules: [],
+                bulletColor: "#00ffff",
+              });
+            }
+          }
+          
+          // Quantum Displacer: 20% chance to teleport enemy to top
+          if (bulletModules.includes("quantumDisplacer") && Math.random() < 0.2 && m.hp > 0) {
+            m.y = -m.r - 20;
+            m.inFTL = true;
+            queueEvent("teleport", { x: m.x, y: m.y });
+          }
+          
+          // Gravity Well: Create gravity pull effect
+          if (bulletModules.includes("gravityWell") && m.hp > 0) {
+            gravityWells.push({
+              x: m.x,
+              y: m.y,
+              targetId: m.id,
+              life: 2.0,
+              radius: 100,
+              strength: 80,
+              ownerSlot: b.ownerSlot
+            });
+            queueEvent("gravityWell", { x: m.x, y: m.y });
+          }
+          
+          // Vampiric Nanobots: Accumulate damage for healing
+          if (bulletModules.includes("vampiricNanobots") && owner) {
+            owner.lifestealAccum = (owner.lifestealAccum || 0) + b.dmg * 2; // x2 because we halved damage
+            if (owner.lifestealAccum >= 100) {
+              const heals = Math.floor(owner.lifestealAccum / 100);
+              owner.hp = Math.min(owner.maxHp, owner.hp + heals);
+              owner.lifestealAccum = owner.lifestealAccum % 100;
+              queueEvent("lifesteal", { slot: owner.slot, amount: heals });
+            }
+          }
+          
+          // Matter Compressor: Shrink enemy
+          if (bulletModules.includes("matterCompressor") && m.hp > 0) {
+            m.r *= 0.9; // Shrink 10%
+            if (m.r < 5) {
+              m.hp = 0; // Instakill if too small
+              queueEvent("compressed", { x: m.x, y: m.y });
+            }
+          }
+          
+          // Chain Reaction: Add static charge
+          if (bulletModules.includes("chainReaction") && m.hp > 0) {
+            m.staticCharge = (m.staticCharge || 0) + b.dmg;
+            m.staticColor = "#ffff00";
+          }
+          
           // Tesla Coil: chance to consume bullet and create chain lightning
           const triggeredLightning = b.chainChance > 0 && Math.random() < b.chainChance;
           
@@ -1585,7 +1897,6 @@ function tick() {
           }
           
           addDamageNumber(m.x, m.y - m.r, b.dmg, b.isCrit);
-          const owner = players.get(b.ownerId);
           
           if (owner) {
             owner.damageDealt = (owner.damageDealt || 0) + b.dmg;
@@ -1595,6 +1906,21 @@ function tick() {
           if (m.hp <= 0) {
             m.dead = true;
             createExplosion(m.x, m.y, 25, ATTACK_TYPES[m.attackType]?.color || "#fa0");
+            
+            // Necromancer Drive: Create ghost ally on kill
+            if (bulletModules.includes("necromancerDrive")) {
+              ghostAllies.push({
+                x: m.x,
+                y: m.y,
+                r: m.r * 0.8,
+                vy: -60, // Flies upward
+                life: 5.0,
+                damage: b.dmg * 0.5,
+                ownerSlot: b.ownerSlot,
+                hitList: []
+              });
+              queueEvent("ghostSpawn", { x: m.x, y: m.y, slot: b.ownerSlot });
+            }
             
             if (owner) {
               owner.score = (owner.score || 0) + 50;
@@ -1613,6 +1939,12 @@ function tick() {
             
             // When boss dies, spawn any remaining minion waves
             if (m.type === "boss" && m.bossSpawnCount < 3) {
+              // Track who killed the boss for module pick order
+              if (owner && !bossKillerId) {
+                bossKillerId = owner.id;
+                broadcast({ t: "bossKilled", killerId: owner.id, killerName: owner.name });
+              }
+              
               const remainingSpawns = 3 - m.bossSpawnCount;
               for (let spawnWave = 0; spawnWave < remainingSpawns; spawnWave++) {
                 for (let k = 0; k < 5; k++) {
@@ -1632,6 +1964,11 @@ function tick() {
                 }
               }
               createExplosion(m.x, m.y, 80, "#ff0000");
+            }
+            // Also track boss killer if no remaining spawns
+            else if (m.type === "boss" && owner && !bossKillerId) {
+              bossKillerId = owner.id;
+              broadcast({ t: "bossKilled", killerId: owner.id, killerName: owner.name });
             }
             
             // Splitter: spawn children with noGold flag
@@ -1696,6 +2033,91 @@ function tick() {
     // Filter out expired shield explosions
     shieldExplosions = shieldExplosions.filter(exp => exp.life > 0);
 
+    // Ghost Ally update - fly upward and damage enemies
+    for (const ghost of ghostAllies) {
+      ghost.y += ghost.vy * DT;
+      ghost.life -= DT;
+      
+      // Check for collision with enemies
+      for (const m of missiles) {
+        if (m.dead || ghost.hitList.includes(m.id)) continue;
+        const dx = m.x - ghost.x;
+        const dy = m.y - ghost.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        
+        if (dist < ghost.r + m.r) {
+          m.hp -= ghost.damage;
+          ghost.hitList.push(m.id);
+          createExplosion(m.x, m.y, 15, "#8844ff");
+          addDamageNumber(m.x, m.y - m.r, ghost.damage, false);
+          
+          if (m.hp <= 0) {
+            m.dead = true;
+            createExplosion(m.x, m.y, 20, "#8844ff");
+          }
+        }
+      }
+    }
+    ghostAllies = ghostAllies.filter(g => g.life > 0 && g.y > -50);
+    
+    // Gravity Well update - pull nearby enemies
+    for (const well of gravityWells) {
+      well.life -= DT;
+      
+      // Pull nearby enemies toward the well center
+      for (const m of missiles) {
+        if (m.dead) continue;
+        const dx = well.x - m.x;
+        const dy = well.y - m.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        
+        if (dist < well.radius && dist > 5) {
+          const pullStrength = (well.strength / dist) * DT;
+          m.x += (dx / dist) * pullStrength;
+          m.y += (dy / dist) * pullStrength;
+        }
+      }
+    }
+    gravityWells = gravityWells.filter(w => w.life > 0);
+    
+    // Chain Reaction - check for static charged asteroid collisions
+    for (const m1 of missiles) {
+      if (m1.dead || !m1.staticCharge) continue;
+      
+      for (const m2 of missiles) {
+        if (m2.dead || m1 === m2) continue;
+        
+        const dx = m2.x - m1.x;
+        const dy = m2.y - m1.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        
+        if (dist < m1.r + m2.r + 5) {
+          // Both take massive damage
+          const staticDamage = m1.staticCharge;
+          m1.hp -= staticDamage;
+          m2.hp -= staticDamage;
+          
+          createExplosion((m1.x + m2.x) / 2, (m1.y + m2.y) / 2, 30, "#ffff00");
+          addDamageNumber(m1.x, m1.y - m1.r, staticDamage, true);
+          addDamageNumber(m2.x, m2.y - m2.r, staticDamage, true);
+          
+          // Transfer charge to m2 if it survives
+          if (m2.hp > 0) {
+            m2.staticCharge = (m2.staticCharge || 0) + staticDamage * 0.5;
+          }
+          
+          // Clear charge from m1
+          m1.staticCharge = 0;
+          
+          if (m1.hp <= 0) { m1.dead = true; createExplosion(m1.x, m1.y, 20, "#ffff00"); }
+          if (m2.hp <= 0) { m2.dead = true; createExplosion(m2.x, m2.y, 20, "#ffff00"); }
+          
+          queueEvent("staticDischarge", { x: (m1.x + m2.x) / 2, y: (m1.y + m2.y) / 2 });
+          break; // Only one collision per frame
+        }
+      }
+    }
+
     missiles = missiles.filter((m) => !m.dead);
     bullets = bullets.filter((b) => !b.dead);
 
@@ -1727,13 +2149,15 @@ function tick() {
           id: m.id, x: m.x, y: m.y, r: m.r, hp: m.hp, maxHp: m.maxHp, type: m.type,
           vx: m.vx, vy: m.vy,
           attackType: m.attackType, isPhased: m.isPhased, inFTL: m.inFTL,
-          isBoss: m.isBoss, isBossAd: m.isBossAd, bossAdVariant: m.bossAdVariant
+          isBoss: m.isBoss, isBossAd: m.isBossAd, bossAdVariant: m.bossAdVariant,
+          staticCharge: m.staticCharge || 0 // For chain reaction visual
         })),
         // Bullets with vx/vy for client interpolation (no homing, predictive aim)
         bullets: bullets.map((b) => ({
           id: b.id, x: b.x, y: b.y, r: b.r, vx: b.vx, vy: b.vy,
           slot: b.ownerSlot, isCrit: b.isCrit, lifespan: b.lifespan,
-          isTower: b.isTowerBullet, bulletType: b.bulletType
+          isTower: b.isTowerBullet, bulletType: b.bulletType,
+          bulletColor: b.bulletColor // For confetti cannon
         })),
         // OPTIMIZED: Events for client-side particles/damage numbers
         events: eventQueue,
@@ -1742,6 +2166,18 @@ function tick() {
           x: exp.x, y: exp.y, radius: exp.radius, maxRadius: exp.maxRadius,
           life: exp.life, duration: exp.duration, color: exp.color, slot: exp.slot
         })),
+        // Ghost allies for necromancer module
+        ghostAllies: ghostAllies.map(g => ({
+          x: g.x, y: g.y, r: g.r, life: g.life, ownerSlot: g.ownerSlot
+        })),
+        // Gravity wells for gravity module
+        gravityWells: gravityWells.map(w => ({
+          x: w.x, y: w.y, radius: w.radius, life: w.life
+        })),
+        // Module card phase data
+        moduleCardPhase: moduleCardPhase,
+        modulePickTimer: moduleCardPhase ? modulePickTimer : 0,
+        currentModulePicker: moduleCardPhase ? modulePickOrder[currentModulePicker] : null,
         players: lockedSlots.map((id) => {
           const p = players.get(id);
           if (!p) return { id, slot: -1 };
@@ -1756,6 +2192,7 @@ function tick() {
             turretAngle: p.turretAngle || -Math.PI / 2,
             isManual: !!p.manualShooting,
             towers: p.towers,
+            inventory: p.inventory || [], // Module cards in inventory
             kills: p.kills || 0,
             damageDealt: p.damageDealt || 0,
             waveDamage: p.waveDamage || 0,
@@ -1862,6 +2299,8 @@ wss.on("connection", (ws) => {
     manualShooting: false,
     upgrades: {},
     towers: [null, null, null, null],
+    inventory: [], // Module cards in player's inventory
+    lifestealAccum: 0, // Accumulated damage for vampiric nanobots
     gold: 0, cooldown: 0, score: 0, ready: false, damageDealt: 0, waveDamage: 0,
     hp: BASE_HP_PER_PLAYER,
     maxHp: BASE_HP_PER_PLAYER,
@@ -1877,7 +2316,8 @@ wss.on("connection", (ws) => {
     t: "welcome", id, slot, isHost: id === hostId, 
     world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, 
     phase,
-    attackTypes: ATTACK_TYPES
+    attackTypes: ATTACK_TYPES,
+    towerModules: TOWER_MODULES
   });
   safeSend(ws, { t: "chatHistory", messages: chatHistory });
   broadcast({ t: "lobby", ...lobbySnapshot() });
@@ -2168,7 +2608,16 @@ wss.on("connection", (ws) => {
       if (slotIndex < 0 || slotIndex > 3) return;
       if (p.towers[slotIndex]) return;
       const cost = TOWER_TYPES[type].cost;
-      if (p.gold >= cost) { p.gold -= cost; p.towers[slotIndex] = { type, level: 1, cd: 0 }; }
+      if (p.gold >= cost) { 
+        p.gold -= cost; 
+        p.towers[slotIndex] = { 
+          type, 
+          level: 1, 
+          cd: 0,
+          modules: [null, null, null], // 3 module slots
+          moduleLockWaves: [0, 0, 0] // Waves remaining until module can be removed
+        }; 
+      }
     }
 
     if (msg.t === "upgradeTower" && phase === "playing") {
@@ -2197,8 +2646,88 @@ wss.on("connection", (ws) => {
       for (let lvl = 1; lvl < tower.level; lvl++) {
         totalInvested += stats.upgradeCost * lvl;
       }
+      // Return modules to inventory when selling tower
+      for (let i = 0; i < 3; i++) {
+        if (tower.modules[i]) {
+          p.inventory.push(tower.modules[i]);
+        }
+      }
       p.gold += Math.floor(totalInvested * 0.5);
       p.towers[slotIndex] = null;
+    }
+
+    // Slot a module from inventory into a tower
+    if (msg.t === "slotModule" && phase === "playing") {
+      const { towerIndex, moduleSlot, inventoryIndex } = msg;
+      if (towerIndex < 0 || towerIndex > 3) return;
+      if (moduleSlot < 0 || moduleSlot > 2) return;
+      if (inventoryIndex < 0 || inventoryIndex >= p.inventory.length) return;
+      
+      const tower = p.towers[towerIndex];
+      if (!tower) return;
+      if (tower.modules[moduleSlot]) return; // Slot already filled
+      
+      const moduleId = p.inventory[inventoryIndex];
+      if (!TOWER_MODULES[moduleId]) return;
+      
+      // Move module from inventory to tower
+      p.inventory.splice(inventoryIndex, 1);
+      tower.modules[moduleSlot] = moduleId;
+      tower.moduleLockWaves[moduleSlot] = 3; // Locked for 3 waves
+      
+      safeSend(ws, { t: "moduleSlotted", towerIndex, moduleSlot, moduleId });
+    }
+
+    // Remove a module from tower (only if not locked)
+    if (msg.t === "unslotModule" && phase === "playing") {
+      const { towerIndex, moduleSlot } = msg;
+      if (towerIndex < 0 || towerIndex > 3) return;
+      if (moduleSlot < 0 || moduleSlot > 2) return;
+      
+      const tower = p.towers[towerIndex];
+      if (!tower) return;
+      if (!tower.modules[moduleSlot]) return; // No module to remove
+      if (tower.moduleLockWaves[moduleSlot] > 0) {
+        safeSend(ws, { t: "moduleError", error: `Module locked for ${tower.moduleLockWaves[moduleSlot]} more waves` });
+        return;
+      }
+      
+      // Move module back to inventory
+      p.inventory.push(tower.modules[moduleSlot]);
+      tower.modules[moduleSlot] = null;
+      
+      safeSend(ws, { t: "moduleUnslotted", towerIndex, moduleSlot });
+    }
+
+    // Pick a module card during boss reward phase
+    if (msg.t === "pickModuleCard" && moduleCardPhase) {
+      const { cardIndex } = msg;
+      if (cardIndex < 0 || cardIndex >= moduleCards.length) return;
+      if (modulePickOrder[currentModulePicker] !== p.id) return; // Not your turn
+      
+      const moduleId = moduleCards[cardIndex];
+      if (!TOWER_MODULES[moduleId]) return;
+      
+      // Add to player's inventory
+      p.inventory.push(moduleId);
+      
+      // Remove from available cards
+      moduleCards.splice(cardIndex, 1);
+      
+      // Announce pick
+      broadcast({ t: "moduleCardPicked", playerId: p.id, playerName: p.name, moduleId, cardIndex });
+      
+      // Move to next picker
+      currentModulePicker++;
+      modulePickTimer = MODULE_PICK_TIME;
+      
+      // Check if all done or no cards left
+      if (currentModulePicker >= modulePickOrder.length || moduleCards.length === 0) {
+        endModuleCardPhase();
+      } else {
+        // Notify next picker
+        broadcast({ t: "modulePickTurn", playerId: modulePickOrder[currentModulePicker], timeLeft: MODULE_PICK_TIME });
+      }
     }
   });
 
