@@ -2111,19 +2111,38 @@
 
         // FTL entry effect - Star Wars hyperspace exit style
         if (m.inFTL) {
+          // Check if this is a boss/boss-ad with an image
+          const isBossFTL = m.isBoss || m.type === "boss";
+          const isBossAdFTL = m.isBossAd;
+          const bossAdVariantFTL = m.bossAdVariant;
+          
+          let ftlBossImage = null;
+          if (isBossFTL && bossImages.boss && bossImages.boss.complete && bossImages.boss.naturalWidth > 0) {
+            ftlBossImage = bossImages.boss;
+          } else if (isBossAdFTL && bossAdVariantFTL >= 1 && bossAdVariantFTL <= 5) {
+            const adImg = bossImages[`ad${bossAdVariantFTL}`];
+            if (adImg && adImg.complete && adImg.naturalWidth > 0) {
+              ftlBossImage = adImg;
+            }
+          }
+          
           ctx.save();
           
           // Draw streak lines (motion trails)
           const streakLength = 80 * sy;
-          const numStreaks = 5;
+          const numStreaks = isBossFTL ? 12 : (isBossAdFTL ? 8 : 5);
+          const streakSpread = ftlBossImage ? r * 2 : r * 1.5;
           
           for (let i = 0; i < numStreaks; i++) {
-            const offsetX = (Math.random() - 0.5) * r * 1.5;
+            const offsetX = (Math.random() - 0.5) * streakSpread;
             const alpha = 0.3 + Math.random() * 0.4;
             
+            // Boss uses red/orange streaks, normal uses blue
+            const streakColor = isBossFTL ? "255, 100, 50" : (isBossAdFTL ? "255, 150, 50" : "180, 200, 255");
+            
             const grad = ctx.createLinearGradient(x + offsetX, y - streakLength, x + offsetX, y);
-            grad.addColorStop(0, "rgba(150, 180, 255, 0)");
-            grad.addColorStop(0.5, `rgba(180, 200, 255, ${alpha})`);
+            grad.addColorStop(0, `rgba(${streakColor}, 0)`);
+            grad.addColorStop(0.5, `rgba(${streakColor}, ${alpha})`);
             grad.addColorStop(1, `rgba(255, 255, 255, ${alpha + 0.2})`);
             
             ctx.strokeStyle = grad;
@@ -2134,26 +2153,50 @@
             ctx.stroke();
           }
           
-          // Main FTL glow around asteroid
-          setShadow(ctx, "#aaccff", 25);
-          
-          // Draw elongated asteroid (stretched during FTL)
-          ctx.translate(x, y);
-          ctx.scale(1, 2.5); // Stretch vertically
-          ctx.rotate(rotation);
-          
-          const ftlGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
-          ftlGrad.addColorStop(0, "#ffffff");
-          ftlGrad.addColorStop(0.4, baseColor);
-          ftlGrad.addColorStop(1, hexToRgba(baseColor, 0.5));
-          ctx.fillStyle = ftlGrad;
-          
-          ctx.beginPath();
-          ctx.arc(0, 0, r, 0, Math.PI * 2);
-          ctx.fill();
+          if (ftlBossImage) {
+            // Render boss image with FTL effect
+            ctx.translate(x, y);
+            ctx.scale(1, 1.8); // Less stretch for image (2.5 distorts too much)
+            
+            // Glow effect
+            const glowColor = isBossFTL ? "#ff4400" : "#ff8800";
+            setShadow(ctx, glowColor, 30);
+            
+            // Draw the image with slight transparency
+            ctx.globalAlpha = 0.9;
+            const imgSize = r * 2.2;
+            ctx.drawImage(ftlBossImage, -imgSize/2, -imgSize/2, imgSize, imgSize);
+            
+            // Add white overlay for "emerging from warp" effect
+            ctx.globalCompositeOperation = "lighter";
+            ctx.globalAlpha = 0.3;
+            ctx.drawImage(ftlBossImage, -imgSize/2, -imgSize/2, imgSize, imgSize);
+            ctx.globalCompositeOperation = "source-over";
+            ctx.globalAlpha = 1;
+            
+            clearShadow(ctx);
+          } else {
+            // Standard FTL blob for regular asteroids
+            setShadow(ctx, "#aaccff", 25);
+            
+            ctx.translate(x, y);
+            ctx.scale(1, 2.5); // Stretch vertically
+            ctx.rotate(rotation);
+            
+            const ftlGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+            ftlGrad.addColorStop(0, "#ffffff");
+            ftlGrad.addColorStop(0.4, baseColor);
+            ftlGrad.addColorStop(1, hexToRgba(baseColor, 0.5));
+            ctx.fillStyle = ftlGrad;
+            
+            ctx.beginPath();
+            ctx.arc(0, 0, r, 0, Math.PI * 2);
+            ctx.fill();
+            
+            clearShadow(ctx);
+          }
           
           ctx.restore();
-          clearShadow(ctx);
           continue; // Skip normal rendering for FTL asteroids
         }
 
