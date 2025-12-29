@@ -270,19 +270,25 @@ function rand(a, b) {
 function safeSend(ws, obj) {
   if (ws.readyState === 1) ws.send(JSON.stringify(obj));
 }
+function safeSendRaw(ws, str) {
+  if (ws.readyState === 1) ws.send(str);
+}
 function broadcast(obj) {
-  for (const p of players.values()) safeSend(p.ws, obj);
+  const str = JSON.stringify(obj);
+  for (const p of players.values()) safeSendRaw(p.ws, str);
 }
 function broadcastAll(obj) {
-  // Send to both players and spectators
-  for (const p of players.values()) safeSend(p.ws, obj);
-  for (const ws of spectators) safeSend(ws, obj);
+  // Send to both players and spectators - stringify once
+  const str = JSON.stringify(obj);
+  for (const p of players.values()) safeSendRaw(p.ws, str);
+  for (const ws of spectators) safeSendRaw(ws, str);
 }
 function broadcastLobby() {
   // Send lobby state to both players and spectators
   const snapshot = { t: "lobby", ...lobbySnapshot() };
-  for (const p of players.values()) safeSend(p.ws, snapshot);
-  for (const ws of spectators) safeSend(ws, snapshot);
+  const str = JSON.stringify(snapshot);
+  for (const p of players.values()) safeSendRaw(p.ws, str);
+  for (const ws of spectators) safeSendRaw(ws, str);
 }
 
 // Spectator tracking
@@ -1522,14 +1528,16 @@ function tick() {
       }
 
       if (m.inFTL) {
-        const ftlSpeed = 8;
+        // Bosses and boss ads use faster FTL
+        const isBossType = m.isBoss || m.isBossAd;
+        const ftlSpeed = isBossType ? 25 : 12; // Much faster FTL entry
         m.y += m.vy * DT * ftlSpeed;
         m.x += m.vx * DT * 0.3;
         m.rotation += m.rotSpeed * DT * 3;
         
         if (m.y >= m.ftlThreshold) {
           m.inFTL = false;
-          createExplosion(m.x, m.y, 15, "#88f");
+          createExplosion(m.x, m.y, isBossType ? 25 : 15, isBossType ? "#f44" : "#88f");
         }
         continue;
       }

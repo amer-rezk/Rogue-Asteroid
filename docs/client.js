@@ -278,14 +278,25 @@
     };
   }
 
-  // Performance helpers
+  // Performance helpers - shadow caching to avoid redundant state changes
+  let currentShadowColor = null;
+  let currentShadowBlur = 0;
+  
   function setShadow(ctx, color, blur) {
-    ctx.shadowColor = color;
-    ctx.shadowBlur = blur;
+    if (currentShadowColor !== color || currentShadowBlur !== blur) {
+      ctx.shadowColor = color;
+      ctx.shadowBlur = blur;
+      currentShadowColor = color;
+      currentShadowBlur = blur;
+    }
   }
   
   function clearShadow(ctx) {
-    ctx.shadowBlur = 0;
+    if (currentShadowBlur !== 0) {
+      ctx.shadowBlur = 0;
+      currentShadowBlur = 0;
+      currentShadowColor = null;
+    }
   }
 
   function initStars() {
@@ -378,28 +389,40 @@
   }
 
   function updateClientEffects(dt) {
-    // Update particles
-    clientParticles = clientParticles.filter(p => {
+    // Pre-calculate common values
+    const damping = 1 - (1 - 0.95) * dt * 60; // Linearized damping (faster than pow)
+    
+    // Update particles - use index-based loop for better performance
+    for (let i = clientParticles.length - 1; i >= 0; i--) {
+      const p = clientParticles[i];
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       p.life -= dt;
-      p.vx *= Math.pow(0.95, dt * 60); // Frame-rate independent damping
-      p.vy *= Math.pow(0.95, dt * 60);
-      return p.life > 0;
-    });
+      p.vx *= damping;
+      p.vy *= damping;
+      if (p.life <= 0) {
+        clientParticles.splice(i, 1);
+      }
+    }
     
     // Update damage numbers
-    clientDamageNumbers = clientDamageNumbers.filter(d => {
+    for (let i = clientDamageNumbers.length - 1; i >= 0; i--) {
+      const d = clientDamageNumbers[i];
       d.y += d.vy * dt;
       d.life -= dt * 1.5;
-      return d.life > 0;
-    });
+      if (d.life <= 0) {
+        clientDamageNumbers.splice(i, 1);
+      }
+    }
     
     // Update lightning effects
-    clientLightning = clientLightning.filter(l => {
+    for (let i = clientLightning.length - 1; i >= 0; i--) {
+      const l = clientLightning[i];
       l.life -= dt;
-      return l.life > 0;
-    });
+      if (l.life <= 0) {
+        clientLightning.splice(i, 1);
+      }
+    }
     
     // Update cached asteroid rotations
     for (const [id, data] of asteroidCache) {
@@ -408,7 +431,8 @@
     
     // SMOOTH INTERPOLATION: Client-side prediction with server reconciliation
     if (lastSnap) {
-      const now = Date.now();
+      const snapDistSq = INTERP_SNAP_DIST * INTERP_SNAP_DIST;
+      const bulletSnapDistSq = snapDistSq * 0.25; // (0.5)^2
       
       // Interpolate missiles using velocity prediction + smooth blend to server
       for (const [id, state] of missileStates) {
@@ -420,18 +444,16 @@
         state.targetX += state.vx * dt;
         state.targetY += state.vy * dt;
         
-        // Calculate distance to server position
+        // Calculate distance squared to server position (avoid sqrt)
         const dx = state.targetX - state.x;
         const dy = state.targetY - state.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
+        const distSq = dx * dx + dy * dy;
         
         // If too far off, snap closer; otherwise smoothly blend
-        if (dist > INTERP_SNAP_DIST) {
-          // Snap partway to avoid jarring teleport
+        if (distSq > snapDistSq) {
           state.x += dx * 0.5;
           state.y += dy * 0.5;
-        } else if (dist > 1) {
-          // Smooth blend toward server position
+        } else if (distSq > 1) {
           const blend = Math.min(1, PREDICTION_BLEND * dt * 60);
           state.x += dx * blend;
           state.y += dy * blend;
@@ -447,12 +469,12 @@
         
         const dx = state.targetX - state.x;
         const dy = state.targetY - state.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
+        const distSq = dx * dx + dy * dy;
         
-        if (dist > INTERP_SNAP_DIST * 0.5) {
+        if (distSq > bulletSnapDistSq) {
           state.x += dx * 0.5;
           state.y += dy * 0.5;
-        } else if (dist > 1) {
+        } else if (distSq > 1) {
           const blend = Math.min(1, PREDICTION_BLEND * 1.5 * dt * 60);
           state.x += dx * blend;
           state.y += dy * blend;
@@ -1843,9 +1865,21 @@
 
   // Track last frame time for smooth delta time calculation
   let lastFrameTime = performance.now();
+  let isTabVisible = true;
+  
+  // Handle visibility change - pause heavy rendering when tab is hidden
+  document.addEventListener("visibilitychange", () => {
+    isTabVisible = !document.hidden;
+    if (isTabVisible) {
+      lastFrameTime = performance.now(); // Reset to avoid huge dt jump
+    }
+  });
 
   function draw() {
     requestAnimationFrame(draw);
+    
+    // Skip heavy rendering when tab is hidden (still process state)
+    if (!isTabVisible) return;
 
     try {
       // Calculate actual delta time for smooth animations
@@ -1862,16 +1896,14 @@
       ctx.fillStyle = "#050510";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // Stars
+      // Stars - optimized with rectangles instead of arcs
+      ctx.fillStyle = "rgba(255,255,255,0.4)";
       for (let i = 0; i < stars.length; i++) {
         const s = stars[i];
         s.y += s.speed;
         if (s.y > 1) s.y = 0;
-        const twinkle = Math.sin(time * 3 + s.twinkle) * 0.3 + 0.7;
-        ctx.fillStyle = `rgba(255,255,255,${twinkle * 0.5})`;
-        ctx.beginPath();
-        ctx.arc(s.x * canvas.width, s.y * canvas.height, s.size, 0, Math.PI * 2);
-        ctx.fill();
+        // Simple rectangle stars (much faster than arc)
+        ctx.fillRect(s.x * canvas.width, s.y * canvas.height, s.size, s.size);
       }
 
       if (phase === "menu" || phase === "lobby") {
@@ -2457,18 +2489,28 @@
 
         // Main turret using sprites
         const turretAlpha = isDead ? 0.3 : 1;
-        const turretCenterX = cx;
-        const turretCenterY = 560 * sy - 20 * sy; // Center point of the turret
+        const groundY = 560 * sy; // Base of playing field
         
         // Check if turret images are loaded
         const hasBase = turretImages.base.complete && turretImages.base.naturalWidth > 0;
         const hasBarrel = turretImages.barrel.complete && turretImages.barrel.naturalWidth > 0;
         
         if (hasBase && hasBarrel) {
-          // Sprite-based rendering (scaled down 25%)
-          const baseSize = 37.5 * sx; // 50 * 0.75
-          const barrelW = 18 * sx;    // 24 * 0.75
-          const barrelH = 37.5 * sy;  // 50 * 0.75
+          // Calculate base size preserving aspect ratio
+          const baseAspect = turretImages.base.naturalWidth / turretImages.base.naturalHeight;
+          const baseW = 70 * sx; // Width we want
+          const baseH = baseW / baseAspect; // Height calculated from aspect ratio
+          
+          // Barrel dimensions (preserve aspect ratio)
+          const barrelAspect = turretImages.barrel.naturalWidth / turretImages.barrel.naturalHeight;
+          const barrelH = 35 * sy;
+          const barrelW = barrelH * barrelAspect;
+          
+          // Position: bottom of base at ground, horizontally centered
+          const baseX = cx - baseW / 2;
+          const baseY = groundY - baseH;
+          const turretCenterX = cx;
+          const turretCenterY = groundY - baseH / 2; // Center of base for barrel rotation
           
           ctx.save();
           ctx.globalAlpha = turretAlpha;
@@ -2478,8 +2520,8 @@
             setShadow(ctx, color.main, 15);
           }
           
-          // Draw the base first (below barrel)
-          ctx.drawImage(turretImages.base, turretCenterX - baseSize / 2, turretCenterY - baseSize / 2, baseSize, baseSize);
+          // Draw the base first (below barrel) - bottom at ground level
+          ctx.drawImage(turretImages.base, baseX, baseY, baseW, baseH);
           
           clearShadow(ctx);
           
