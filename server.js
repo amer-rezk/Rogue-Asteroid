@@ -313,10 +313,16 @@ function slotForPlayer(id) {
   return p ? p.slot : -1;
 }
 
+// Pre-computed segment bounds for all 4 slots (avoids object creation each call)
+const SEGMENT_BOUNDS = [
+  { x0: 0 * SEGMENT_W, x1: 1 * SEGMENT_W },
+  { x0: 1 * SEGMENT_W, x1: 2 * SEGMENT_W },
+  { x0: 2 * SEGMENT_W, x1: 3 * SEGMENT_W },
+  { x0: 3 * SEGMENT_W, x1: 4 * SEGMENT_W }
+];
+
 function segmentBounds(slot) {
-  const x0 = slot * SEGMENT_W;
-  const x1 = x0 + SEGMENT_W;
-  return { x0, x1 };
+  return SEGMENT_BOUNDS[slot] || { x0: slot * SEGMENT_W, x1: (slot + 1) * SEGMENT_W };
 }
 
 function isSlotAlive(slot) {
@@ -1141,7 +1147,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     chainChance: chainChance,
     ricochet: ricochet,
     pierce: pierce,
-    hitList: [],
+    hitSet: new Set(), // O(1) hit tracking
     modules: modules, // Store modules for hit effects
     bulletColor: bulletColor, // Custom color for confetti
   };
@@ -1598,7 +1604,7 @@ function tick() {
               life: 3.0,
               slot: targetSlot,
               color: PLAYER_COLORS[targetSlot]?.main || "#0ff",
-              hitList: [] // Track what we've already damaged
+              hitSet: new Set() // O(1) hit tracking
             });
             
             // Visual explosion
@@ -1717,7 +1723,7 @@ function tick() {
       }
       if (b.y < -50) { if (b.ricochet > 0) { b.y = -50; b.vy = -b.vy; b.ricochet--; didRicochet = true; } else { b.dead = true; } }
       if (b.y > GROUND_Y) { if (b.ricochet > 0) { b.y = GROUND_Y; b.vy = -b.vy; b.ricochet--; didRicochet = true; } else { b.dead = true; } }
-      if (didRicochet) b.hitList = [];
+      if (didRicochet && b.hitSet) b.hitSet.clear();
     }
 
     for (const b of bullets) {
@@ -1728,7 +1734,7 @@ function tick() {
         if (m.x < ownerX0 || m.x > ownerX1) continue;
         if (m.attackType && m.targetSlot !== b.ownerSlot) continue;
         if (m.isPhased && Math.random() > 0.3) continue;
-        if (b.hitList && b.hitList.includes(m.id)) continue;
+        if (b.hitSet && b.hitSet.has(m.id)) continue; // O(1) Set lookup
         const dx = m.x - b.x;
         const dy = m.y - b.y;
         const rr = m.r + b.r;
@@ -1759,8 +1765,8 @@ function tick() {
             }
           }
 
-          if (!b.hitList) b.hitList = [];
-          b.hitList.push(m.id);
+          if (!b.hitSet) b.hitSet = new Set();
+          b.hitSet.add(m.id);
           
           // ===== TOWER MODULE EFFECTS ON HIT =====
           const bulletModules = b.modules || [];
@@ -1790,7 +1796,7 @@ function tick() {
                 chainChance: 0,
                 ricochet: 0,
                 pierce: 0,
-                hitList: [m.id],
+                hitSet: new Set([m.id]), // Already hit source target
                 modules: [],
                 bulletColor: "#00ffff",
               });
@@ -1927,7 +1933,7 @@ function tick() {
                 life: 5.0,
                 damage: b.dmg * 0.5,
                 ownerSlot: b.ownerSlot,
-                hitList: []
+                hitSet: new Set() // O(1) hit tracking
               });
               queueEvent("ghostSpawn", { x: m.x, y: m.y, slot: b.ownerSlot });
             }
@@ -2023,7 +2029,7 @@ function tick() {
       
       // Deal damage to asteroids in radius (once per asteroid)
       for (const m of missiles) {
-        if (m.dead || exp.hitList.includes(m.id)) continue;
+        if (m.dead || exp.hitSet.has(m.id)) continue;
         
         const dx = m.x - exp.x;
         const dy = m.y - exp.y;
@@ -2031,7 +2037,7 @@ function tick() {
         
         if (dx * dx + dy * dy <= combinedR * combinedR) {
           m.hp -= exp.damage;
-          exp.hitList.push(m.id);
+          exp.hitSet.add(m.id);
           createExplosion(m.x, m.y, 15, exp.color);
           
           if (m.hp <= 0) {
@@ -2054,14 +2060,14 @@ function tick() {
       
       // Check for collision with enemies
       for (const m of missiles) {
-        if (m.dead || ghost.hitList.includes(m.id)) continue;
+        if (m.dead || ghost.hitSet.has(m.id)) continue;
         const dx = m.x - ghost.x;
         const dy = m.y - ghost.y;
         const combinedR = ghost.r + m.r;
         
         if (dx * dx + dy * dy < combinedR * combinedR) {
           m.hp -= ghost.damage;
-          ghost.hitList.push(m.id);
+          ghost.hitSet.add(m.id);
           createExplosion(m.x, m.y, 15, "#8844ff");
           addDamageNumber(m.x, m.y - m.r, ghost.damage, false);
           
@@ -2175,34 +2181,65 @@ function tick() {
         world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
         // OPTIMIZED: No vertices/rotation - client caches from spawn events
         // Include velocity for client-side prediction
-        missiles: missiles.map((m) => ({
-          id: m.id, x: m.x, y: m.y, r: m.r, hp: m.hp, maxHp: m.maxHp, type: m.type,
-          vx: m.vx, vy: m.vy,
-          attackType: m.attackType, isPhased: m.isPhased, inFTL: m.inFTL,
-          isBoss: m.isBoss, isBossAd: m.isBossAd, bossAdVariant: m.bossAdVariant,
-          staticCharge: m.staticCharge || 0 // For chain reaction visual
-        })),
+        // Round coordinates to 1 decimal place to reduce JSON size
+        missiles: missiles.map((m) => {
+          const obj = {
+            id: m.id, 
+            x: Math.round(m.x * 10) / 10, 
+            y: Math.round(m.y * 10) / 10, 
+            r: m.r, 
+            hp: Math.round(m.hp * 10) / 10, 
+            maxHp: m.maxHp, 
+            type: m.type,
+            vx: Math.round(m.vx * 10) / 10, 
+            vy: Math.round(m.vy * 10) / 10,
+            inFTL: m.inFTL
+          };
+          // Only include optional fields if set (reduces JSON size)
+          if (m.attackType) obj.attackType = m.attackType;
+          if (m.isPhased) obj.isPhased = true;
+          if (m.isBoss) obj.isBoss = true;
+          if (m.isBossAd) { obj.isBossAd = true; obj.bossAdVariant = m.bossAdVariant; }
+          if (m.staticCharge > 0) obj.staticCharge = m.staticCharge;
+          return obj;
+        }),
         // Bullets with vx/vy for client interpolation (no homing, predictive aim)
-        bullets: bullets.map((b) => ({
-          id: b.id, x: b.x, y: b.y, r: b.r, vx: b.vx, vy: b.vy,
-          slot: b.ownerSlot, isCrit: b.isCrit, lifespan: b.lifespan,
-          isTower: b.isTowerBullet, bulletType: b.bulletType,
-          bulletColor: b.bulletColor // For confetti cannon
-        })),
+        bullets: bullets.map((b) => {
+          const obj = {
+            id: b.id, 
+            x: Math.round(b.x * 10) / 10, 
+            y: Math.round(b.y * 10) / 10, 
+            r: b.r, 
+            vx: Math.round(b.vx * 10) / 10, 
+            vy: Math.round(b.vy * 10) / 10,
+            slot: b.ownerSlot,
+            lifespan: Math.round(b.lifespan * 10) / 10
+          };
+          if (b.isCrit) obj.isCrit = true;
+          if (b.isTowerBullet) obj.isTower = true;
+          if (b.bulletType && b.bulletType !== "gatling") obj.bulletType = b.bulletType;
+          if (b.bulletColor) obj.bulletColor = b.bulletColor;
+          return obj;
+        }),
         // OPTIMIZED: Events for client-side particles/damage numbers
         events: eventQueue,
-        // Shield explosion zones for visual rendering
+        // Shield explosion zones for visual rendering (round coordinates)
         shieldExplosions: shieldExplosions.map(exp => ({
-          x: exp.x, y: exp.y, radius: exp.radius, maxRadius: exp.maxRadius,
-          life: exp.life, duration: exp.duration, color: exp.color, slot: exp.slot
+          x: Math.round(exp.x), y: Math.round(exp.y), 
+          radius: Math.round(exp.radius), maxRadius: exp.maxRadius,
+          life: Math.round(exp.life * 10) / 10, duration: exp.duration, 
+          color: exp.color, slot: exp.slot
         })),
         // Ghost allies for necromancer module
         ghostAllies: ghostAllies.map(g => ({
-          x: g.x, y: g.y, r: g.r, life: g.life, ownerSlot: g.ownerSlot
+          x: Math.round(g.x), y: Math.round(g.y), 
+          r: Math.round(g.r), life: Math.round(g.life * 10) / 10, 
+          ownerSlot: g.ownerSlot
         })),
         // Gravity wells for gravity module
         gravityWells: gravityWells.map(w => ({
-          x: w.x, y: w.y, radius: w.radius, life: w.life
+          x: Math.round(w.x), y: Math.round(w.y), 
+          radius: w.radius, life: Math.round(w.life * 10) / 10
         })),
         // Module card phase data
         moduleCardPhase: moduleCardPhase,
