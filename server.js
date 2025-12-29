@@ -174,8 +174,6 @@ let wave = 0;
 
 let missiles = [];
 let bullets = [];
-let particles = [];
-let damageNumbers = [];
 let shieldExplosions = []; // Active shield explosions that deal damage
 let ghostAllies = []; // Necromancer ghost allies flying upward
 let gravityWells = []; // Active gravity wells pulling enemies
@@ -582,9 +580,8 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
     maxHp: hp,
     lastSpawnHp: hp, // Track HP for boss spawns
     bossSpawnCount: 0, // Track number of boss minion spawns (max 3)
-    rotation: rand(0, Math.PI * 2),
     rotSpeed: rotSpeed,
-    vertices: vertices,
+    // vertices only sent once at spawn via event, not stored
     targetSlot: targetSlot,
     attackType: attackType,
     senderId: senderId,
@@ -607,8 +604,6 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
 function spawnWave() {
   missiles = [];
   bullets = [];
-  particles = [];
-  damageNumbers = [];
   shieldExplosions = [];
   ghostAllies = [];
   gravityWells = [];
@@ -941,8 +936,6 @@ function resetToLobby() {
     lockedSlots = null;
     missiles = [];
     bullets = [];
-    particles = [];
-    damageNumbers = [];
     shieldExplosions = [];
     upgradePicks = new Map();
     attackQueue = new Map();
@@ -1501,7 +1494,7 @@ function tick() {
         const ftlSpeed = isBossType ? 25 : 12; // Much faster FTL entry
         m.y += m.vy * DT * ftlSpeed;
         m.x += m.vx * DT * 0.3;
-        m.rotation += m.rotSpeed * DT * 3;
+        // Rotation is handled client-side
         
         if (m.y >= m.ftlThreshold) {
           m.inFTL = false;
@@ -1520,7 +1513,7 @@ function tick() {
       
       m.x += m.vx * DT * speedMult;
       m.y += m.vy * DT * speedMult;
-      m.rotation += m.rotSpeed * DT;
+      // Rotation is handled client-side
       
       // Carrier: Spawns mini asteroids periodically
       if (m.isCarrier && m.carrierSpawnTimer !== null && !m.inFTL) {
@@ -2015,9 +2008,9 @@ function tick() {
         
         const dx = m.x - exp.x;
         const dy = m.y - exp.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
+        const combinedR = exp.radius + m.r;
         
-        if (dist <= exp.radius + m.r) {
+        if (dx * dx + dy * dy <= combinedR * combinedR) {
           m.hp -= exp.damage;
           exp.hitList.push(m.id);
           createExplosion(m.x, m.y, 15, exp.color);
@@ -2043,9 +2036,9 @@ function tick() {
         if (m.dead || ghost.hitList.includes(m.id)) continue;
         const dx = m.x - ghost.x;
         const dy = m.y - ghost.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
+        const combinedR = ghost.r + m.r;
         
-        if (dist < ghost.r + m.r) {
+        if (dx * dx + dy * dy < combinedR * combinedR) {
           m.hp -= ghost.damage;
           ghost.hitList.push(m.id);
           createExplosion(m.x, m.y, 15, "#8844ff");
@@ -2089,9 +2082,9 @@ function tick() {
         
         const dx = m2.x - m1.x;
         const dy = m2.y - m1.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
+        const combinedR = m1.r + m2.r + 5;
         
-        if (dist < m1.r + m2.r + 5) {
+        if (dx * dx + dy * dy < combinedR * combinedR) {
           // Both take massive damage
           const staticDamage = m1.staticCharge;
           m1.hp -= staticDamage;
