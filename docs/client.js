@@ -253,12 +253,8 @@
   let lastUpdateTime = Date.now();
   
   // SMOOTH INTERPOLATION for fluid movement
-  let lastServerTime = Date.now();
-  let serverTimeDelta = 66; // Expected ms between server updates (15Hz = 66ms)
-  let missileStates = new Map();  // id -> {x, y, targetX, targetY, vx, vy, lastUpdate}
-  let bulletStates = new Map();   // id -> {x, y, targetX, targetY, vx, vy, lastUpdate}
-  const INTERP_SNAP_DIST = 100;   // Snap to server position if more than this far off
-  const PREDICTION_BLEND = 0.15;  // How fast to blend toward server position (lower = smoother but more latent)
+  let missileStates = new Map();  // id -> {x, y, vx, vy}
+  let bulletStates = new Map();   // id -> {x, y, vx, vy}
   
   // Reusable objects to reduce GC pressure
   const tempIdSet = new Set();
@@ -443,59 +439,22 @@
       data.rotation += data.rotSpeed * dt;
     }
     
-    // SMOOTH INTERPOLATION: Client-side prediction with server reconciliation
+    // SMOOTH INTERPOLATION: Pure velocity prediction between server updates
+    // Server sends position at 15Hz, client predicts between updates
     if (lastSnap) {
-      const snapDistSq = INTERP_SNAP_DIST * INTERP_SNAP_DIST;
-      const bulletSnapDistSq = snapDistSq * 0.25; // (0.5)^2
-      
-      // Interpolate missiles using velocity prediction + smooth blend to server
+      // Missiles: predict forward using velocity
       for (const [id, state] of missileStates) {
-        // Pure velocity-based prediction
         state.x += state.vx * dt;
         state.y += state.vy * dt;
-        
-        // Also advance target (server position) by velocity
-        state.targetX += state.vx * dt;
-        state.targetY += state.vy * dt;
-        
-        // Calculate distance squared to server position (avoid sqrt)
-        const dx = state.targetX - state.x;
-        const dy = state.targetY - state.y;
-        const distSq = dx * dx + dy * dy;
-        
-        // If too far off, snap closer; otherwise smoothly blend
-        if (distSq > snapDistSq) {
-          state.x += dx * 0.5;
-          state.y += dy * 0.5;
-        } else if (distSq > 1) {
-          const blend = Math.min(1, PREDICTION_BLEND * dt * 60);
-          state.x += dx * blend;
-          state.y += dy * blend;
-        }
       }
       
-      // Interpolate bullets (same logic but bullets move faster)
+      // Bullets: predict forward using velocity
       for (const [id, state] of bulletStates) {
         state.x += state.vx * dt;
         state.y += state.vy * dt;
-        state.targetX += state.vx * dt;
-        state.targetY += state.vy * dt;
-        
-        const dx = state.targetX - state.x;
-        const dy = state.targetY - state.y;
-        const distSq = dx * dx + dy * dy;
-        
-        if (distSq > bulletSnapDistSq) {
-          state.x += dx * 0.5;
-          state.y += dy * 0.5;
-        } else if (distSq > 1) {
-          const blend = Math.min(1, PREDICTION_BLEND * 1.5 * dt * 60);
-          state.x += dx * blend;
-          state.y += dy * blend;
-        }
       }
       
-      // Apply interpolated positions to lastSnap for rendering
+      // Apply predicted positions to lastSnap for rendering
       if (lastSnap.missiles) {
         for (const m of lastSnap.missiles) {
           const state = missileStates.get(m.id);
@@ -537,8 +496,6 @@
           missileStates.set(ev.id, {
             x: ev.x,
             y: ev.y,
-            targetX: ev.x,
-            targetY: ev.y,
             vx: ev.vx || 0,
             vy: ev.vy || 30
           });
@@ -563,27 +520,11 @@
             bulletStates.set(ev.id, {
               x: ev.x,
               y: ev.y,
-              targetX: ev.x,
-              targetY: ev.y,
               vx: ev.vx,
-              vy: ev.vy,
-              lastUpdate: Date.now(),
-              slot: ev.slot,
-              isCrit: ev.isCrit,
-              bulletColor: ev.bulletColor
+              vy: ev.vy
             });
           }
           break;
-      }
-    }
-  }
-
-  function cleanupAsteroidCache(currentMissileIds) {
-    // Remove cached data for asteroids that no longer exist
-    const currentIds = new Set(currentMissileIds);
-    for (const id of asteroidCache.keys()) {
-      if (!currentIds.has(id)) {
-        asteroidCache.delete(id);
       }
     }
   }
@@ -944,30 +885,26 @@
         }
         lastServerTime = now;
         
-        // Update missile states - store server position as target
+        // Update missile states - blend toward server position for smoothness
         if (msg.missiles) {
-          // Reuse tempIdSet instead of creating new Set
           tempIdSet.clear();
           for (const m of msg.missiles) {
             tempIdSet.add(m.id);
             const prev = missileStates.get(m.id);
             if (prev) {
-              // Existing missile: update target to server position
-              prev.targetX = m.x;
-              prev.targetY = m.y;
+              // Blend 80% toward server position to smooth out network jitter
+              // This adds ~13ms of perceived latency but eliminates most stutter
+              prev.x = prev.x * 0.2 + m.x * 0.8;
+              prev.y = prev.y * 0.2 + m.y * 0.8;
               prev.vx = m.vx || 0;
               prev.vy = m.vy || 30;
-              prev.lastUpdate = now;
             } else {
               // New missile: start at server position
               missileStates.set(m.id, {
                 x: m.x,
                 y: m.y,
-                targetX: m.x,
-                targetY: m.y,
                 vx: m.vx || 0,
-                vy: m.vy || 30,
-                lastUpdate: now
+                vy: m.vy || 30
               });
             }
           }
@@ -977,27 +914,24 @@
           }
         }
         
-        // Update bullet states - store server position as target  
+        // Update bullet states - blend toward server position
         if (msg.bullets) {
           tempIdSet.clear();
           for (const b of msg.bullets) {
             tempIdSet.add(b.id);
             const prev = bulletStates.get(b.id);
             if (prev) {
-              prev.targetX = b.x;
-              prev.targetY = b.y;
+              // Bullets move fast so use stronger blend
+              prev.x = prev.x * 0.1 + b.x * 0.9;
+              prev.y = prev.y * 0.1 + b.y * 0.9;
               prev.vx = b.vx;
               prev.vy = b.vy;
-              prev.lastUpdate = now;
             } else {
               bulletStates.set(b.id, {
                 x: b.x,
                 y: b.y,
-                targetX: b.x,
-                targetY: b.y,
                 vx: b.vx,
-                vy: b.vy,
-                lastUpdate: now
+                vy: b.vy
               });
             }
           }
