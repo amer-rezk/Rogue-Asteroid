@@ -2496,9 +2496,9 @@
         const hasBarrel = turretImages.barrel.complete && turretImages.barrel.naturalWidth > 0;
         
         if (hasBase && hasBarrel) {
-          // Calculate base size preserving aspect ratio
+          // Calculate base size preserving aspect ratio (scaled down 50%)
           const baseAspect = turretImages.base.naturalWidth / turretImages.base.naturalHeight;
-          const baseW = 70 * sx; // Width we want
+          const baseW = 35 * sx; // Width we want (70 * 0.5)
           const baseH = baseW / baseAspect; // Height calculated from aspect ratio
           
           // Barrel dimensions (preserve aspect ratio)
