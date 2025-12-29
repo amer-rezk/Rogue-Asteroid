@@ -2496,9 +2496,9 @@
         const hasBarrel = turretImages.barrel.complete && turretImages.barrel.naturalWidth > 0;
         
         if (hasBase && hasBarrel) {
-          // Calculate base size preserving aspect ratio (scaled down 50%)
+          // Calculate base size preserving aspect ratio
           const baseAspect = turretImages.base.naturalWidth / turretImages.base.naturalHeight;
-          const baseW = 35 * sx; // Width we want (70 * 0.5)
+          const baseW = 43.75 * sx; // Width (35 * 1.25 = 25% bigger)
           const baseH = baseW / baseAspect; // Height calculated from aspect ratio
           
           // Barrel dimensions (preserve aspect ratio)
@@ -2529,8 +2529,8 @@
           ctx.save();
           ctx.translate(turretCenterX, turretCenterY);
           ctx.rotate(p.turretAngle + Math.PI / 2); // Rotate to face target
-          // Barrel's image center at origin
-          ctx.drawImage(turretImages.barrel, -barrelW / 2, -barrelH / 2, barrelW, barrelH);
+          // Barrel anchor point at 25% from bottom (75% above, 25% below)
+          ctx.drawImage(turretImages.barrel, -barrelW / 2, -barrelH * 0.75, barrelW, barrelH);
           ctx.restore();
           
           ctx.restore();
