@@ -239,6 +239,10 @@ function redistributeAsteroids(deadSlot) {
   for (const m of missiles) {
     if (m.dead) continue;
     
+    // BOSS STAYS - Don't redistribute boss or boss ads when player dies
+    // The boss and its minions belong to that player's lane only
+    if (m.type === "boss" || m.isBossAd) continue;
+    
     // If the missile was targeting the player who just died
     if (m.targetSlot === deadSlot) {
       
@@ -274,6 +278,9 @@ function redistributeAsteroids(deadSlot) {
   
   // Handle asteroids that were queued up but not spawned yet
   for (const queued of spawnQueue) {
+    // Skip boss from redistribution
+    if (queued.type === "boss") continue;
+    
     if (queued.targetSlot === deadSlot) {
       const newSlot = aliveSlots[Math.floor(Math.random() * aliveSlots.length)];
       const { x0, x1 } = segmentBounds(newSlot);
@@ -486,7 +493,7 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
     isBoss: isBoss,
     isBossAd: isBossAd,
     bossAdVariant: bossAdVariant,
-    noGold: noGold || isBossAd, // Boss ads and spawned minions give no gold
+    noGold: noGold, // Only spawned minions from splitter/carrier give no gold
     inFTL: true,
     ftlThreshold: ftlThreshold,
     ftlTrail: [],
@@ -1508,7 +1515,7 @@ function tick() {
                   null,  // attackType
                   null,  // senderId
                   bossAdVariant,  // bossAdVariant (1-5)
-                  true   // noGold - boss ads give no gold
+                  false  // Boss ads give 1 gold each
                 ));
               }
               createExplosion(m.x, m.y, 60, "#ff0000");
@@ -1592,12 +1599,39 @@ function tick() {
             if (owner) {
               owner.score = (owner.score || 0) + 50;
               owner.kills = (owner.kills || 0) + 1;
-              // No gold for attack asteroids OR spawned minions (splitter/carrier/boss ads)
-              if (!m.attackType && !m.noGold) {
+              // Boss ads give 1 gold each (reward for clearing them)
+              if (m.isBossAd) {
+                owner.gold = (owner.gold || 0) + 1;
+              }
+              // No gold for attack asteroids OR spawned minions (splitter/carrier)
+              else if (!m.attackType && !m.noGold) {
                 const goldMult = owner.upgrades?.goldMult ?? 1;
                 const goldReward = m.type === "large" ? 4 : m.type === "medium" ? 2 : 1;
                 owner.gold = (owner.gold || 0) + Math.round(goldReward * goldMult);
               }
+            }
+            
+            // When boss dies, spawn any remaining minion waves
+            if (m.type === "boss" && m.bossSpawnCount < 3) {
+              const remainingSpawns = 3 - m.bossSpawnCount;
+              for (let spawnWave = 0; spawnWave < remainingSpawns; spawnWave++) {
+                for (let k = 0; k < 5; k++) {
+                  const bossAdVariant = (k % 5) + 1;
+                  const spawnedAd = createAsteroid(
+                    m.x + rand(-50, 50),
+                    m.y + rand(20, 100),
+                    "medium",
+                    Math.max(2, wave),
+                    m.targetSlot,
+                    null,
+                    null,
+                    bossAdVariant,
+                    false // Boss ads CAN give gold (1 each)
+                  );
+                  missiles.push(spawnedAd);
+                }
+              }
+              createExplosion(m.x, m.y, 80, "#ff0000");
             }
             
             // Splitter: spawn children with noGold flag
