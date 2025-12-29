@@ -427,7 +427,7 @@ function generateAsteroidShape(baseRadius) {
 }
 
 function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId = null) {
-  const sizeMap = { small: 10, medium: 13, large: 17, boss: 150 }; // Boss is HUGE (150 radius = 300 width)
+  const sizeMap = { small: 10, medium: 13, large: 17, boss: 75 }; // Boss reduced to 75 radius
   const r = sizeMap[type] || 12;
   const speedMult = type === "boss" ? 0.3 : (attackType ? (ATTACK_TYPES[attackType]?.speed || 1) : 1); // Boss moves slow
   
@@ -488,8 +488,8 @@ function spawnWave() {
       const targetSlot = playerIdx;
       const { x0 } = segmentBounds(targetSlot);
       
-      // Boss HP Calculation
-      const bossHp = 400 + (wave * 50); 
+      // Boss HP Calculation (reduced by 50%)
+      const bossHp = 200 + (wave * 25); 
       
       spawnQueue.push({ 
         x: x0 + SEGMENT_W / 2, 
