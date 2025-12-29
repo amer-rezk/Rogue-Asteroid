@@ -43,6 +43,14 @@ const WAVE_COUNT_SCALE = 2;
 
 const MAX_AIM_ANGLE = (80 * Math.PI) / 180;
 
+// ===== Player Colors =====
+const PLAYER_COLORS = [
+  { main: "#00ffff", dark: "#006666", name: "CYAN" },
+  { main: "#ff00ff", dark: "#660066", name: "MAGENTA" },
+  { main: "#00ff88", dark: "#006633", name: "GREEN" },
+  { main: "#ffaa00", dark: "#664400", name: "ORANGE" },
+];
+
 // ===== Tower Definitions =====
 const TOWER_TYPES = {
   0: { name: "Gatling", cost: 50, damage: 1, cooldown: 0.25, rangeMult: 0.8, color: "#ffff00", upgradeCost: 40, bulletType: "gatling" },
@@ -53,11 +61,11 @@ const MAX_TOWER_LEVEL = 5;
 
 // ===== PvP Attack Units =====
 const ATTACK_TYPES = {
-  swarm: { name: "Swarm", cost: 25, count: 3, baseHp: 0.1, hpScale: 0.75, size: "small", speed: 1.3, desc: "3 fast weak asteroids", color: "#ffcc00", icon: "🐝" },
-  bruiser: { name: "Bruiser", cost: 35, count: 1, baseHp: 7.5, hpScale: 1.5, size: "large", speed: 0.6, desc: "Very tanky asteroid", color: "#ff4444", icon: "🪨" },
-  carrier: { name: "Carrier", cost: 60, count: 1, baseHp: 6, hpScale: 1.3, size: "large", speed: 0.5, spawner: true, spawnInterval: 2.0, spawnCount: 2, desc: "Spawns minions!", color: "#ff00ff", icon: "👑" },
-  splitter: { name: "Splitter", cost: 50, count: 1, baseHp: 5, hpScale: 1.3, size: "large", speed: 0.75, splits: 15, desc: "Splits into 15 on death", color: "#00ffff", icon: "💎" },
-  ghost: { name: "Ghost", cost: 40, count: 2, baseHp: 2, hpScale: 1.2, size: "medium", speed: 1.1, phasing: true, desc: "2 phasing asteroids", color: "#8800ff", icon: "👻" }
+  swarm: { name: "Swarm", cost: 25, count: 3, baseHp: 0.05, hpScale: 0.56, size: "small", speed: 1.3, desc: "3 fast weak asteroids", color: "#ffcc00", icon: "🐝" },
+  bruiser: { name: "Bruiser", cost: 35, count: 1, baseHp: 3.75, hpScale: 1.125, size: "large", speed: 0.6, desc: "Very tanky asteroid", color: "#ff4444", icon: "🪨" },
+  carrier: { name: "Carrier", cost: 60, count: 1, baseHp: 3, hpScale: 0.975, size: "large", speed: 0.5, spawner: true, spawnInterval: 2.0, spawnCount: 2, desc: "Spawns minions!", color: "#ff00ff", icon: "👑" },
+  splitter: { name: "Splitter", cost: 50, count: 1, baseHp: 2.5, hpScale: 0.975, size: "large", speed: 0.75, splits: 15, desc: "Splits into 15 on death", color: "#00ffff", icon: "💎" },
+  ghost: { name: "Ghost", cost: 40, count: 2, baseHp: 1, hpScale: 0.9, size: "medium", speed: 1.1, phasing: true, desc: "2 phasing asteroids", color: "#8800ff", icon: "👻" }
 };
 
 // ===== Server state =====
@@ -82,6 +90,10 @@ let missiles = [];
 let bullets = [];
 let particles = [];
 let damageNumbers = [];
+let shieldExplosions = []; // Active shield explosions that deal damage
+
+// Shield sphere radius (as fraction of segment width)
+const SHIELD_RADIUS_MULT = 0.45;
 
 let upgradePicks = new Map();
 let attackQueue = new Map();
@@ -486,6 +498,7 @@ function spawnWave() {
   bullets = [];
   particles = [];
   damageNumbers = [];
+  shieldExplosions = [];
   spawnQueue = [];
   spawnTimer = 0;
 
@@ -500,8 +513,12 @@ function spawnWave() {
       const targetSlot = playerIdx;
       const { x0 } = segmentBounds(targetSlot);
       
-      // Boss HP Calculation (reduced by 50% again)
-      const bossHp = 25 + (wave * 3); 
+      // Boss HP Calculation - wave 10 is baseline, scales harder after
+      // Wave 10: 55 HP, Wave 20: ~135 HP, Wave 30: ~280 HP
+      let bossHp = 25 + (wave * 3);
+      if (wave > 10) {
+        bossHp += Math.floor(Math.pow(wave - 10, 1.5) * 3);
+      } 
       
       spawnQueue.push({ 
         x: x0 + SEGMENT_W / 2, 
@@ -525,7 +542,7 @@ function spawnWave() {
   }
 
   const extremeScaleMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
-  const baseWaveHp = wave * 0.8;
+  const baseWaveHp = wave * 0.6; // Reduced from 0.8 (25% less scaling)
   const waveHpScale = baseWaveHp * extremeScaleMult;
 
   const playerCount = lockedSlots.length;
@@ -565,7 +582,7 @@ function spawnWave() {
       const x = rand(x0 + r + 20, x1 - r - 20);
       const y = rand(-r - 10, -r);
 
-      const baseHpVal = type === "large" ? 3 : type === "medium" ? 1.5 : 0.75;
+      const baseHpVal = type === "large" ? 1.5 : type === "medium" ? 0.75 : 0.4; // Reduced by 50%
       const hp = Math.ceil(baseHpVal + waveHpScale);
 
       spawnQueue.push({ x, y, type, hp, targetSlot, attackType: null });
@@ -737,6 +754,7 @@ function resetToLobby() {
     bullets = [];
     particles = [];
     damageNumbers = [];
+    shieldExplosions = [];
     upgradePicks = new Map();
     attackQueue = new Map();
     pendingUpgrades = new Map();
@@ -1275,7 +1293,7 @@ function tick() {
           const spawnCount = ATTACK_TYPES.carrier?.spawnCount || 2;
           for (let i = 0; i < spawnCount; i++) {
             const offsetX = (Math.random() - 0.5) * 30;
-            const miniHp = 0.5 + wave * 0.1; // Very weak minions
+            const miniHp = 0.25 + wave * 0.075; // Reduced by 50% base, 25% scaling
             const mini = createAsteroid(
               m.x + offsetX, 
               m.y + m.r, 
@@ -1299,6 +1317,53 @@ function tick() {
       }
       
       bounceOffWalls(m);
+      
+      // Shield sphere collision check (dome above ground)
+      if (!m.dead && m.targetSlot !== undefined) {
+        const targetSlot = m.targetSlot;
+        for (const id of lockedSlots) {
+          const p = players.get(id);
+          if (!p || p.slot !== targetSlot || !p.upgrades?.shieldActive || p.upgrades.shieldActive <= 0) continue;
+          
+          // Shield dome center is at bottom center of segment
+          const shieldCenterX = targetSlot * SEGMENT_W + SEGMENT_W / 2;
+          const shieldCenterY = GROUND_Y;
+          const shieldRadius = SEGMENT_W * SHIELD_RADIUS_MULT;
+          
+          // Check if asteroid touches shield dome (only top half - above ground)
+          const dx = m.x - shieldCenterX;
+          const dy = m.y - shieldCenterY;
+          const distSq = dx * dx + dy * dy;
+          const touchRadius = shieldRadius + m.r;
+          
+          // Only trigger if within dome and asteroid is above ground level
+          if (distSq <= touchRadius * touchRadius && m.y < GROUND_Y) {
+            // Shield blocks the asteroid!
+            m.dead = true;
+            p.upgrades.shieldActive--;
+            
+            // Create shield explosion effect (deals damage for 3 seconds)
+            const explosionDamage = BULLET_DAMAGE * 2; // 200% of base damage
+            shieldExplosions.push({
+              x: m.x,
+              y: m.y,
+              radius: 0,
+              maxRadius: 60,
+              damage: explosionDamage,
+              duration: 3.0,
+              life: 3.0,
+              slot: targetSlot,
+              color: PLAYER_COLORS[targetSlot]?.main || "#0ff",
+              hitList: [] // Track what we've already damaged
+            });
+            
+            // Visual explosion
+            createExplosion(m.x, m.y, 40, PLAYER_COLORS[targetSlot]?.main || "#0ff");
+            queueEvent("shieldHit", { x: m.x, y: m.y, slot: targetSlot });
+            break;
+          }
+        }
+      }
       
       if (m.y + m.r >= GROUND_Y) {
         const targetSlot = m.targetSlot;
@@ -1538,7 +1603,7 @@ function tick() {
             // Splitter: spawn children with noGold flag
             if (m.splits > 0) {
               const extremeMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
-              const splitHp = Math.ceil((1 + wave * 0.4) * extremeMult);
+              const splitHp = Math.ceil((0.5 + wave * 0.3) * extremeMult); // Reduced by 50% base, 25% scaling
               for (let s = 0; s < m.splits; s++) {
                 const nx = m.x + rand(-30, 30);
                 const ny = m.y + rand(-20, 20);
@@ -1563,6 +1628,39 @@ function tick() {
         }
       }
     }
+
+    // Shield explosion update - expanding damage zones
+    for (const exp of shieldExplosions) {
+      exp.life -= DT;
+      
+      // Expand radius over first 0.5 seconds
+      if (exp.radius < exp.maxRadius) {
+        exp.radius = Math.min(exp.maxRadius, exp.radius + (exp.maxRadius * DT * 2));
+      }
+      
+      // Deal damage to asteroids in radius (once per asteroid)
+      for (const m of missiles) {
+        if (m.dead || exp.hitList.includes(m.id)) continue;
+        
+        const dx = m.x - exp.x;
+        const dy = m.y - exp.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        
+        if (dist <= exp.radius + m.r) {
+          m.hp -= exp.damage;
+          exp.hitList.push(m.id);
+          createExplosion(m.x, m.y, 15, exp.color);
+          
+          if (m.hp <= 0) {
+            m.dead = true;
+            createExplosion(m.x, m.y, 25, "#fff");
+          }
+        }
+      }
+    }
+    
+    // Filter out expired shield explosions
+    shieldExplosions = shieldExplosions.filter(exp => exp.life > 0);
 
     missiles = missiles.filter((m) => !m.dead);
     bullets = bullets.filter((b) => !b.dead);
@@ -1605,6 +1703,11 @@ function tick() {
         })),
         // OPTIMIZED: Events for client-side particles/damage numbers
         events: eventQueue,
+        // Shield explosion zones for visual rendering
+        shieldExplosions: shieldExplosions.map(exp => ({
+          x: exp.x, y: exp.y, radius: exp.radius, maxRadius: exp.maxRadius,
+          life: exp.life, duration: exp.duration, color: exp.color, slot: exp.slot
+        })),
         players: lockedSlots.map((id) => {
           const p = players.get(id);
           if (!p) return { id, slot: -1 };

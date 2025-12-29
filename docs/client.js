@@ -1699,6 +1699,41 @@
         }
       }
 
+      // Shield Explosions (expanding damage circles)
+      if (lastSnap.shieldExplosions) {
+        for (const exp of lastSnap.shieldExplosions) {
+          const alpha = (exp.life / exp.duration) * 0.6;
+          const x = exp.x * sx;
+          const y = exp.y * sy;
+          const r = exp.radius * sx;
+          
+          // Outer glow ring
+          ctx.strokeStyle = hexToRgba(exp.color, alpha);
+          ctx.lineWidth = 4;
+          ctx.shadowColor = exp.color;
+          ctx.shadowBlur = 20;
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.stroke();
+          
+          // Inner fill (very faint)
+          ctx.fillStyle = hexToRgba(exp.color, alpha * 0.15);
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // Pulsing inner ring
+          const pulseR = r * (0.5 + 0.2 * Math.sin(Date.now() * 0.01));
+          ctx.strokeStyle = hexToRgba("#fff", alpha * 0.5);
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(x, y, pulseR, 0, Math.PI * 2);
+          ctx.stroke();
+          
+          ctx.shadowBlur = 0;
+        }
+      }
+
       // Particles
       if (lastSnap.particles) {
         for (let i = 0; i < lastSnap.particles.length; i++) {
