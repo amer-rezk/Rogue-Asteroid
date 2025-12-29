@@ -39,7 +39,7 @@ const ASTEROID_R_MIN = 8;
 const ASTEROID_R_MAX = 16;
 
 const WAVE_BASE_COUNT = 3;
-const WAVE_COUNT_SCALE = 2;
+const WAVE_COUNT_SCALE = 0.5;  // Halved again to reduce wave length at high waves
 
 const MAX_AIM_ANGLE = (80 * Math.PI) / 180;
 
@@ -53,7 +53,7 @@ const PLAYER_COLORS = [
 
 // ===== Tower Definitions =====
 const TOWER_TYPES = {
-  0: { name: "Gatling", cost: 50, damage: 1, cooldown: 0.25, rangeMult: 0.8, color: "#ffff00", upgradeCost: 40, bulletType: "gatling" },
+  0: { name: "Gatling", cost: 50, damage: 0.25, cooldown: 0.25, rangeMult: 0.8, color: "#ffff00", upgradeCost: 40, bulletType: "gatling" },
   1: { name: "Sniper", cost: 120, damage: 5, cooldown: 1.2, rangeMult: 1.5, color: "#00ff00", upgradeCost: 80, bulletType: "sniper" },
   2: { name: "Missile", cost: 250, damage: 8, cooldown: 2.0, rangeMult: 1.0, color: "#ff0000", explosive: 1, upgradeCost: 150, bulletType: "missile" }
 };
@@ -552,9 +552,9 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
   const r = sizeMap[type] || 12;
   const speedMult = type === "boss" ? 0.3 : (attackType ? (ATTACK_TYPES[attackType]?.speed || 1) : 1); // Boss moves slow
   
-  let waveSpeedBonus = wave >= 5 ? 1 + (wave - 5) * 0.02 : 1;
+  let waveSpeedBonus = wave >= 5 ? 1 + (wave - 5) * 0.03125 : 1;  // +25% speed scaling (was 0.025)
   if (wave >= 20) {
-    waveSpeedBonus += (wave - 19) * 0.03;
+    waveSpeedBonus += (wave - 19) * 0.047;  // +25% speed scaling (was 0.0375)
   }
   const baseVy = rand(25, 40) * speedMult;
   const vy = baseVy * waveSpeedBonus;
@@ -655,7 +655,7 @@ function spawnWave() {
 
   const playerCount = lockedSlots.length;
   const baseTotal = WAVE_BASE_COUNT + Math.floor(wave * WAVE_COUNT_SCALE);
-  const countMult = wave >= 20 ? 1 + (wave - 19) * 0.1 : 1;
+  const countMult = wave >= 20 ? 1 + (wave - 19) * 0.05 : 1;  // Halved from 0.1
   const scaledTotal = Math.floor(baseTotal * countMult);
   const totalCount = (soloMode || playerCount === 1) ? scaledTotal : Math.floor(scaledTotal * 0.5);
   const asteroidsPerPlayer = Math.max(1, Math.floor(totalCount / playerCount));
