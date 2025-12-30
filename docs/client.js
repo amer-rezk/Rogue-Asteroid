@@ -2741,10 +2741,11 @@
         const y = m.y * sy;
         const r = m.r * sx;
 
-        // PERFORMANCE: Skip missiles that are completely off-screen
-        // This helps during spawn when many asteroids are above the viewport
-        if (y < -r * 2 - 100 || y > renderHeight + r * 2 || x < -r * 2 || x > renderWidth + r * 2) {
-          continue;
+        // FIX: Increased top margin from 100 to 500 so we can see spawning asteroids
+        // Original: if (y < -r * 2 - 100 || y > camera.h + r * 2 + 100 ||
+        if (y < -r * 2 - 500 || y > camera.h + r * 2 + 100 || 
+          x < -r * 2 - 100 || x > camera.w + r * 2 + 100) {
+        continue;
         }
 
         // Get cached data for rotation

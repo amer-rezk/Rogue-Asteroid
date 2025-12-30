@@ -8,6 +8,7 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "@geckos.io/server": "^3.0.2",
     "express": "^4.19.2",
     "ws": "^8.18.0"
   },

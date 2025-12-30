@@ -1655,20 +1655,50 @@ function tick() {
     // Process spawn queue
     if (spawnQueue.length > 0) {
       spawnTimer -= DT;
-      if (spawnTimer <= 0) {
-        // ENTITY CAP: Only spawn if under missile limit
-        const availableSlots = MAX_MISSILES - missiles.length;
-        if (availableSlots > 0) {
-          const spawnCount = Math.min(spawnQueue.length, availableSlots, Math.random() < 0.5 ? 1 : Math.random() < 0.8 ? 2 : 3);
-          for (let i = 0; i < spawnCount && spawnQueue.length > 0; i++) {
-            const queued = spawnQueue.shift();
-            missiles.push(createAsteroid(
-              queued.x, queued.y, queued.type, queued.hp, queued.targetSlot, 
-              queued.attackType, queued.senderId, null, false, queued.isMiniBoss || false
-            ));
-          }
+      
+      // FIX: Dynamic burst logic. If queue is huge, dump them faster!
+      // If queue > 10, we treat it as a "Swarm" and spawn aggressively.
+      const isSwarm = spawnQueue.length > 10;
+      const spawnReady = spawnTimer <= 0;
+
+      if (spawnReady) {
+        // Calculate dynamic batch size based on pressure
+        let maxBatch = 3; 
+        if (spawnQueue.length > 20) maxBatch = 8;       // Huge backlog? Open the floodgates
+        else if (spawnQueue.length > 10) maxBatch = 5;  // Moderate backlog? Burst fire
+        
+        // Randomize count slightly so it looks organic, not robotic
+        const count = Math.ceil(Math.random() * maxBatch); 
+        
+        // Determine actual spawn count (capped by available slots)
+        const spawnCount = Math.min(spawnQueue.length, availableSlots, count);
+
+        for (let i = 0; i < spawnCount; i++) {
+          const type = spawnQueue.shift();
+          
+          // Spread them out slightly on X axis so they don't stack perfectly
+          const margin = 100;
+          const x = margin + Math.random() * (3000 - margin * 2); // Assuming 3000 world width
+          const y = -180 - (Math.random() * 200); // Stagger vertical start slightly
+          
+          // Spawn physics entity
+          spawnAsteroid(type, x, y);
+          
+          // Notify clients (so they see it immediately)
+          broadcast({ 
+            t: "spawn", 
+            type: type, 
+            x: x, 
+            y: y, 
+            vx: (Math.random() - 0.5) * 50, 
+            vy: 100 + Math.random() * 100 // Downward velocity
+          });
         }
-        spawnTimer = 0.1 + Math.random() * 0.4;
+
+        // RESET TIMER
+        // If it was a swarm burst, wait very little (0.1s). 
+        // If it's a trickle, wait normal time (0.2s - 0.5s).
+        spawnTimer = isSwarm ? 0.05 : (0.2 + Math.random() * 0.3);
       }
     }
 
