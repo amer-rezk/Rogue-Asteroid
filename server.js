@@ -92,7 +92,7 @@ const MAX_TOWER_LEVEL = 5;
 
 // ===== PvP Attack Units =====
 const ATTACK_TYPES = {
-  swarm: { name: "Swarm", cost: 25, count: 3, baseHp: 0.05, hpScale: 0.56, size: "small", speed: 1.3, desc: "3 fast weak asteroids", color: "#ffcc00", icon: "🐝" },
+  swarm: { name: "Swarm", cost: 25, count: 3, baseHp: 0.025, hpScale: 0.28, size: "small", speed: 1.3, desc: "3 fast weak asteroids", color: "#ffcc00", icon: "🐝" },
   bruiser: { name: "Bruiser", cost: 35, count: 1, baseHp: 3.75, hpScale: 1.125, size: "large", speed: 0.6, desc: "Very tanky asteroid", color: "#ff4444", icon: "🪨" },
   carrier: { name: "Carrier", cost: 60, count: 1, baseHp: 3, hpScale: 0.975, size: "large", speed: 0.5, spawner: true, spawnInterval: 2.0, spawnCount: 2, desc: "Spawns minions!", color: "#ff00ff", icon: "👑" },
   splitter: { name: "Splitter", cost: 50, count: 1, baseHp: 2.5, hpScale: 0.975, size: "large", speed: 0.75, splits: 15, desc: "Splits into 15 on death", color: "#00ffff", icon: "💎" },
