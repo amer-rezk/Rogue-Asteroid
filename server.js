@@ -23,6 +23,9 @@ const BROADCAST_RATE = 22;     // Network at ~22Hz (smooth but not overwhelming)
 const DT = 1 / TICK_RATE;
 const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 2 ticks
 
+// === RATE LIMITING (prevent packet flood / DoS) ===
+const MIN_INPUT_INTERVAL = 20; // Minimum 20ms between inputs (50Hz max per player)
+
 // === ENTITY CAPS (SERVER-SIDE LAG PREVENTION) ===
 const MAX_MISSILES = 150;      // Hard cap on asteroids/enemies (increased for late game)
 const MAX_BULLETS = 80;        // Hard cap on player bullets (increased for multishot builds)
@@ -271,6 +274,10 @@ let currentModulePicker = 0;
 let modulePickTimer = 0;
 const MODULE_PICK_TIME = 10; // 10 seconds per pick
 let bossKillerId = null; // Track who killed the boss
+
+// PERFORMANCE: Cached arrays for broadcast (avoid allocations every tick)
+let cachedModuleCards = []; // Cached { id, ...TOWER_MODULES[id] } objects
+let cachedPickOrder = [];   // Cached { id, name, isBossKiller } objects
 
 // Pause system
 let gamePaused = false;
@@ -1015,6 +1022,9 @@ function startModuleCardPhase() {
   const shuffled = [...MODULE_IDS].sort(() => Math.random() - 0.5);
   moduleCards = shuffled.slice(0, 5);
   
+  // PERFORMANCE: Cache module card objects for broadcast (avoid .map() every tick)
+  cachedModuleCards = moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }));
+  
   // Track which players have picked
   modulePlayersPicked = new Set();
   
@@ -1034,14 +1044,17 @@ function startModuleCardPhase() {
   currentModulePicker = 0;
   modulePickTimer = MODULE_PICK_TIME;
   
-  // Broadcast module card phase start
+  // PERFORMANCE: Cache pick order objects for broadcast
+  cachedPickOrder = modulePickOrder.map(id => {
+    const p = players.get(id);
+    return { id, name: p?.name || "Unknown", isBossKiller: id === bossKillerId };
+  });
+  
+  // Broadcast module card phase start (use cached arrays)
   broadcast({ 
     t: "moduleCardPhase", 
-    cards: moduleCards.map(id => ({ id, ...TOWER_MODULES[id] })),
-    pickOrder: modulePickOrder.map(id => {
-      const p = players.get(id);
-      return { id, name: p?.name || "Unknown", isBossKiller: id === bossKillerId };
-    }),
+    cards: cachedModuleCards,
+    pickOrder: cachedPickOrder,
     currentPicker: modulePickOrder[0],
     timeLeft: MODULE_PICK_TIME
   });
@@ -1054,6 +1067,10 @@ function endModuleCardPhase() {
   modulePickOrder = [];
   modulePlayersPicked = new Set();
   bossKillerId = null;
+  
+  // PERFORMANCE: Clear cached arrays
+  cachedModuleCards = [];
+  cachedPickOrder = [];
   
   broadcast({ t: "moduleCardPhaseEnd" });
   
@@ -1510,20 +1527,29 @@ function clampAimAngle(turretX, turretY, targetX, targetY) {
 
 // PERFORMANCE: Track event load for throttling visual effects
 let visualEventCount = 0;
-const MAX_VISUAL_EVENTS_PER_TICK = 30; // Cap visual events to prevent lag spikes
+// Cap visual events - more aggressive with more players
+function getMaxVisualEvents() {
+  const playerCount = players.size;
+  if (playerCount >= 4) return 15; // Very aggressive
+  if (playerCount >= 3) return 20;
+  if (playerCount >= 2) return 25;
+  return 30; // Solo
+}
 
 // OPTIMIZED: Create explosion - throttled under heavy load
 function createExplosion(x, y, radius, color) {
+  const maxEvents = getMaxVisualEvents();
   // PERFORMANCE: Skip small explosions under heavy load
-  if (visualEventCount >= MAX_VISUAL_EVENTS_PER_TICK && radius < 30) return;
+  if (visualEventCount >= maxEvents && radius < 30) return;
   visualEventCount++;
   queueEvent("explosion", { x, y, radius, color });
 }
 
 // OPTIMIZED: Add damage number - throttled under heavy load
 function addDamageNumber(x, y, amount, isCrit) {
+  const maxEvents = getMaxVisualEvents();
   // PERFORMANCE: Always show crits, throttle normal damage numbers
-  if (!isCrit && visualEventCount >= MAX_VISUAL_EVENTS_PER_TICK) return;
+  if (!isCrit && visualEventCount >= maxEvents) return;
   visualEventCount++;
   queueEvent("damage", { x, y, amount, isCrit });
 }
@@ -2906,12 +2932,22 @@ function tick() {
       waveClearedTime = 0;
     }
 
-    // SERVER AUTHORITATIVE: Broadcast at 30Hz - with client smoothing
+    // SERVER AUTHORITATIVE: Broadcast at 22Hz - with client smoothing
     // OPTIMIZED: Reuse pre-allocated broadcastState to avoid GC pressure
-    // ADAPTIVE: Throttle broadcasts when entity count is very high
+    // ADAPTIVE: Throttle broadcasts based on entity count AND player count
     const entityCount = missiles.length + bullets.length;
-    const broadcastSkip = entityCount > 200 ? 2 : 1; // Only drop to 15Hz when very heavily loaded
-    if (tickCount % (BROADCAST_INTERVAL * broadcastSkip) === 0) {
+    const playerCount = players.size;
+    
+    // Calculate broadcast skip factor:
+    // - 1 player: every 2 ticks (22Hz)
+    // - 2 players: every 2 ticks (22Hz)  
+    // - 3 players: every 3 ticks (15Hz)
+    // - 4 players: every 3 ticks (15Hz)
+    // - High entities (>200): additional 2x slowdown
+    let broadcastSkip = playerCount >= 3 ? 3 : BROADCAST_INTERVAL;
+    if (entityCount > 200) broadcastSkip *= 2;
+    
+    if (tickCount % broadcastSkip === 0) {
       broadcastGameState();
     }
   } catch (err) {
@@ -2931,12 +2967,9 @@ function broadcastGameState() {
   broadcastState.modulePickTimer = moduleCardPhase ? modulePickTimer : 0;
   broadcastState.currentModulePicker = moduleCardPhase ? modulePickOrder[currentModulePicker] : null;
   
-  // Add module cards to state so clients always have them (fixes issue with backed up upgrades)
-  broadcastState.moduleCards = moduleCardPhase ? moduleCards.map(id => ({ id, ...TOWER_MODULES[id] })) : [];
-  broadcastState.modulePickOrder = moduleCardPhase ? modulePickOrder.map(id => {
-    const p = players.get(id);
-    return { id, name: p?.name || "Unknown", isBossKiller: id === bossKillerId };
-  }) : [];
+  // PERFORMANCE: Use cached module card arrays (no .map() allocation every tick)
+  broadcastState.moduleCards = moduleCardPhase ? cachedModuleCards : [];
+  broadcastState.modulePickOrder = moduleCardPhase ? cachedPickOrder : [];
   
   // Add pause state
   broadcastState.gamePaused = gamePaused;
@@ -3103,8 +3136,8 @@ function broadcastGameState() {
   
   broadcastAll(broadcastState);
   
-  // Clear event queue after broadcast
-  eventQueue = [];
+  // PERFORMANCE: Clear event queue without allocation (reuse array)
+  eventQueue.length = 0;
 }
 
 // ===== Networking =====
@@ -3128,6 +3161,12 @@ wss.on("connection", (ws) => {
   if (phase === "gameover") resetToLobby();
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
+  
+  // PERFORMANCE: Disable Nagle's algorithm for lower latency
+  // Nagle buffers small packets (200ms) which kills real-time games
+  if (ws._socket) {
+    ws._socket.setNoDelay(true);
+  }
   
   // Check if they can join as a player
   const canJoinAsPlayer = phase === "lobby" && assignSlot() >= 0;
@@ -3317,6 +3356,13 @@ wss.on("connection", (ws) => {
     }
     
     if (msg.t === "input" && phase === "playing") {
+      // RATE LIMITING: Prevent packet flood (max 50Hz per player)
+      const now = Date.now();
+      if (p.lastInputTime && (now - p.lastInputTime) < MIN_INPUT_INTERVAL) {
+        return; // Drop packet - too fast
+      }
+      p.lastInputTime = now;
+      
       p.targetX = Number(msg.x) || 0;
       p.targetY = Number(msg.y) || 0;
       p.manualShooting = !!msg.shooting;

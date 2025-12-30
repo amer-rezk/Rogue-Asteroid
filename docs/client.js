@@ -691,19 +691,29 @@
       data.rotation += data.rotSpeed * dt;
     }
 
-    // CLIENT SIDE INTERPOLATION (The Fix)
-    // Smoothly move entities towards their latest server position
+    // CLIENT-SIDE INTERPOLATION + EXTRAPOLATION
+    // Use velocity to predict positions between server updates
+    // This makes movement smooth even at 15Hz broadcast rate
     if (lastSnap) {
-      // Smooth Missiles
+      // Smooth Missiles with velocity extrapolation
       if (lastSnap.missiles) {
         for (const m of lastSnap.missiles) {
           if (typeof m.targetX === 'number') {
+            // EXTRAPOLATION: Use velocity to predict where asteroid should be
+            // This fills in the gaps between 15-22Hz server updates
+            if (m.vx !== undefined && m.vy !== undefined) {
+              // Extrapolate target position based on velocity
+              m.targetX += m.vx * dt;
+              m.targetY += m.vy * dt;
+            }
+            
+            // Smooth interpolation toward extrapolated target
             m.x += (m.targetX - m.x) * smoothFactor;
             m.y += (m.targetY - m.y) * smoothFactor;
           }
         }
       }
-      // Smooth Bullets
+      // Smooth Bullets (already have their own simulation, just smooth)
       if (lastSnap.bullets) {
         for (const b of lastSnap.bullets) {
           if (typeof b.targetX === 'number') {
@@ -2145,7 +2155,7 @@
       lastInputShooting = shooting;
     }
   }
-  setInterval(sendInput, 45); // ~22Hz input rate (matches server broadcast)
+  setInterval(sendInput, 60); // ~16Hz input rate (reduced from 22Hz to lower packet overhead)
 
   // ===== Rendering =====
   function getScale() {
@@ -2695,10 +2705,20 @@
       }
 
       // Asteroids/Missiles
+      // PERFORMANCE: Get render bounds once for culling
+      const renderWidth = scale.renderW;
+      const renderHeight = scale.renderH;
+      
       for (const m of lastSnap.missiles) {
         const x = m.x * sx;
         const y = m.y * sy;
         const r = m.r * sx;
+
+        // PERFORMANCE: Skip missiles that are completely off-screen
+        // This helps during spawn when many asteroids are above the viewport
+        if (y < -r * 2 - 100 || y > renderHeight + r * 2 || x < -r * 2 || x > renderWidth + r * 2) {
+          continue;
+        }
 
         // Get cached data for rotation
         const cached = asteroidCache.get(m.id);
