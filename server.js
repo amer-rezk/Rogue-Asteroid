@@ -581,8 +581,14 @@ function applyUpgrade(player, card) {
     u.multishot = (u.multishot || 1) + eff.val;
     u.multishotDmgMult = (u.multishotDmgMult || 1) * (1 - eff.penalty);
   }
+  
   if (eff.stat === "shield") {
     u.shieldActive = (u.shieldActive || 0) + eff.val;
+  }
+
+  // UPDATE GRAVITY CACHE (Trigger prediction update)
+  if (eff.stat === "slowfield") {
+    updateSlotSpeedMultipliers();
   }
 }
 
@@ -864,6 +870,7 @@ function startGame(solo = false) {
     }
   }
 
+  updateSlotSpeedMultipliers();
   spawnWave();
   broadcast({ t: "started", world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, wave, solo: soloMode });
   // Also notify spectators that game started
@@ -1281,7 +1288,8 @@ function fireWithMultishot(owner, originX, originY, targetX, targetY, isManual =
   // Fire each bullet at a different target (or cycle through if fewer targets)
   for (let i = 0; i < shots; i++) {
     const target = targets[i % targets.length];
-    const intercept = calculateInterceptPoint(originX, originY, bulletSpeed, target);
+    const speedMult = slotSpeedMultipliers[owner.slot] || 1; // <--- ADDED
+    const intercept = calculateInterceptPoint(originX, originY, bulletSpeed, target, speedMult);
     
     // Small spread between bullets aimed at same target
     let spread = 0;
@@ -1356,22 +1364,32 @@ function findMultipleTargets(turretX, turretY, ownerSlot, count, excludeIds = ne
   return targets;
 }
 
-// Calculate intercept point for predictive aiming
-// Returns where to aim so bullet hits moving target
-function calculateInterceptPoint(turretX, turretY, bulletSpeed, target) {
-  // Target current position and velocity
+// CACHE: Speed multipliers per slot (updated only when upgrades change)
+let slotSpeedMultipliers = [1, 1, 1, 1];
+
+function updateSlotSpeedMultipliers() {
+  slotSpeedMultipliers = [1, 1, 1, 1];
+  if (!lockedSlots) return;
+  for (const id of lockedSlots) {
+    const p = players.get(id);
+    if (p && p.slot !== undefined && p.upgrades?.slowfield) {
+       // Same formula as tick logic: 100 strength = 0.5x speed
+       slotSpeedMultipliers[p.slot] = 100 / (100 + p.upgrades.slowfield);
+    }
+  }
+}
+
+// Calculate intercept point taking Gravity into account
+function calculateInterceptPoint(turretX, turretY, bulletSpeed, target, speedMult = 1) {
+  // Target current position and ADJUSTED velocity
   const tx = target.x;
   const ty = target.y;
-  const tvx = target.vx || 0;
-  const tvy = target.vy || 30; // Default downward velocity
+  const tvx = (target.vx || 0) * speedMult; // <--- APPLY GRAVITY HERE
+  const tvy = (target.vy || 30) * speedMult; // <--- APPLY GRAVITY HERE
   
-  // Vector from turret to target
   const dx = tx - turretX;
   const dy = ty - turretY;
   
-  // Quadratic coefficients for intercept time:
-  // |target_pos + target_vel * t - turret_pos| = bullet_speed * t
-  // (tvx² + tvy² - bulletSpeed²)t² + 2(dx*tvx + dy*tvy)t + (dx² + dy²) = 0
   const a = tvx * tvx + tvy * tvy - bulletSpeed * bulletSpeed;
   const b = 2 * (dx * tvx + dy * tvy);
   const c = dx * dx + dy * dy;
@@ -1379,33 +1397,21 @@ function calculateInterceptPoint(turretX, turretY, bulletSpeed, target) {
   let t = 0;
   
   if (Math.abs(a) < 0.001) {
-    // Linear case (bullet speed ≈ target speed)
-    if (Math.abs(b) > 0.001) {
-      t = -c / b;
-    }
+    if (Math.abs(b) > 0.001) t = -c / b;
   } else {
-    // Quadratic case
     const discriminant = b * b - 4 * a * c;
     if (discriminant >= 0) {
       const sqrtD = Math.sqrt(discriminant);
       const t1 = (-b - sqrtD) / (2 * a);
       const t2 = (-b + sqrtD) / (2 * a);
-      
-      // Pick smallest positive time
-      if (t1 > 0.01 && t2 > 0.01) {
-        t = Math.min(t1, t2);
-      } else if (t1 > 0.01) {
-        t = t1;
-      } else if (t2 > 0.01) {
-        t = t2;
-      }
+      if (t1 > 0.01 && t2 > 0.01) t = Math.min(t1, t2);
+      else if (t1 > 0.01) t = t1;
+      else if (t2 > 0.01) t = t2;
     }
   }
   
-  // Clamp intercept time to reasonable range
-  t = Math.max(0, Math.min(t, 3.0)); // Max 3 seconds prediction
+  t = Math.max(0, Math.min(t, 3.0));
   
-  // Calculate intercept point
   return {
     x: tx + tvx * t,
     y: ty + tvy * t
@@ -1546,7 +1552,8 @@ function tick() {
         mainTarget = findBestTarget(x0, x1, pos.main.x, pos.main.y, 1.0, p.slot);
         if (mainTarget) {
           // Calculate intercept point for turret visual
-          const intercept = calculateInterceptPoint(pos.main.x, pos.main.y, bulletSpeed, mainTarget);
+          const speedMult = slotSpeedMultipliers[p.slot] || 1; // <--- ADDED
+          const intercept = calculateInterceptPoint(pos.main.x, pos.main.y, bulletSpeed, mainTarget, speedMult);
           clamped = clampAimAngle(pos.main.x, pos.main.y, intercept.x, intercept.y);
         } else {
           clamped = clampAimAngle(pos.main.x, pos.main.y, pos.main.x, 50);
@@ -1582,7 +1589,8 @@ function tick() {
             const towerBulletSpeed = BULLET_SPEED * (1 + ((u.bulletSpeedMult ?? 1) - 1) * 0.5) * (stats.bulletType === "sniper" ? 1.5 : 1);
             
             // Calculate intercept point for tower
-            const intercept = calculateInterceptPoint(towerPos.x, towerPos.y, towerBulletSpeed, target);
+            const speedMult = slotSpeedMultipliers[p.slot] || 1;
+            const intercept = calculateInterceptPoint(towerPos.x, towerPos.y, towerBulletSpeed, target, speedMult);
             const aim = clampAimAngle(towerPos.x, towerPos.y, intercept.x, intercept.y);
             tower.angle = aim.angle;
             
@@ -1625,17 +1633,6 @@ function tick() {
       }
     }
 
-    // Pre-compute which slots have slowfield active (avoid nested loop)
-    const slowfieldSlots = [];
-    for (const id of lockedSlots) {
-      const p = players.get(id);
-      if (p?.upgrades?.slowfield) {
-        const { x0, x1 } = segmentBounds(p.slot);
-        // Store the strength of the field
-        slowfieldSlots.push({ x0, x1, strength: p.upgrades.slowfield });
-      }
-    }
-
     // Update missiles
     for (const m of missiles) {
       if (m.phaseTimer !== null) {
@@ -1658,21 +1655,12 @@ function tick() {
         continue;
       }
 
-      let speedMult = 1;
-      for (let si = 0; si < slowfieldSlots.length; si++) {
-        const sf = slowfieldSlots[si];
-        if (m.x >= sf.x0 && m.x <= sf.x1) { 
-          // Diminishing returns formula: 15 strength = ~13% slow. 100 strength = 50% slow.
-          // This allows it to be uncapped without stopping enemies completely.
-          speedMult = 100 / (100 + sf.strength); 
-          break; 
-        }
-      }
+      // OPTIMIZED: Use cached speed multiplier for this slot
+      const speedMult = slotSpeedMultipliers[m.targetSlot] || 1;
       
       m.x += m.vx * DT * speedMult;
       m.y += m.vy * DT * speedMult;
-      // Rotation is handled client-side
-      
+	  
       // Carrier: Spawns mini asteroids periodically
       if (m.isCarrier && m.carrierSpawnTimer !== null && !m.inFTL) {
         m.carrierSpawnTimer -= DT;
@@ -1960,11 +1948,21 @@ function tick() {
           const bulletModules = b.modules || [];
           const owner = players.get(b.ownerId);
           
-          // Fractal Prism: Shatter into 3 smaller bullets behind target
+          // Fractal Prism: Shatter into 4 smaller bullets (2 Left, 2 Right)
           if (bulletModules.includes("fractalPrism") && bullets.length < MAX_BULLETS) {
-            const shardsToSpawn = Math.min(3, MAX_BULLETS - bullets.length);
+            const shardsToSpawn = Math.min(4, MAX_BULLETS - bullets.length);
+            
+            // Define 4 specific angles: 2 Right (approx 0), 2 Left (approx PI)
+            // 0.4 radians is about 23 degrees
+            const angles = [
+               -0.4,            // Right Up
+               0.4,             // Right Down
+               Math.PI - 0.4,   // Left Up
+               Math.PI + 0.4    // Left Down
+            ];
+
             for (let i = 0; i < shardsToSpawn; i++) {
-              const angle = Math.PI + (i - 1) * 0.5; // Spread behind
+              const angle = angles[i];
               const shardVx = Math.cos(angle) * 100;
               const shardVy = Math.sin(angle) * 100;
               
@@ -1992,7 +1990,7 @@ function tick() {
               };
               bullets.push(shard);
 
-              // FIX: Notify client about these new shard bullets
+              // Notify client about these new shard bullets
               queueEvent("bulletSpawn", {
                 id: shard.id,
                 x: shard.x,
@@ -2642,6 +2640,7 @@ function broadcastGameState() {
     obj.upgrades.critChance = u.critChance || 0;
     obj.upgrades.explosive = u.explosive || 0;
     obj.upgrades.pierce = u.pierce || 0;
+	obj.upgrades.slowfield = u.slowfield || 0;
     obj.upgrades.ricochet = u.ricochet || 0;
     obj.upgrades.chainChance = u.chainChance || 0;
     obj.upgrades.goldMult = u.goldMult || 1;
