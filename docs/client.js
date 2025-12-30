@@ -78,6 +78,17 @@
     if (graphicsQuality === 0) return;
     const missileCount = missiles?.length || 0;
     const bulletCount = bullets?.length || 0;
+    const totalEntities = missileCount + bulletCount;
+    
+    // AGGRESSIVE SCALING: If > 100 entities, KILL effects immediately
+    // With 4 players this happens fast - prioritize FPS over visuals
+    if (totalEntities > 100) {
+      if (graphicsQuality !== 0) {
+        graphicsQuality = 0;
+        updateQualitySettings();
+      }
+      return;
+    }
     
     // PERFORMANCE: More aggressive with more players
     const playerMultiplier = lastKnownPlayerCount > 2 ? 0.7 : 1.0;
@@ -101,6 +112,10 @@
   
   // Optimized shadow functions - NO-OP when shadows disabled
   function setShadowOpt(ctx, color, blur) {
+    // HARD OPTIMIZATION: Never render shadows with 3+ players
+    // The chaos on screen makes them unnoticeable, but the cost is huge
+    if (lastKnownPlayerCount >= 3) return;
+    
     if (qualitySettings.useShadows && blur > 0) {
       ctx.shadowColor = color;
       ctx.shadowBlur = blur;
@@ -108,6 +123,9 @@
   }
   
   function clearShadowOpt(ctx) {
+    // Skip if shadows already disabled
+    if (lastKnownPlayerCount >= 3) return;
+    
     if (qualitySettings.useShadows) {
       ctx.shadowColor = "transparent";
       ctx.shadowBlur = 0;
@@ -703,12 +721,21 @@
     for (const ev of events) {
       switch (ev.t) {
         case "spawn":
-          // Always process spawns - they cache visual data needed for rendering
+          // BANDWIDTH OPTIMIZATION: Cache ALL static data from spawn event
+          // Server no longer sends r, type, maxHp, targetSlot in state updates
           asteroidCache.set(ev.id, {
+            // Visual data
             vertices: ev.vertices,
             rotSpeed: ev.rotSpeed,
             rotation: Math.random() * Math.PI * 2,
             color: ev.color || "#fa0",
+            // Static data (stripped from broadcast to save bandwidth)
+            r: ev.r,
+            type: ev.type,
+            maxHp: ev.hp, // HP at spawn = maxHp
+            targetSlot: ev.targetSlot,
+            attackType: ev.attackType,
+            // Boss flags
             isBoss: ev.isBoss || false,
             isBossAd: ev.isBossAd || false,
             bossAdVariant: ev.bossAdVariant || null,
@@ -1234,14 +1261,34 @@
         }
 
         // Process Missiles: Set Targets, Keep Current Visual Position
+        // BANDWIDTH OPTIMIZATION: Hydrate static data from cache (server no longer sends it)
         if (msg.missiles) {
           tempIdSet.clear();
           for (const m of msg.missiles) {
             tempIdSet.add(m.id);
             const cached = asteroidCache.get(m.id);
             if (cached) {
+              // Visual data
               m.vertices = cached.vertices;
               m.rotation = cached.rotation;
+              m.color = cached.color;
+              
+              // HYDRATE STATIC DATA (stripped from broadcast to save bandwidth)
+              m.r = cached.r;
+              m.type = cached.type;
+              m.maxHp = cached.maxHp;
+              m.targetSlot = cached.targetSlot;
+              m.attackType = cached.attackType;
+              
+              // If server didn't send HP, asteroid is at full health
+              if (m.hp === undefined) m.hp = cached.maxHp;
+              
+              // Boss flags (also cached since they don't change)
+              m.isBoss = cached.isBoss;
+              m.isBossAd = cached.isBossAd;
+              m.bossAdVariant = cached.bossAdVariant;
+              m.isMiniBoss = cached.isMiniBoss;
+              m.isMiniBossAd = cached.isMiniBossAd;
             }
             
             // MAGIC: Store the server position as "target", use old visual position as "current"

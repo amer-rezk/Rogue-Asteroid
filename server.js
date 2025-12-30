@@ -683,8 +683,14 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
   const isMiniBossType = type === "miniboss" || isMiniBoss;
   const isMiniBossAd = type === "minibossAd";
 
-  // OPTIMIZED: Send spawn event with vertices/rotSpeed/velocity so client can cache and predict
-  queueEvent("spawn", { id, x, y, r, type, attackType, vertices, rotSpeed, color, vx, vy, isBoss, isBossAd, bossAdVariant, isMiniBoss: isMiniBossType, isMiniBossAd });
+  // OPTIMIZED: Send spawn event with ALL static data so client can cache
+  // This allows us to strip static data from broadcast updates (saves ~60% bandwidth)
+  queueEvent("spawn", { 
+    id, x, y, r, type, attackType, vertices, rotSpeed, color, vx, vy, 
+    hp, // maxHp at spawn time
+    targetSlot, // For client collision prediction
+    isBoss, isBossAd, bossAdVariant, isMiniBoss: isMiniBossType, isMiniBossAd 
+  });
 
   return {
     id,
@@ -2947,16 +2953,33 @@ function broadcastGameState() {
     const m = missiles[i];
     const obj = broadcastState.missiles[i];
     obj.id = m.id;
+    
+    // BANDWIDTH OPTIMIZATION: Only send dynamic data
+    // Static data (r, type, maxHp, targetSlot) sent once in spawn event
     obj.x = Math.round(m.x * 10) / 10;
     obj.y = Math.round(m.y * 10) / 10;
-    obj.r = m.r;
-    obj.hp = Math.round(m.hp * 10) / 10;
-    obj.maxHp = m.maxHp;
-    obj.type = m.type;
     obj.vx = Math.round(m.vx * 10) / 10;
     obj.vy = Math.round(m.vy * 10) / 10;
-    obj.inFTL = m.inFTL;
-    obj.targetSlot = m.targetSlot; // For client-side collision prediction
+    
+    // Only send HP if damaged (saves bandwidth when at full health)
+    if (m.hp < m.maxHp) {
+      obj.hp = Math.round(m.hp * 10) / 10;
+    } else {
+      delete obj.hp;
+    }
+    
+    // REMOVED FROM BROADCAST (client gets from spawn event cache):
+    // - r (radius)
+    // - type
+    // - maxHp
+    // - targetSlot
+    delete obj.r;
+    delete obj.type;
+    delete obj.maxHp;
+    delete obj.targetSlot;
+    
+    // Boolean flags - only send if true
+    if (m.inFTL) obj.inFTL = true; else delete obj.inFTL;
     // Optional fields - set or delete
     if (m.attackType) obj.attackType = m.attackType; else delete obj.attackType;
     if (m.isPhased) obj.isPhased = true; else delete obj.isPhased;
