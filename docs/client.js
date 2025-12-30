@@ -1885,10 +1885,10 @@
       
       // Upgrade cards panel
       if (upgradeOptions.length > 0 && !upgradePicked) {
-        const cardW = 140, cardH = 100, cardGap = 15;
+        const cardW = 140, cardH = 150, cardGap = 15;
         const totalW = upgradeOptions.length * cardW + (upgradeOptions.length - 1) * cardGap;
-        const startX = canvas.width / 2 - totalW / 2, cardY = 50;
-        if (mouseX >= startX - 10 && mouseX <= startX + totalW + 10 && mouseY >= cardY - 10 && mouseY <= cardY + cardH + 60) {
+        const startX = canvas.width / 2 - totalW / 2, cardY = 78;
+        if (mouseX >= startX - 10 && mouseX <= startX + totalW + 10 && mouseY >= cardY - 20 && mouseY <= cardY + cardH + 10) {
           uiHovered = true;
         }
       }
