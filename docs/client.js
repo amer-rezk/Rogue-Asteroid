@@ -4059,26 +4059,6 @@
         ctx.fillText("🎲", rerollBtnX + rerollBtnW / 2, rerollBtnY + 25);
         ctx.font = "bold 10px 'Courier New', monospace";
         ctx.fillText(`${currentRerollCost}g`, rerollBtnX + rerollBtnW / 2, rerollBtnY + 42);
-        
-        // Buy button background
-        ctx.fillStyle = isBuyHovered && canAffordBuy ? "rgba(100,255,150,0.4)" : 
-                        canAffordBuy ? "rgba(60,200,120,0.25)" : "rgba(40,40,60,0.4)";
-        ctx.strokeStyle = isBuyHovered && canAffordBuy ? "#7affaa" : 
-                          canAffordBuy ? "rgba(122,255,170,0.5)" : "#444";
-        ctx.lineWidth = isBuyHovered && canAffordBuy ? 2 : 1;
-        ctx.beginPath();
-        ctx.roundRect(buyBtnX, buyBtnY, buyBtnW, buyBtnH, 6);
-        ctx.fill();
-        ctx.stroke();
-        
-        // Buy button text
-        ctx.font = "18px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillStyle = canAffordBuy ? "#7affaa" : "#555";
-        ctx.fillText("➕", buyBtnX + buyBtnW / 2, buyBtnY + 25);
-        ctx.font = "bold 10px 'Courier New', monospace";
-        ctx.fillText(`${buyUpgradeCost}g`, buyBtnX + buyBtnW / 2, buyBtnY + 42);
-        
         ctx.textAlign = "left";
       }
 
