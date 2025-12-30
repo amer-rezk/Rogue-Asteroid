@@ -511,9 +511,13 @@
 
   function updateClientEffects(dt) {
     // Pre-calculate common values
-    const damping = 1 - (1 - 0.95) * dt * 60; // Linearized damping (faster than pow)
+    const damping = 1 - (1 - 0.95) * dt * 60; 
     
-    // Update particles - use index-based loop for better performance
+    // SMOOTHING FACTOR: Adjusts how fast objects snap to server position (0.1 = loose, 0.5 = tight)
+    // Using time-based smoothing for consistency across frame rates
+    const smoothFactor = 1 - Math.pow(0.001, dt); 
+
+    // Update particles
     for (let i = clientParticles.length - 1; i >= 0; i--) {
       const p = clientParticles[i];
       p.x += p.vx * dt;
@@ -521,9 +525,7 @@
       p.life -= dt;
       p.vx *= damping;
       p.vy *= damping;
-      if (p.life <= 0) {
-        clientParticles.splice(i, 1);
-      }
+      if (p.life <= 0) clientParticles.splice(i, 1);
     }
     
     // Update damage numbers
@@ -531,27 +533,43 @@
       const d = clientDamageNumbers[i];
       d.y += d.vy * dt;
       d.life -= dt * 1.5;
-      if (d.life <= 0) {
-        clientDamageNumbers.splice(i, 1);
-      }
+      if (d.life <= 0) clientDamageNumbers.splice(i, 1);
     }
     
     // Update lightning effects
     for (let i = clientLightning.length - 1; i >= 0; i--) {
       const l = clientLightning[i];
       l.life -= dt;
-      if (l.life <= 0) {
-        clientLightning.splice(i, 1);
-      }
+      if (l.life <= 0) clientLightning.splice(i, 1);
     }
     
     // Update cached asteroid rotations
     for (const [id, data] of asteroidCache) {
       data.rotation += data.rotSpeed * dt;
     }
-    
-    // NO CLIENT PREDICTION: Server sends at 30Hz, we just render server positions
-    // This eliminates all desync - positions always match server exactly
+
+    // CLIENT SIDE INTERPOLATION (The Fix)
+    // Smoothly move entities towards their latest server position
+    if (lastSnap) {
+      // Smooth Missiles
+      if (lastSnap.missiles) {
+        for (const m of lastSnap.missiles) {
+          if (typeof m.targetX === 'number') {
+            m.x += (m.targetX - m.x) * smoothFactor;
+            m.y += (m.targetY - m.y) * smoothFactor;
+          }
+        }
+      }
+      // Smooth Bullets
+      if (lastSnap.bullets) {
+        for (const b of lastSnap.bullets) {
+          if (typeof b.targetX === 'number') {
+            b.x += (b.targetX - b.x) * smoothFactor;
+            b.y += (b.targetY - b.y) * smoothFactor;
+          }
+        }
+      }
+    }
   }
 
   function processServerEvents(events, skipVisualEffects = false) {
@@ -968,37 +986,22 @@
         break;
 
       case "state":
-        // Process server events - skip visual effects if tab is hidden
+        // Process server events
         if (msg.events) {
           processServerEvents(msg.events, !isTabVisible);
         }
-        
-        // Update missile states - blend toward server position for smoothness
-        // NO BLENDING: Server sends at 30Hz, use positions directly
-        // This eliminates desync - client always matches server exactly
-        if (msg.missiles) {
-          tempIdSet.clear();
-          for (const m of msg.missiles) {
-            tempIdSet.add(m.id);
-          }
-          // Remove missiles that no longer exist
-          for (const id of missileStates.keys()) {
-            if (!tempIdSet.has(id)) missileStates.delete(id);
-          }
+
+        // PREPARE FOR INTERPOLATION
+        // Map previous positions to preserve visual continuity
+        const prevMissiles = new Map();
+        const prevBullets = new Map();
+
+        if (lastSnap) {
+          if (lastSnap.missiles) lastSnap.missiles.forEach(m => prevMissiles.set(m.id, m));
+          if (lastSnap.bullets) lastSnap.bullets.forEach(b => prevBullets.set(b.id, b));
         }
-        
-        // Bullets: no blending, use server positions directly
-        if (msg.bullets) {
-          tempIdSet.clear();
-          for (const b of msg.bullets) {
-            tempIdSet.add(b.id);
-          }
-          for (const id of bulletStates.keys()) {
-            if (!tempIdSet.has(id)) bulletStates.delete(id);
-          }
-        }
-        
-        // Augment missiles with cached vertices/rotation
+
+        // Process Missiles: Set Targets, Keep Current Visual Position
         if (msg.missiles) {
           tempIdSet.clear();
           for (const m of msg.missiles) {
@@ -1008,60 +1011,62 @@
               m.vertices = cached.vertices;
               m.rotation = cached.rotation;
             }
+            
+            // MAGIC: Store the server position as "target", use old visual position as "current"
+            m.targetX = m.x;
+            m.targetY = m.y;
+            
+            const prev = prevMissiles.get(m.id);
+            if (prev) {
+              // Start this frame at the old visual position to prevent jumping
+              m.x = prev.x; 
+              m.y = prev.y;
+            }
+            // If new, it spawns at m.x/m.y (from server) immediately
           }
-          // Clean up cache for destroyed asteroids (reuse tempIdSet)
+          // Clean up cache
           for (const id of asteroidCache.keys()) {
             if (!tempIdSet.has(id)) asteroidCache.delete(id);
           }
         }
-        
-        // Bullets now come with vx/vy directly from server (homing changes direction)
-        
-        // Auto-adjust quality based on entity counts (performance optimization)
+
+        // Process Bullets: Same logic
+        if (msg.bullets) {
+          for (const b of msg.bullets) {
+            b.targetX = b.x;
+            b.targetY = b.y;
+            
+            const prev = prevBullets.get(b.id);
+            if (prev) {
+              b.x = prev.x;
+              b.y = prev.y;
+            }
+          }
+        }
+
+        // Auto-quality adjustment
         checkAutoQuality(msg.missiles, msg.bullets);
         
-        // Use client-side particles/damage numbers if server didn't send them
-        if (!msg.particles || msg.particles.length === 0) {
-          msg.particles = clientParticles;
-        }
-        if (!msg.damageNumbers || msg.damageNumbers.length === 0) {
-          msg.damageNumbers = clientDamageNumbers;
-        }
+        // Use client-side particles/damage numbers
+        if (!msg.particles || msg.particles.length === 0) msg.particles = clientParticles;
+        if (!msg.damageNumbers || msg.damageNumbers.length === 0) msg.damageNumbers = clientDamageNumbers;
         
+        // Update global state
         lastSnap = msg;
         phase = msg.phase;
         wave = msg.wave;
         world = msg.world;
-        if (msg.spectatorCount !== undefined) {
-          spectatorCount = msg.spectatorCount;
-        }
-        // Update module card phase state from server
-        if (msg.moduleCardPhase !== undefined) {
-          moduleCardPhase = msg.moduleCardPhase;
-        }
-        if (msg.modulePickTimer !== undefined) {
-          modulePickTimeLeft = msg.modulePickTimer;
-        }
-        if (msg.currentModulePicker !== undefined) {
-          currentModulePicker = msg.currentModulePicker;
-        }
-        // Always update module cards from state (fixes issue with backed up upgrades)
-        if (msg.moduleCards !== undefined && msg.moduleCards.length > 0) {
-          moduleCards = msg.moduleCards;
-        }
-        if (msg.modulePickOrder !== undefined && msg.modulePickOrder.length > 0) {
-          modulePickOrder = msg.modulePickOrder;
-        }
-        // Update pause state
-        if (msg.gamePaused !== undefined) {
-          gamePaused = msg.gamePaused;
-        }
-        if (msg.pauseCountdown !== undefined) {
-          pauseCountdown = msg.pauseCountdown;
-        }
-        if (msg.pausedBy !== undefined) {
-          pausedBy = msg.pausedBy;
-        }
+        
+        if (msg.spectatorCount !== undefined) spectatorCount = msg.spectatorCount;
+        if (msg.moduleCardPhase !== undefined) moduleCardPhase = msg.moduleCardPhase;
+        if (msg.modulePickTimer !== undefined) modulePickTimeLeft = msg.modulePickTimer;
+        if (msg.currentModulePicker !== undefined) currentModulePicker = msg.currentModulePicker;
+        if (msg.moduleCards !== undefined && msg.moduleCards.length > 0) moduleCards = msg.moduleCards;
+        if (msg.modulePickOrder !== undefined && msg.modulePickOrder.length > 0) modulePickOrder = msg.modulePickOrder;
+        
+        if (msg.gamePaused !== undefined) gamePaused = msg.gamePaused;
+        if (msg.pauseCountdown !== undefined) pauseCountdown = msg.pauseCountdown;
+        if (msg.pausedBy !== undefined) pausedBy = msg.pausedBy;
         break;
 
       case "attackQueued":

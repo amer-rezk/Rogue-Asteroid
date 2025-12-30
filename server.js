@@ -19,7 +19,7 @@ const { WebSocketServer } = require("ws");
 // ===== Game constants =====
 const MAX_PLAYERS = 4;
 const TICK_RATE = 30;          // Physics at 30Hz
-const BROADCAST_RATE = 30;     // Network at 30Hz (same as physics, no client prediction needed)
+const BROADCAST_RATE = 15;     // Network at 15Hz (Client will interpolate)
 const DT = 1 / TICK_RATE;
 const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 1 tick (every frame)
 
