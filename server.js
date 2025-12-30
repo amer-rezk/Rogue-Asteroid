@@ -23,6 +23,10 @@ const BROADCAST_RATE = 30;     // Network at 30Hz (same as physics, no client pr
 const DT = 1 / TICK_RATE;
 const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 1 tick (every frame)
 
+// === ENTITY CAPS (SERVER-SIDE LAG PREVENTION) ===
+const MAX_MISSILES = 100;      // Hard cap on asteroids/enemies
+const MAX_BULLETS = 60;        // Hard cap on player bullets
+
 const WORLD_H = 600;
 const GROUND_Y = 560;
 const SEGMENT_W = 360;
@@ -67,11 +71,6 @@ const ASTEROID_R_MAX = 16;
 
 const WAVE_BASE_COUNT = 3;
 const WAVE_COUNT_SCALE = 0.5;  // Halved again to reduce wave length at high waves
-
-// ===== PERFORMANCE CAPS =====
-const MAX_MISSILES = 150;      // Hard cap on total asteroids (prevents lag at high waves)
-const MAX_BULLETS = 80;        // Hard cap on total bullets
-const MAX_PARTICLES_SERVER = 50; // Cap on visual effects sent to clients
 
 const MAX_AIM_ANGLE = (80 * Math.PI) / 180;
 
@@ -706,21 +705,15 @@ function spawnWave() {
     }
   }
 
-  const extremeScaleMult = wave >= 20 ? Math.pow(1.10, wave - 19) : 1; // Reduced from 1.12 to 1.10
+  const extremeScaleMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
   const baseWaveHp = wave * 0.6; // Reduced from 0.8 (25% less scaling)
   const waveHpScale = baseWaveHp * extremeScaleMult;
 
   const playerCount = lockedSlots.length;
   const baseTotal = WAVE_BASE_COUNT + Math.floor(wave * WAVE_COUNT_SCALE);
-  const countMult = wave >= 20 ? 1 + (wave - 19) * 0.03 : 1;  // Reduced from 0.05 to 0.03
+  const countMult = wave >= 20 ? 1 + (wave - 19) * 0.05 : 1;  // Halved from 0.1
   const scaledTotal = Math.floor(baseTotal * countMult);
-  
-  // Apply entity cap - don't queue more asteroids than we can handle
-  const currentEntities = missiles.length + spawnQueue.length;
-  const availableSlots = Math.max(0, MAX_MISSILES - currentEntities);
-  const totalCountRaw = (soloMode || playerCount === 1) ? scaledTotal : Math.floor(scaledTotal * 0.5);
-  const totalCount = Math.min(totalCountRaw, availableSlots);
-  
+  const totalCount = (soloMode || playerCount === 1) ? scaledTotal : Math.floor(scaledTotal * 0.5);
   const asteroidsPerPlayer = Math.max(1, Math.floor(totalCount / playerCount));
   
   for (let playerIdx = 0; playerIdx < playerCount; playerIdx++) {
@@ -1121,8 +1114,8 @@ function endGame(winnerId) {
 
 // ===== Simulation =====
 function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, overrideProps = null) {
-  // Performance cap: Don't create more bullets if at max
-  if (bullets.length >= MAX_BULLETS) return;
+  // ENTITY CAP: Prevent bullet spam from lagging server
+  if (bullets.length >= MAX_BULLETS) return null;
   
   let dmg, speed, isCrit, explosive, lifespan, bulletType, ricochet, pierce, chainChance;
   let modules = [];
@@ -1497,18 +1490,21 @@ function tick() {
       }
     }
     
-    // Process spawn queue (with entity cap)
-    if (spawnQueue.length > 0 && missiles.length < MAX_MISSILES) {
+    // Process spawn queue
+    if (spawnQueue.length > 0) {
       spawnTimer -= DT;
       if (spawnTimer <= 0) {
+        // ENTITY CAP: Only spawn if under missile limit
         const availableSlots = MAX_MISSILES - missiles.length;
-        const spawnCount = Math.min(spawnQueue.length, availableSlots, Math.random() < 0.5 ? 1 : Math.random() < 0.8 ? 2 : 3);
-        for (let i = 0; i < spawnCount && spawnQueue.length > 0; i++) {
-          const queued = spawnQueue.shift();
-          missiles.push(createAsteroid(
-            queued.x, queued.y, queued.type, queued.hp, queued.targetSlot, 
-            queued.attackType, queued.senderId, null, false, queued.isMiniBoss || false
-          ));
+        if (availableSlots > 0) {
+          const spawnCount = Math.min(spawnQueue.length, availableSlots, Math.random() < 0.5 ? 1 : Math.random() < 0.8 ? 2 : 3);
+          for (let i = 0; i < spawnCount && spawnQueue.length > 0; i++) {
+            const queued = spawnQueue.shift();
+            missiles.push(createAsteroid(
+              queued.x, queued.y, queued.type, queued.hp, queued.targetSlot, 
+              queued.attackType, queued.senderId, null, false, queued.isMiniBoss || false
+            ));
+          }
         }
         spawnTimer = 0.1 + Math.random() * 0.4;
       }
@@ -1669,34 +1665,38 @@ function tick() {
       m.y += m.vy * DT * speedMult;
       // Rotation is handled client-side
       
-      // Carrier: Spawns mini asteroids periodically (with cap check)
-      if (m.isCarrier && m.carrierSpawnTimer !== null && !m.inFTL && missiles.length < MAX_MISSILES) {
+      // Carrier: Spawns mini asteroids periodically
+      if (m.isCarrier && m.carrierSpawnTimer !== null && !m.inFTL) {
         m.carrierSpawnTimer -= DT;
         if (m.carrierSpawnTimer <= 0) {
-          // Spawn mini asteroids (limited by entity cap)
-          const spawnCount = Math.min(ATTACK_TYPES.carrier?.spawnCount || 2, MAX_MISSILES - missiles.length);
-          for (let i = 0; i < spawnCount; i++) {
-            const offsetX = (Math.random() - 0.5) * 30;
-            const miniHp = 0.25 + wave * 0.075; // Reduced by 50% base, 25% scaling
-            const mini = createAsteroid(
-              m.x + offsetX, 
-              m.y + m.r, 
-              "small", 
-              miniHp, 
-              m.targetSlot, 
-              null, // No attack type - just regular small asteroid
-              m.senderId,
-              null, // No boss variant
-              true  // noGold - carrier minions give no gold
-            );
-            mini.inFTL = false; // Spawn immediately, no FTL effect
-            mini.vy = Math.abs(m.vy) * 1.2; // Slightly faster than parent
-            missiles.push(mini);
+          // ENTITY CAP: Only spawn if under limit
+          const availableSlots = MAX_MISSILES - missiles.length;
+          if (availableSlots > 0) {
+            // Spawn mini asteroids
+            const spawnCount = Math.min(ATTACK_TYPES.carrier?.spawnCount || 2, availableSlots);
+            for (let i = 0; i < spawnCount; i++) {
+              const offsetX = (Math.random() - 0.5) * 30;
+              const miniHp = 0.25 + wave * 0.075; // Reduced by 50% base, 25% scaling
+              const mini = createAsteroid(
+                m.x + offsetX, 
+                m.y + m.r, 
+                "small", 
+                miniHp, 
+                m.targetSlot, 
+                null, // No attack type - just regular small asteroid
+                m.senderId,
+                null, // No boss variant
+                true  // noGold - carrier minions give no gold
+              );
+              mini.inFTL = false; // Spawn immediately, no FTL effect
+              mini.vy = Math.abs(m.vy) * 1.2; // Slightly faster than parent
+              missiles.push(mini);
+            }
+            // Visual feedback
+            createExplosion(m.x, m.y + m.r, 15, ATTACK_TYPES.carrier?.color || "#ff00ff");
           }
           // Reset timer
           m.carrierSpawnTimer = ATTACK_TYPES.carrier?.spawnInterval || 2.0;
-          // Visual feedback
-          createExplosion(m.x, m.y + m.r, 15, ATTACK_TYPES.carrier?.color || "#ff00ff");
         }
       }
       
@@ -1885,7 +1885,9 @@ function tick() {
             const nextThreshold = 1 - ((m.bossSpawnCount + 1) * 0.25); // 0.75, 0.50, 0.25
             if (hpPercent <= nextThreshold) {
               m.bossSpawnCount++;
-              for(let k=0; k<5; k++) {
+              // ENTITY CAP: Limit spawns to available slots
+              const adsToSpawn = Math.min(5, MAX_MISSILES - missiles.length);
+              for(let k=0; k<adsToSpawn; k++) {
                 const bossAdVariant = (k % 5) + 1; // Cycle through 1-5
                 missiles.push(createAsteroid(
                   m.x + rand(-50, 50), 
@@ -1909,7 +1911,9 @@ function tick() {
             const nextThreshold = 1 - ((m.bossSpawnCount + 1) * 0.25); // 0.75, 0.50, 0.25
             if (hpPercent <= nextThreshold) {
               m.bossSpawnCount++;
-              for(let k=0; k<3; k++) {
+              // ENTITY CAP: Limit spawns to available slots
+              const adsToSpawn = Math.min(3, MAX_MISSILES - missiles.length);
+              for(let k=0; k<adsToSpawn; k++) {
                 // Smaller minions for mini-boss (minibossAd type)
                 const miniAdHp = Math.max(1, Math.ceil(wave * 0.3)); // Less HP than boss ads
                 const miniAd = createAsteroid(
@@ -1949,8 +1953,9 @@ function tick() {
           const owner = players.get(b.ownerId);
           
           // Fractal Prism: Shatter into 3 smaller bullets behind target
-          if (bulletModules.includes("fractalPrism")) {
-            for (let i = 0; i < 3; i++) {
+          if (bulletModules.includes("fractalPrism") && bullets.length < MAX_BULLETS) {
+            const shardsToSpawn = Math.min(3, MAX_BULLETS - bullets.length);
+            for (let i = 0; i < shardsToSpawn; i++) {
               const angle = Math.PI + (i - 1) * 0.5; // Spread behind
               const shardVx = Math.cos(angle) * 100;
               const shardVy = Math.sin(angle) * 100;
@@ -2144,24 +2149,25 @@ function tick() {
             // When mini-boss dies, spawn any remaining minion waves
             if (m.isMiniBoss && m.bossSpawnCount < 3) {
               const remainingSpawns = 3 - m.bossSpawnCount;
-              for (let spawnWave = 0; spawnWave < remainingSpawns; spawnWave++) {
-                for (let k = 0; k < 3; k++) {
-                  const miniAdHp = Math.max(1, Math.ceil(wave * 0.3));
-                  const miniAd = createAsteroid(
-                    m.x + rand(-25, 25),
-                    m.y + rand(10, 40),
-                    "minibossAd",
-                    miniAdHp,
-                    m.targetSlot,
-                    null,
-                    null,
-                    null,
-                    false
-                  );
-                  miniAd.isMiniBossAd = true;
-                  miniAd.inFTL = false;
-                  missiles.push(miniAd);
-                }
+              // ENTITY CAP: Limit total spawns
+              let totalToSpawn = remainingSpawns * 3;
+              totalToSpawn = Math.min(totalToSpawn, MAX_MISSILES - missiles.length);
+              for (let k = 0; k < totalToSpawn; k++) {
+                const miniAdHp = Math.max(1, Math.ceil(wave * 0.3));
+                const miniAd = createAsteroid(
+                  m.x + rand(-25, 25),
+                  m.y + rand(10, 40),
+                  "minibossAd",
+                  miniAdHp,
+                  m.targetSlot,
+                  null,
+                  null,
+                  null,
+                  false
+                );
+                miniAd.isMiniBossAd = true;
+                miniAd.inFTL = false;
+                missiles.push(miniAd);
               }
               createExplosion(m.x, m.y, 40, "#ff4400");
             }
@@ -2175,22 +2181,23 @@ function tick() {
               }
               
               const remainingSpawns = 3 - m.bossSpawnCount;
-              for (let spawnWave = 0; spawnWave < remainingSpawns; spawnWave++) {
-                for (let k = 0; k < 5; k++) {
-                  const bossAdVariant = (k % 5) + 1;
-                  const spawnedAd = createAsteroid(
-                    m.x + rand(-50, 50),
-                    m.y + rand(20, 100),
-                    "medium",
-                    Math.max(2, wave),
-                    m.targetSlot,
-                    null,
-                    null,
-                    bossAdVariant,
-                    false // Boss ads CAN give gold (1 each)
-                  );
-                  missiles.push(spawnedAd);
-                }
+              // ENTITY CAP: Limit total spawns
+              let totalToSpawn = remainingSpawns * 5;
+              totalToSpawn = Math.min(totalToSpawn, MAX_MISSILES - missiles.length);
+              for (let k = 0; k < totalToSpawn; k++) {
+                const bossAdVariant = (k % 5) + 1;
+                const spawnedAd = createAsteroid(
+                  m.x + rand(-50, 50),
+                  m.y + rand(20, 100),
+                  "medium",
+                  Math.max(2, wave),
+                  m.targetSlot,
+                  null,
+                  null,
+                  bossAdVariant,
+                  false // Boss ads CAN give gold (1 each)
+                );
+                missiles.push(spawnedAd);
               }
               createExplosion(m.x, m.y, 80, "#ff0000");
             }
@@ -2200,17 +2207,20 @@ function tick() {
               broadcast({ t: "bossKilled", killerId: owner.id, killerName: owner.name });
             }
             
-            // Splitter: spawn children with noGold flag (capped for performance)
-            if (m.splits > 0 && missiles.length < MAX_MISSILES) {
-              const extremeMult = wave >= 20 ? Math.pow(1.10, wave - 19) : 1; // Reduced from 1.12
-              const splitHp = Math.ceil((0.5 + wave * 0.3) * extremeMult);
-              // Cap splits based on available entity slots
-              const actualSplits = Math.min(m.splits, MAX_MISSILES - missiles.length, 10); // Max 10 splits for performance
-              for (let s = 0; s < actualSplits; s++) {
-                const nx = m.x + rand(-30, 30);
-                const ny = m.y + rand(-20, 20);
-                const splitAsteroid = createAsteroid(nx, ny, "small", splitHp, m.targetSlot, null, m.senderId, null, true); // noGold=true
-                missiles.push(splitAsteroid);
+            // Splitter: spawn children with noGold flag
+            if (m.splits > 0) {
+              // ENTITY CAP: Limit splitter children
+              const availableSlots = MAX_MISSILES - missiles.length;
+              const splitsToSpawn = Math.min(m.splits, availableSlots, 8); // Also hard cap at 8
+              if (splitsToSpawn > 0) {
+                const extremeMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
+                const splitHp = Math.ceil((0.5 + wave * 0.3) * extremeMult); // Reduced by 50% base, 25% scaling
+                for (let s = 0; s < splitsToSpawn; s++) {
+                  const nx = m.x + rand(-30, 30);
+                  const ny = m.y + rand(-20, 20);
+                  const splitAsteroid = createAsteroid(nx, ny, "small", splitHp, m.targetSlot, null, m.senderId, null, true); // noGold=true
+                  missiles.push(splitAsteroid);
+                }
               }
             }
           } else {
@@ -2434,7 +2444,10 @@ function tick() {
 
     // SERVER AUTHORITATIVE: Broadcast every tick (30Hz) - no client prediction
     // OPTIMIZED: Reuse pre-allocated broadcastState to avoid GC pressure
-    if (tickCount % BROADCAST_INTERVAL === 0) {
+    // ADAPTIVE: Throttle broadcasts when entity count is high
+    const entityCount = missiles.length + bullets.length;
+    const broadcastSkip = entityCount > 120 ? 2 : 1; // Drop to 15Hz when heavily loaded
+    if (tickCount % (BROADCAST_INTERVAL * broadcastSkip) === 0) {
       broadcastGameState();
     }
   } catch (err) {
