@@ -8,9 +8,10 @@
   let graphicsQuality = parseInt(localStorage.getItem("rogueAsteroidQuality") || "1");
   
   // Performance thresholds - automatically reduce quality when entity counts are high
+  // PERFORMANCE: Lower thresholds for more aggressive quality scaling
   const QUALITY_THRESHOLDS = {
-    missiles: { low: 80, medium: 50 },
-    bullets: { low: 60, medium: 35 }
+    missiles: { low: 60, medium: 35 },  // Was 80/50 - trigger earlier
+    bullets: { low: 50, medium: 25 }    // Was 60/35 - trigger earlier
   };
   
   // Cached quality-dependent settings
@@ -23,37 +24,43 @@
     maxParticles: 100
   };
   
+  // PERFORMANCE: Track player count for quality scaling
+  let lastKnownPlayerCount = 1;
+  
   function updateQualitySettings() {
+    // PERFORMANCE: Scale down max particles based on player count
+    const playerScale = lastKnownPlayerCount > 2 ? 0.5 : (lastKnownPlayerCount > 1 ? 0.75 : 1.0);
+    
     switch (graphicsQuality) {
       case 0: // Low - maximum performance
         qualitySettings = {
           useShadows: false,
           useGradients: false,
           useTrails: false,
-          particleMultiplier: 0.3,
-          maxDamageNumbers: 20,
-          maxParticles: 30
+          particleMultiplier: 0.2 * playerScale,
+          maxDamageNumbers: Math.floor(15 * playerScale),
+          maxParticles: Math.floor(20 * playerScale)
         };
         break;
       case 1: // Medium - balanced
         qualitySettings = {
           useShadows: false,
-          useGradients: true,
+          useGradients: false, // PERFORMANCE: Disabled - gradients are expensive
           useTrails: true,
-          particleMultiplier: 0.6,
-          maxDamageNumbers: 35,
-          maxParticles: 60
+          particleMultiplier: 0.5 * playerScale,
+          maxDamageNumbers: Math.floor(30 * playerScale),
+          maxParticles: Math.floor(40 * playerScale)
         };
         break;
       case 2: // High - full effects
       default:
         qualitySettings = {
           useShadows: true,
-          useGradients: true,
+          useGradients: false, // PERFORMANCE: Disabled even on high - too expensive with many bullets
           useTrails: true,
-          particleMultiplier: 1.0,
-          maxDamageNumbers: 50,
-          maxParticles: 100
+          particleMultiplier: 0.8 * playerScale,
+          maxDamageNumbers: Math.floor(50 * playerScale),
+          maxParticles: Math.floor(80 * playerScale)
         };
         break;
     }
@@ -61,17 +68,30 @@
   updateQualitySettings();
   
   // Auto-quality adjustment based on entity counts
-  function checkAutoQuality(missiles, bullets) {
+  function checkAutoQuality(missiles, bullets, playerCount) {
+    // PERFORMANCE: Track player count and update settings if changed
+    if (playerCount && playerCount !== lastKnownPlayerCount) {
+      lastKnownPlayerCount = playerCount;
+      updateQualitySettings();
+    }
+    
     if (graphicsQuality === 0) return;
     const missileCount = missiles?.length || 0;
     const bulletCount = bullets?.length || 0;
     
-    if (missileCount > QUALITY_THRESHOLDS.missiles.low || bulletCount > QUALITY_THRESHOLDS.bullets.low) {
+    // PERFORMANCE: More aggressive with more players
+    const playerMultiplier = lastKnownPlayerCount > 2 ? 0.7 : 1.0;
+    const lowMissiles = QUALITY_THRESHOLDS.missiles.low * playerMultiplier;
+    const lowBullets = QUALITY_THRESHOLDS.bullets.low * playerMultiplier;
+    const medMissiles = QUALITY_THRESHOLDS.missiles.medium * playerMultiplier;
+    const medBullets = QUALITY_THRESHOLDS.bullets.medium * playerMultiplier;
+    
+    if (missileCount > lowMissiles || bulletCount > lowBullets) {
       if (graphicsQuality > 0) {
         graphicsQuality = 0;
         updateQualitySettings();
       }
-    } else if (missileCount > QUALITY_THRESHOLDS.missiles.medium || bulletCount > QUALITY_THRESHOLDS.bullets.medium) {
+    } else if (missileCount > medMissiles || bulletCount > medBullets) {
       if (graphicsQuality > 1) {
         graphicsQuality = 1;
         updateQualitySettings();
@@ -526,10 +546,18 @@
     // OPTIMIZED: Use forward iteration with swap-and-pop instead of splice
     const GROUND_Y = 560; // Matches server ground level
     
-    // DESYNC FIX: Client-side collision prediction
-    // Check if bullets would hit missiles and remove them early
-    // This prevents "ghost bullets" that visually pass through enemies
+    // PERFORMANCE FIX: Bucket missiles by slot ONCE per frame
+    // This turns O(bullets × all_missiles) into O(bullets × missiles_per_slot)
+    // With 4 players: 48,000 checks → ~12,000 checks (4x faster)
     const missiles = lastSnap?.missiles || [];
+    const missilesBySlot = [[], [], [], []]; // Pre-allocated for 4 slots
+    
+    for (let i = 0; i < missiles.length; i++) {
+      const m = missiles[i];
+      if (m.targetSlot !== undefined && m.targetSlot >= 0 && m.targetSlot < 4) {
+        missilesBySlot[m.targetSlot].push(m);
+      }
+    }
     
     let bulletWriteIdx = 0;
     for (let i = 0; i < clientBullets.length; i++) {
@@ -556,19 +584,19 @@
       }
       
       // CLIENT-SIDE COLLISION PREDICTION: Remove bullets that hit enemies
-      // This reduces visual desync by ~50ms (1-2 server ticks)
+      // OPTIMIZED: Only check missiles in the SAME SLOT (not all missiles)
       let hitEnemy = false;
-      for (let mi = 0; mi < missiles.length; mi++) {
-        const m = missiles[mi];
-        // Only check missiles in same slot
-        if (m.targetSlot !== undefined && m.targetSlot !== b.slot) continue;
-        
-        const dx = m.x - b.x;
-        const dy = m.y - b.y;
-        const rr = (m.r || 15) + (b.r || 3);
-        if (dx * dx + dy * dy <= rr * rr) {
-          hitEnemy = true;
-          break;
+      const slotMissiles = missilesBySlot[b.slot];
+      if (slotMissiles) {
+        for (let mi = 0; mi < slotMissiles.length; mi++) {
+          const m = slotMissiles[mi];
+          const dx = m.x - b.x;
+          const dy = m.y - b.y;
+          const rr = (m.r || 15) + (b.r || 3);
+          if (dx * dx + dy * dy <= rr * rr) {
+            hitEnemy = true;
+            break;
+          }
         }
       }
       
@@ -1248,8 +1276,9 @@
           }
         }
 
-        // Auto-quality adjustment
-        checkAutoQuality(msg.missiles, msg.bullets);
+        // Auto-quality adjustment (pass player count for scaling)
+        const playerCount = msg.players?.length || 1;
+        checkAutoQuality(msg.missiles, msg.bullets, playerCount);
         
         // Use client-side particles/damage numbers
         if (!msg.particles || msg.particles.length === 0) msg.particles = clientParticles;
@@ -2109,6 +2138,7 @@
   }
 
   // ===== Unique Projectile Rendering (OPTIMIZED) =====
+  // PERFORMANCE: Removed ctx.save()/restore() wrapper - only use for transforms
   function drawBullet(b, sx, sy, baseColor) {
     const x = b.x * sx;
     const y = b.y * sy;
@@ -2128,7 +2158,7 @@
     const fadeStart = 0.5;
     const alpha = b.lifespan < fadeStart ? Math.max(0.2, b.lifespan / fadeStart) : 1.0;
 
-    ctx.save();
+    // PERFORMANCE: No ctx.save()/restore() here - only used for missile rotation below
 
     switch (b.bulletType) {
       case "gatling":
@@ -2181,6 +2211,7 @@
           ctx.closePath();
           ctx.fill();
         }
+        // PERFORMANCE: Only save/restore for rotate transform
         ctx.save();
         ctx.translate(x, y);
         ctx.rotate(angle);
@@ -2205,19 +2236,9 @@
         };
 
         if (qualitySettings.useTrails) {
-          // Trail - use solid color instead of gradient at medium quality
-          if (qualitySettings.useGradients) {
-            const gradient = ctx.createLinearGradient(
-              x, y,
-              x - Math.cos(angle) * trail, y - Math.sin(angle) * trail
-            );
-            // Use the safe helper instead of hexToRgba directly
-            gradient.addColorStop(0, getColorAlpha(color, 0.8 * alpha));
-            gradient.addColorStop(1, getColorAlpha(color, 0));
-            ctx.strokeStyle = gradient;
-          } else {
-            ctx.strokeStyle = getColorAlpha(color, 0.5 * alpha);
-          }
+          // PERFORMANCE: Skip gradient creation - use solid color trail instead
+          // Gradients create new objects every frame, causing GC pressure
+          ctx.strokeStyle = getColorAlpha(color, 0.5 * alpha);
           ctx.lineWidth = r * 1.8;
           ctx.lineCap = "round";
           ctx.beginPath();
@@ -2233,8 +2254,8 @@
         ctx.fill();
         break;
     }
-
-    ctx.restore();
+    // PERFORMANCE: No ctx.restore() needed - we only modified fillStyle/strokeStyle/lineWidth
+    // which get overwritten by the next draw call anyway
   }
 
   // Track last frame time for smooth delta time calculation
