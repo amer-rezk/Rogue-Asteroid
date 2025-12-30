@@ -2421,12 +2421,21 @@ function tick() {
     
     // Same for bullets
     writeIdx = 0;
+    const deadBulletIds = [];
     for (let i = 0; i < bullets.length; i++) {
       if (!bullets[i].dead) {
         bullets[writeIdx++] = bullets[i];
+      } else {
+        deadBulletIds.push(bullets[i].id);
       }
     }
     bullets.length = writeIdx;
+    
+    // OPTIMIZATION: Notify clients of dead bullets so they can remove them
+    // This allows us to NOT send the full bullet list every frame
+    if (deadBulletIds.length > 0) {
+      queueEvent("bulletDeaths", { ids: deadBulletIds });
+    }
 
     if (checkGameOver()) return;
 
@@ -2512,28 +2521,10 @@ function broadcastGameState() {
   // Truncate array to actual size (JSON.stringify respects .length)
   broadcastState.missiles.length = missileCount;
   
-  // Fill bullets array
-  const bulletCount = bullets.length;
-  while (broadcastState.bullets.length < bulletCount) {
-    broadcastState.bullets.push({});
-  }
-  for (let i = 0; i < bulletCount; i++) {
-    const b = bullets[i];
-    const obj = broadcastState.bullets[i];
-    obj.id = b.id;
-    obj.x = Math.round(b.x * 10) / 10;
-    obj.y = Math.round(b.y * 10) / 10;
-    obj.r = b.r;
-    obj.vx = Math.round(b.vx * 10) / 10;
-    obj.vy = Math.round(b.vy * 10) / 10;
-    obj.slot = b.ownerSlot;
-    obj.lifespan = Math.round(b.lifespan * 10) / 10;
-    if (b.isCrit) obj.isCrit = true; else delete obj.isCrit;
-    if (b.isTowerBullet) obj.isTower = true; else delete obj.isTower;
-    if (b.bulletType && b.bulletType !== "gatling") obj.bulletType = b.bulletType; else delete obj.bulletType;
-    if (b.bulletColor) obj.bulletColor = b.bulletColor; else delete obj.bulletColor;
-  }
-  broadcastState.bullets.length = bulletCount;
+  // BANDWIDTH OPTIMIZATION: 
+  // We do NOT send the full bullet list. Clients simulate bullets locally based on 
+  // 'bulletSpawn' and 'bulletDeaths' events. This saves massive bandwidth.
+  broadcastState.bullets.length = 0;
   
   // Events - just reference the queue (will be cleared after)
   broadcastState.events = eventQueue;

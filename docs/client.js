@@ -345,6 +345,7 @@
 
   // CLIENT-SIDE RENDERING (offloaded from server)
   let clientParticles = [];      // Particles generated from events
+  let clientBullets = [];        // Local bullet simulation
   let clientDamageNumbers = [];  // Damage numbers generated from events
   let clientLightning = [];      // Lightning effects from tesla coil
   let asteroidCache = new Map(); // Cache: id -> {vertices, rotSpeed, rotation, color}
@@ -510,6 +511,18 @@
   }
 
   function updateClientEffects(dt) {
+	
+	// Simulate local bullets (Bandwidth Fix)
+    for (let i = clientBullets.length - 1; i >= 0; i--) {
+      const b = clientBullets[i];
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      // Cleanup stray bullets that went off screen
+      if (b.y < -100 || b.y > 700 || b.x < -100 || b.x > 2000) {
+        clientBullets.splice(i, 1);
+      }
+    }	
+	 
     // Pre-calculate common values
     const damping = 1 - (1 - 0.95) * dt * 60; 
     
@@ -615,9 +628,25 @@
           break;
           
         case "bulletSpawn":
-          // No longer tracking bullet positions - server sends at 30Hz
-          // Just mark that we know about this bullet
-          bulletStates.set(ev.id, true);
+          // Create local bullet from server event
+          clientBullets.push({
+            id: ev.id,
+            x: ev.x, y: ev.y,
+            vx: ev.vx, vy: ev.vy,
+            r: 3, // Default radius
+            isCrit: ev.isCrit,
+            bulletColor: ev.bulletColor, 
+            slot: ev.slot,
+            lifespan: 1.0 // Visual only
+          });
+          break;
+
+        case "bulletDeaths":
+          // Remove bullets that died on server
+          if (ev.ids) {
+            const deadSet = new Set(ev.ids);
+            clientBullets = clientBullets.filter(b => !deadSet.has(b.id));
+          }
           break;
       }
     }
@@ -2555,8 +2584,8 @@
         }
       }
 
-      // Bullets with unique visuals
-      for (const b of lastSnap.bullets) {
+      // Render local bullets
+      for (const b of clientBullets) {
         const baseColor = PLAYER_COLORS[b.slot]?.main || "#0ff";
         drawBullet(b, sx, sy, baseColor);
       }
