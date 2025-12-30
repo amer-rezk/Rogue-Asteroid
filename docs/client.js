@@ -1860,6 +1860,14 @@
         const trail = 12 * sx;
         const color = b.isCrit ? "#ffffff" : (b.bulletColor || baseColor);
         
+        // Helper to safe-wrap colors (handles HEX and HSL from confetti)
+        const getColorAlpha = (c, a) => {
+          if (!c) return `rgba(255,255,255,${a})`;
+          if (c.startsWith("#")) return hexToRgba(c, a);
+          if (c.startsWith("hsl")) return c.replace("hsl", "hsla").replace(")", `, ${a})`);
+          return c;
+        };
+
         if (qualitySettings.useTrails) {
           // Trail - use solid color instead of gradient at medium quality
           if (qualitySettings.useGradients) {
@@ -1867,11 +1875,12 @@
               x, y,
               x - Math.cos(angle) * trail, y - Math.sin(angle) * trail
             );
-            gradient.addColorStop(0, hexToRgba(color, 0.8 * alpha));
-            gradient.addColorStop(1, hexToRgba(color, 0));
+            // Use the safe helper instead of hexToRgba directly
+            gradient.addColorStop(0, getColorAlpha(color, 0.8 * alpha));
+            gradient.addColorStop(1, getColorAlpha(color, 0));
             ctx.strokeStyle = gradient;
           } else {
-            ctx.strokeStyle = hexToRgba(color, 0.5 * alpha);
+            ctx.strokeStyle = getColorAlpha(color, 0.5 * alpha);
           }
           ctx.lineWidth = r * 1.8;
           ctx.lineCap = "round";
@@ -1882,7 +1891,7 @@
         }
 
         // Bullet body
-        ctx.fillStyle = hexToRgba(color, alpha);
+        ctx.fillStyle = getColorAlpha(color, alpha);
         ctx.beginPath();
         ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fill();
