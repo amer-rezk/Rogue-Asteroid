@@ -3572,6 +3572,7 @@
             { label: "Ricochet", value: `${u.ricochet || 0}`, color: "#ff9966" },
             { label: "Chain Chance", value: `${((u.chainChance || 0) * 100).toFixed(0)}%`, color: "#9966ff" },
             { label: "Explosive", value: `${u.explosive || 0}`, color: "#ff4444" },
+            { label: "Grav Power", value: `${u.slowfield || 0}`, color: "#00ffff" },
             { label: "Gold Mult", value: `${((u.goldMult || 1) * 100).toFixed(0)}%`, color: "#ffd700" },
           ];
           

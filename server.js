@@ -490,7 +490,7 @@ const UPGRADE_DEFS = [
   { id: "pierce", name: "Railgun", cat: "utility", icon: "📌", desc: "Pierces {val} enemies", stat: "pierce", base: 1, type: "add" },
   { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "{val}% chance for Lightning", stat: "chainChance", base: 0.02, type: "add_cap", cap: 0.30 },
   { id: "shield", name: "Shield Gen", cat: "defense", icon: "🛡️", desc: "+{val} Shield (one-time)", stat: "shield", base: 1, type: "add" },
-  { id: "slow", name: "Grav Field", cat: "defense", icon: "🌀", desc: "Slow Enemies", stat: "slowfield", base: 1, type: "bool" },
+  { id: "slow", name: "Grav Field", cat: "defense", icon: "🌀", desc: "Gravity Power +{val}", stat: "slowfield", base: 15, type: "add" },
   { id: "income", name: "War Profiteer", cat: "economy", icon: "💰", desc: "+{val}% Gold (Kills & Income)", stat: "goldMult", base: 0.12, type: "mult" },
 ];
 
@@ -1631,7 +1631,8 @@ function tick() {
       const p = players.get(id);
       if (p?.upgrades?.slowfield) {
         const { x0, x1 } = segmentBounds(p.slot);
-        slowfieldSlots.push({ x0, x1 });
+        // Store the strength of the field
+        slowfieldSlots.push({ x0, x1, strength: p.upgrades.slowfield });
       }
     }
 
@@ -1660,7 +1661,12 @@ function tick() {
       let speedMult = 1;
       for (let si = 0; si < slowfieldSlots.length; si++) {
         const sf = slowfieldSlots[si];
-        if (m.x >= sf.x0 && m.x <= sf.x1) { speedMult = 0.75; break; }
+        if (m.x >= sf.x0 && m.x <= sf.x1) { 
+          // Diminishing returns formula: 15 strength = ~13% slow. 100 strength = 50% slow.
+          // This allows it to be uncapped without stopping enemies completely.
+          speedMult = 100 / (100 + sf.strength); 
+          break; 
+        }
       }
       
       m.x += m.vx * DT * speedMult;
