@@ -518,7 +518,7 @@ const UPGRADE_DEFS = [
   { id: "multi", name: "Multishot", cat: "offense", icon: "⚔️", desc: "+{val} Bullets (-{penalty}% dmg)", stat: "multishot", base: 1, type: "multishot" },
   { id: "crit", name: "Crit Scope", cat: "offense", icon: "🎯", desc: "+{val}% Crit Chance", stat: "critChance", base: 0.05, type: "add_cap", cap: 1.0 },
   { id: "boom", name: "Explosive", cat: "offense", icon: "💣", desc: "Explosions size +{val}", stat: "explosive", base: 1, type: "add" },
-  { id: "rico", name: "Ricochet", cat: "utility", icon: "🎱", desc: "Bounces {val} times", stat: "ricochet", base: 1, type: "add" },
+  { id: "rico", name: "Ricochet", cat: "utility", icon: "🎱", desc: "Chains to {val} enemies (-10% dmg each)", stat: "ricochet", base: 1, type: "add" },
   { id: "pierce", name: "Railgun", cat: "utility", icon: "📌", desc: "Pierces {val} enemies", stat: "pierce", base: 1, type: "add" },
   { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "{val}% chance for Lightning", stat: "chainChance", base: 0.02, type: "add_cap", cap: 0.30 },
   { id: "shield", name: "Shield Gen", cat: "defense", icon: "🛡️", desc: "+{val} Shield (one-time)", stat: "shield", base: 1, type: "add" },
@@ -1942,20 +1942,10 @@ function tick() {
       b.lifespan -= DT;
       if (b.lifespan <= 0) { b.dead = true; continue; }
 
-      let didRicochet = false;
-      
+      // Ricochet now chains between enemies, not walls - bullets die at boundaries
       const { x0: ownerX0, x1: ownerX1 } = segmentBounds(b.ownerSlot);
-      if (b.x < ownerX0) { 
-        if (b.ricochet > 0) { b.x = ownerX0; b.vx = -b.vx; b.ricochet--; didRicochet = true; } 
-        else { b.dead = true; } 
-      }
-      else if (b.x > ownerX1) { 
-        if (b.ricochet > 0) { b.x = ownerX1; b.vx = -b.vx; b.ricochet--; didRicochet = true; } 
-        else { b.dead = true; } 
-      }
-      if (b.y < -50) { if (b.ricochet > 0) { b.y = -50; b.vy = -b.vy; b.ricochet--; didRicochet = true; } else { b.dead = true; } }
-      if (b.y > GROUND_Y) { if (b.ricochet > 0) { b.y = GROUND_Y; b.vy = -b.vy; b.ricochet--; didRicochet = true; } else { b.dead = true; } }
-      if (didRicochet && b.hitSet) b.hitSet.clear();
+      if (b.x < ownerX0 || b.x > ownerX1) { b.dead = true; }
+      if (b.y < -50 || b.y > GROUND_Y) { b.dead = true; }
     }
 
     // Buckets already built above before player shooting
@@ -2154,14 +2144,65 @@ function tick() {
             m.staticColor = "#ffff00";
           }
           
-          // Pinball Wizard: Bounce off enemy to hit another nearby enemy
+          // Ricochet (wave card): Chain between enemies using prediction targeting
+          // -10% damage per bounce, vanishes if no target found
+          if (b.ricochet > 0 && m.hp > 0) {
+            // Find nearest enemy (excluding ones we've already hit)
+            const bounceRange = 200;
+            const bounceRangeSq = bounceRange * bounceRange;
+            let nearestTarget = null;
+            let nearestDistSq = Infinity;
+            
+            const slotMissilesBounce = missilesBySlot[b.ownerSlot];
+            for (let bi = 0; bi < slotMissilesBounce.length; bi++) {
+              const m2 = slotMissilesBounce[bi];
+              if (m2.dead || m2 === m || (b.hitSet && b.hitSet.has(m2.id))) continue;
+              const dx = m2.x - m.x;
+              const dy = m2.y - m.y;
+              const dSq = dx * dx + dy * dy;
+              if (dSq < bounceRangeSq && dSq < nearestDistSq) {
+                nearestDistSq = dSq;
+                nearestTarget = m2;
+              }
+            }
+            
+            if (nearestTarget) {
+              // Use prediction targeting to lead the shot
+              const bulletSpeed = Math.hypot(b.vx, b.vy);
+              const speedMult = slotSpeedMultipliers[b.ownerSlot] || 1;
+              const intercept = calculateInterceptPoint(m.x, m.y, bulletSpeed, nearestTarget, speedMult);
+              
+              // Calculate direction to intercept point
+              const dx = intercept.x - m.x;
+              const dy = intercept.y - m.y;
+              const dist = Math.hypot(dx, dy);
+              
+              // Redirect bullet towards intercept point
+              b.vx = (dx / dist) * bulletSpeed;
+              b.vy = (dy / dist) * bulletSpeed;
+              b.x = m.x + (dx / dist) * (m.r + 5); // Move bullet outside current enemy
+              b.y = m.y + (dy / dist) * (m.r + 5);
+              
+              // Apply -10% damage per bounce
+              b.dmg *= 0.9;
+              b.ricochet--;
+              
+              b.dead = false; // Keep bullet alive!
+              queueEvent("ricochetBounce", { x: m.x, y: m.y, tx: intercept.x, ty: intercept.y });
+            } else {
+              // No target found - bullet vanishes (don't keep bouncing)
+              b.ricochet = 0;
+            }
+          }
+          
+          // Pinball Wizard (boss module): Additional enemy bouncing with hardcoded 4 bounces
           if (bulletModules.includes("pinballWizard") && m.hp > 0) {
             const maxBounces = 4;
             b.enemyBounces = (b.enemyBounces || 0) + 1;
             
             if (b.enemyBounces < maxBounces) {
               // Find nearest enemy within range (excluding ones we've already hit)
-              const bounceRange = 120;
+              const bounceRange = 150;
               const bounceRangeSq = bounceRange * bounceRange;
               let nearestTarget = null;
               let nearestDistSq = Infinity;
@@ -2190,7 +2231,6 @@ function tick() {
                 b.x = m.x + (dx / dist) * (m.r + 5); // Move bullet outside current enemy
                 b.y = m.y + (dy / dist) * (m.r + 5);
                 b.dead = false; // Keep bullet alive!
-                b.pierce = Math.max(b.pierce, 0); // Don't consume pierce
                 queueEvent("pinballBounce", { x: m.x, y: m.y, tx: nearestTarget.x, ty: nearestTarget.y });
               }
             }
