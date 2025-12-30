@@ -1454,23 +1454,66 @@
     const my = (e.clientY - rect.top) * (canvas.height / rect.height);
 
     // 1. Handle Inventory Clicks (Select Module)
-    if (window.invBounds) {
+    if (window.invBounds && lastSnap) {
+      const myP = lastSnap.players.find(p => p.id === myId);
       for (let i = 0; i < window.invBounds.length; i++) {
         const b = window.invBounds[i];
         if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
-          // Toggle selection
-          if (selectedInventoryIndex === i) selectedInventoryIndex = -1;
-          else selectedInventoryIndex = i;
+          // Toggle selection - if already selected, deselect
+          if (selectedInventoryIndex === i) {
+            selectedInventoryIndex = -1;
+            return;
+          }
+          
+          // Check if any towers have empty module slots
+          let hasAvailableSlot = false;
+          if (myP && myP.towers) {
+            for (let tIdx = 0; tIdx < 4; tIdx++) {
+              const tower = myP.towers[tIdx];
+              if (tower && tower.modules) {
+                const emptySlot = tower.modules.indexOf(null);
+                if (emptySlot !== -1) {
+                  hasAvailableSlot = true;
+                  break;
+                }
+              }
+            }
+          }
+          
+          if (hasAvailableSlot) {
+            // Select the module
+            selectedInventoryIndex = i;
+          } else {
+            // No slots available - show error feedback
+            moduleErrorFeedback = { error: "No empty tower slots available!", time: Date.now() };
+            selectedInventoryIndex = -1;
+          }
           return; // Stop other clicks
         }
       }
     }
 
-    // 2. Handle Tower Clicks (Drop Module) - when module is selected
+    // 2. Handle Module Slot Popup Clicks (when module selected)
+    if (selectedInventoryIndex !== -1 && window.moduleSlotPopups && window.moduleSlotPopups.length > 0) {
+      for (const slot of window.moduleSlotPopups) {
+        if (mx >= slot.x && mx <= slot.x + slot.w && my >= slot.y && my <= slot.y + slot.h) {
+          // Slot the module!
+          send({ 
+            t: "slotModule", 
+            towerIndex: slot.towerIndex, 
+            moduleSlot: slot.moduleSlot, 
+            inventoryIndex: selectedInventoryIndex 
+          });
+          selectedInventoryIndex = -1; // Deselect
+          return;
+        }
+      }
+    }
+
+    // 3. Handle Tower Clicks (Drop Module) - when module is selected (fallback for clicking tower directly)
     if (selectedInventoryIndex !== -1 && lastSnap && !buildMenuOpen) {
       const myP = lastSnap.players.find(p => p.id === myId);
       if (myP) {
-        const pos = turretPositions(myP.slot);
         // Get scale to convert world to screen coords
         const sw = canvas.width;
         const sh = canvas.height;
@@ -1483,14 +1526,18 @@
         const offsetX = (availableWidth - ww * scale) / 2;
         const offsetY = (sh - wh * scale) / 2;
         
+        // Calculate tower positions (same as buildMenuOpen logic)
+        const segX0 = myP.slot * world.segmentWidth;
+        const cx = (segX0 + world.segmentWidth / 2) * scale + offsetX;
+        const cy = 560 * scale + offsetY;
+        const offsets = [-110, -50, 50, 110];
+        
         for (let tIdx = 0; tIdx < 4; tIdx++) {
-           const tPos = pos.slots[tIdx];
-           // Convert tower position to screen coordinates
-           const screenX = tPos.x * scale + offsetX;
-           const screenY = tPos.y * scale + offsetY;
+           const screenX = cx + offsets[tIdx] * scale;
+           const screenY = cy - 18 * scale; // Adjust for tower center
            const dx = mx - screenX;
            const dy = my - screenY;
-           const hitRadius = 35 * scale; // Scale the hit radius too
+           const hitRadius = 35 * scale;
            // Hit tower?
            if (dx*dx + dy*dy < hitRadius*hitRadius) {
              const tower = myP.towers[tIdx];
@@ -1511,6 +1558,12 @@
              }
            }
         }
+      }
+      
+      // If we got here with a module selected, clicking elsewhere cancels selection
+      if (e.button === 0) {
+        selectedInventoryIndex = -1;
+        return;
       }
     }
     
@@ -3588,43 +3641,138 @@
         ctx.textAlign = "left";
       }
       
-      // ===== TOWER SLOT HIGHLIGHTING (when module selected) =====
+      // ===== TOWER MODULE SLOT POPUPS (when module selected) =====
+      // Store slot bounds for click detection
+      window.moduleSlotPopups = [];
+      
       if (phase === "playing" && selectedInventoryIndex !== -1 && myPlayer && !buildMenuOpen) {
         ctx.save();
-        const pos = turretPositions(myPlayer.slot);
         const { sx, sy, offsetX, offsetY } = getScale();
+        const MODULES = window.TOWER_MODULES || {};
+        
+        // Calculate tower positions (same as buildMenuOpen logic)
+        const segX0 = myPlayer.slot * world.segmentWidth;
+        const cx = (segX0 + world.segmentWidth / 2) * sx + offsetX;
+        const cy = 560 * sy + offsetY;
+        const towerOffsets = [-110, -50, 50, 110];
+        
+        // Get the selected module info
+        const selectedModuleId = myPlayer.inventory[selectedInventoryIndex];
+        const selectedMod = MODULES[selectedModuleId];
         
         // Check all 4 tower slots
         for (let tIdx = 0; tIdx < 4; tIdx++) {
           const tower = myPlayer.towers[tIdx];
-          const tPos = pos.slots[tIdx];
           
-          if (tower && tPos) {
+          if (tower && tower.modules) {
             // Check if tower has an empty slot
-            const firstEmptySlot = tower.modules.indexOf(null);
+            const emptySlots = tower.modules.map((m, i) => m === null ? i : -1).filter(i => i !== -1);
             
-            if (firstEmptySlot !== -1) {
+            if (emptySlots.length > 0) {
               // Calculate screen position
-              const screenX = tPos.x * sx + offsetX;
-              const screenY = tPos.y * sy + offsetY;
+              const towerX = cx + towerOffsets[tIdx] * sx;
+              const towerY = cy - 18 * sy;
               
-              // PULSING HIGHLIGHT: Valid Drop Target
-              const pulse = Math.sin(Date.now() / 150) * 5;
+              // Draw mini popup above tower
+              const popupW = 100;
+              const popupH = 70;
+              const popupX = towerX - popupW / 2;
+              const popupY = towerY - popupH - 35;
+              
+              // Popup background
+              ctx.fillStyle = "rgba(10,20,30,0.95)";
               ctx.strokeStyle = "#00ff00";
-              ctx.lineWidth = 3;
+              ctx.lineWidth = 2;
               ctx.shadowColor = "#00ff00";
-              ctx.shadowBlur = 15;
-              
+              ctx.shadowBlur = 10;
               ctx.beginPath();
-              ctx.arc(screenX, screenY, 28 + pulse, 0, Math.PI * 2);
+              ctx.roundRect(popupX, popupY, popupW, popupH, 6);
+              ctx.fill();
               ctx.stroke();
-              
-              // Draw "CLICK" text above
-              ctx.font = "bold 11px sans-serif";
-              ctx.fillStyle = "#00ff00";
-              ctx.textAlign = "center";
-              ctx.fillText("CLICK", screenX, screenY - 38);
               ctx.shadowBlur = 0;
+              
+              // Tower name
+              const towerType = TOWER_TYPES[tower.type];
+              ctx.font = "bold 9px 'Courier New', monospace";
+              ctx.textAlign = "center";
+              ctx.fillStyle = towerType?.color || "#fff";
+              ctx.fillText(towerType?.name || "Tower", popupX + popupW / 2, popupY + 12);
+              
+              // Module slots (3 slots)
+              const slotSize = 26;
+              const slotGap = 6;
+              const totalSlotW = 3 * slotSize + 2 * slotGap;
+              const slotStartX = popupX + (popupW - totalSlotW) / 2;
+              const slotY = popupY + 20;
+              
+              for (let i = 0; i < 3; i++) {
+                const slotX = slotStartX + i * (slotSize + slotGap);
+                const moduleId = tower.modules[i];
+                const mod = moduleId ? MODULES[moduleId] : null;
+                const isEmpty = mod === null;
+                
+                const isSlotHovered = mouseX >= slotX && mouseX <= slotX + slotSize && mouseY >= slotY && mouseY <= slotY + slotSize;
+                
+                // Slot background - highlight empty slots
+                if (isEmpty) {
+                  const pulse = Math.sin(Date.now() / 200) * 0.2 + 0.4;
+                  ctx.fillStyle = isSlotHovered ? "rgba(0,255,0,0.6)" : `rgba(0,255,0,${pulse})`;
+                  ctx.strokeStyle = "#00ff00";
+                  ctx.lineWidth = isSlotHovered ? 2 : 1;
+                } else {
+                  ctx.fillStyle = hexToRgba(mod.color, 0.3);
+                  ctx.strokeStyle = mod.color;
+                  ctx.lineWidth = 1;
+                }
+                ctx.beginPath();
+                ctx.roundRect(slotX, slotY, slotSize, slotSize, 4);
+                ctx.fill();
+                ctx.stroke();
+                
+                if (mod) {
+                  // Module icon
+                  ctx.font = "14px sans-serif";
+                  ctx.fillStyle = "#fff";
+                  ctx.textAlign = "center";
+                  ctx.fillText(mod.icon, slotX + slotSize / 2, slotY + slotSize / 2 + 4);
+                } else {
+                  // Empty slot - show + or selected module preview on hover
+                  if (isSlotHovered && selectedMod) {
+                    ctx.font = "14px sans-serif";
+                    ctx.fillStyle = "#fff";
+                    ctx.textAlign = "center";
+                    ctx.fillText(selectedMod.icon, slotX + slotSize / 2, slotY + slotSize / 2 + 4);
+                  } else {
+                    ctx.font = "14px sans-serif";
+                    ctx.fillStyle = "#0f0";
+                    ctx.textAlign = "center";
+                    ctx.fillText("+", slotX + slotSize / 2, slotY + slotSize / 2 + 4);
+                  }
+                }
+                
+                // Store empty slot bounds for click detection
+                if (isEmpty) {
+                  window.moduleSlotPopups.push({
+                    x: slotX, y: slotY, w: slotSize, h: slotSize,
+                    towerIndex: tIdx, moduleSlot: i
+                  });
+                }
+              }
+              
+              // "Click slot" hint
+              ctx.font = "bold 8px 'Courier New', monospace";
+              ctx.fillStyle = "#0f0";
+              ctx.textAlign = "center";
+              ctx.fillText("CLICK EMPTY SLOT", popupX + popupW / 2, popupY + popupH - 6);
+              
+              // Draw arrow pointing to tower
+              ctx.fillStyle = "#00ff00";
+              ctx.beginPath();
+              ctx.moveTo(towerX - 6, popupY + popupH);
+              ctx.lineTo(towerX + 6, popupY + popupH);
+              ctx.lineTo(towerX, popupY + popupH + 10);
+              ctx.closePath();
+              ctx.fill();
             }
           }
         }
