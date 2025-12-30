@@ -225,6 +225,11 @@ let modulePickTimer = 0;
 const MODULE_PICK_TIME = 10; // 10 seconds per pick
 let bossKillerId = null; // Track who killed the boss
 
+// Pause system
+let gamePaused = false;
+let pauseCountdown = 0; // 5 second countdown before resuming
+let pausedBy = null; // Name of player who paused
+
 // Staggered spawn system
 let spawnQueue = [];
 let spawnTimer = 0;
@@ -826,6 +831,11 @@ function startGame(solo = false) {
   attackQueue = new Map();
   pendingUpgrades = new Map();
   eventQueue = [];
+  
+  // Reset pause state
+  gamePaused = false;
+  pauseCountdown = 0;
+  pausedBy = null;
 
   for (const id of lockedSlots) {
     const p = players.get(id);
@@ -1431,6 +1441,26 @@ function tick() {
 
   try {
     tickCount++;
+    
+    // Handle pause countdown
+    if (pauseCountdown > 0) {
+      pauseCountdown -= DT;
+      if (pauseCountdown <= 0) {
+        pauseCountdown = 0;
+        gamePaused = false;
+        pausedBy = null;
+        broadcast({ t: "gameResumed" });
+      }
+      // Still broadcast state during countdown, but skip game logic
+      broadcastGameState();
+      return;
+    }
+    
+    // Skip all game logic while paused (but still broadcast)
+    if (gamePaused) {
+      broadcastGameState();
+      return;
+    }
     
     // Module card pick timer
     if (moduleCardPhase) {
@@ -2388,179 +2418,195 @@ function tick() {
     // SERVER AUTHORITATIVE: Broadcast every tick (30Hz) - no client prediction
     // OPTIMIZED: Reuse pre-allocated broadcastState to avoid GC pressure
     if (tickCount % BROADCAST_INTERVAL === 0) {
-      // Update scalar fields
-      broadcastState.ts = Date.now();
-      broadcastState.phase = phase;
-      broadcastState.wave = wave;
-      broadcastState.spectatorCount = spectators.size;
-      broadcastState.world.width = worldW;
-      broadcastState.world.segmentWidth = SEGMENT_W;
-      broadcastState.moduleCardPhase = moduleCardPhase;
-      broadcastState.modulePickTimer = moduleCardPhase ? modulePickTimer : 0;
-      broadcastState.currentModulePicker = moduleCardPhase ? modulePickOrder[currentModulePicker] : null;
-      
-      // Fill missiles array (reuse existing objects)
-      const missileCount = missiles.length;
-      // Grow array if needed
-      while (broadcastState.missiles.length < missileCount) {
-        broadcastState.missiles.push({});
-      }
-      for (let i = 0; i < missileCount; i++) {
-        const m = missiles[i];
-        const obj = broadcastState.missiles[i];
-        obj.id = m.id;
-        obj.x = Math.round(m.x * 10) / 10;
-        obj.y = Math.round(m.y * 10) / 10;
-        obj.r = m.r;
-        obj.hp = Math.round(m.hp * 10) / 10;
-        obj.maxHp = m.maxHp;
-        obj.type = m.type;
-        obj.vx = Math.round(m.vx * 10) / 10;
-        obj.vy = Math.round(m.vy * 10) / 10;
-        obj.inFTL = m.inFTL;
-        // Optional fields - set or delete
-        if (m.attackType) obj.attackType = m.attackType; else delete obj.attackType;
-        if (m.isPhased) obj.isPhased = true; else delete obj.isPhased;
-        if (m.isBoss) obj.isBoss = true; else delete obj.isBoss;
-        if (m.isBossAd) { obj.isBossAd = true; obj.bossAdVariant = m.bossAdVariant; } 
-        else { delete obj.isBossAd; delete obj.bossAdVariant; }
-        if (m.isMiniBoss) obj.isMiniBoss = true; else delete obj.isMiniBoss;
-        if (m.isMiniBossAd) obj.isMiniBossAd = true; else delete obj.isMiniBossAd;
-        if (m.isBerserker) obj.isBerserker = true; else delete obj.isBerserker;
-        if (m.staticCharge > 0) obj.staticCharge = m.staticCharge; else delete obj.staticCharge;
-      }
-      // Truncate array to actual size (JSON.stringify respects .length)
-      broadcastState.missiles.length = missileCount;
-      
-      // Fill bullets array
-      const bulletCount = bullets.length;
-      while (broadcastState.bullets.length < bulletCount) {
-        broadcastState.bullets.push({});
-      }
-      for (let i = 0; i < bulletCount; i++) {
-        const b = bullets[i];
-        const obj = broadcastState.bullets[i];
-        obj.id = b.id;
-        obj.x = Math.round(b.x * 10) / 10;
-        obj.y = Math.round(b.y * 10) / 10;
-        obj.r = b.r;
-        obj.vx = Math.round(b.vx * 10) / 10;
-        obj.vy = Math.round(b.vy * 10) / 10;
-        obj.slot = b.ownerSlot;
-        obj.lifespan = Math.round(b.lifespan * 10) / 10;
-        if (b.isCrit) obj.isCrit = true; else delete obj.isCrit;
-        if (b.isTowerBullet) obj.isTower = true; else delete obj.isTower;
-        if (b.bulletType && b.bulletType !== "gatling") obj.bulletType = b.bulletType; else delete obj.bulletType;
-        if (b.bulletColor) obj.bulletColor = b.bulletColor; else delete obj.bulletColor;
-      }
-      broadcastState.bullets.length = bulletCount;
-      
-      // Events - just reference the queue (will be cleared after)
-      broadcastState.events = eventQueue;
-      
-      // Fill shieldExplosions
-      const seCount = shieldExplosions.length;
-      while (broadcastState.shieldExplosions.length < seCount) {
-        broadcastState.shieldExplosions.push({});
-      }
-      for (let i = 0; i < seCount; i++) {
-        const exp = shieldExplosions[i];
-        const obj = broadcastState.shieldExplosions[i];
-        obj.x = Math.round(exp.x);
-        obj.y = Math.round(exp.y);
-        obj.radius = Math.round(exp.radius);
-        obj.maxRadius = exp.maxRadius;
-        obj.life = Math.round(exp.life * 10) / 10;
-        obj.duration = exp.duration;
-        obj.color = exp.color;
-        obj.slot = exp.slot;
-      }
-      broadcastState.shieldExplosions.length = seCount;
-      
-      // Fill ghostAllies
-      const gaCount = ghostAllies.length;
-      while (broadcastState.ghostAllies.length < gaCount) {
-        broadcastState.ghostAllies.push({});
-      }
-      for (let i = 0; i < gaCount; i++) {
-        const g = ghostAllies[i];
-        const obj = broadcastState.ghostAllies[i];
-        obj.x = Math.round(g.x);
-        obj.y = Math.round(g.y);
-        obj.r = Math.round(g.r);
-        obj.life = Math.round(g.life * 10) / 10;
-        obj.ownerSlot = g.ownerSlot;
-      }
-      broadcastState.ghostAllies.length = gaCount;
-      
-      // Fill gravityWells
-      const gwCount = gravityWells.length;
-      while (broadcastState.gravityWells.length < gwCount) {
-        broadcastState.gravityWells.push({});
-      }
-      for (let i = 0; i < gwCount; i++) {
-        const w = gravityWells[i];
-        const obj = broadcastState.gravityWells[i];
-        obj.x = Math.round(w.x);
-        obj.y = Math.round(w.y);
-        obj.radius = w.radius;
-        obj.life = Math.round(w.life * 10) / 10;
-      }
-      broadcastState.gravityWells.length = gwCount;
-      
-      // Fill players
-      const playerCount = lockedSlots.length;
-      while (broadcastState.players.length < playerCount) {
-        broadcastState.players.push({ upgrades: {} });
-      }
-      for (let i = 0; i < playerCount; i++) {
-        const id = lockedSlots[i];
-        const p = players.get(id);
-        const obj = broadcastState.players[i];
-        if (!p) {
-          obj.id = id;
-          obj.slot = -1;
-          continue;
-        }
-        const u = p.upgrades || {};
-        obj.id = p.id;
-        obj.slot = p.slot;
-        obj.name = p.name || `Player ${p.slot + 1}`;
-        obj.score = p.score || 0;
-        obj.gold = p.gold || 0;
-        obj.hp = p.hp;
-        obj.maxHp = p.maxHp;
-        obj.turretAngle = p.turretAngle || -Math.PI / 2;
-        obj.isManual = !!p.manualShooting;
-        obj.towers = p.towers;
-        obj.inventory = p.inventory || [];
-        obj.kills = p.kills || 0;
-        obj.damageDealt = p.damageDealt || 0;
-        obj.waveDamage = p.waveDamage || 0;
-        obj.lastInterest = p.lastInterest || 0;
-        obj.shieldActive = u.shieldActive || 0;
-        obj.slowfield = !!u.slowfield;
-        // Reuse upgrades object
-        obj.upgrades.damageAdd = u.damageAdd || 0;
-        obj.upgrades.bulletSpeedMult = u.bulletSpeedMult || 1;
-        obj.upgrades.fireRateMult = u.fireRateMult || 1;
-        obj.upgrades.multishot = u.multishot || 1;
-        obj.upgrades.critChance = u.critChance || 0;
-        obj.upgrades.explosive = u.explosive || 0;
-        obj.upgrades.pierce = u.pierce || 0;
-        obj.upgrades.chainChance = u.chainChance || 0;
-        obj.upgrades.goldMult = u.goldMult || 1;
-      }
-      broadcastState.players.length = playerCount;
-      
-      broadcastAll(broadcastState);
-      
-      // Clear event queue after broadcast
-      eventQueue = [];
+      broadcastGameState();
     }
   } catch (err) {
     console.error("Game loop error:", err);
   }
+}
+
+function broadcastGameState() {
+  // Update scalar fields
+  broadcastState.ts = Date.now();
+  broadcastState.phase = phase;
+  broadcastState.wave = wave;
+  broadcastState.spectatorCount = spectators.size;
+  broadcastState.world.width = worldW;
+  broadcastState.world.segmentWidth = SEGMENT_W;
+  broadcastState.moduleCardPhase = moduleCardPhase;
+  broadcastState.modulePickTimer = moduleCardPhase ? modulePickTimer : 0;
+  broadcastState.currentModulePicker = moduleCardPhase ? modulePickOrder[currentModulePicker] : null;
+  
+  // Add module cards to state so clients always have them (fixes issue with backed up upgrades)
+  broadcastState.moduleCards = moduleCardPhase ? moduleCards.map(id => ({ id, ...TOWER_MODULES[id] })) : [];
+  broadcastState.modulePickOrder = moduleCardPhase ? modulePickOrder.map(id => {
+    const p = players.get(id);
+    return { id, name: p?.name || "Unknown", isBossKiller: id === bossKillerId };
+  }) : [];
+  
+  // Add pause state
+  broadcastState.gamePaused = gamePaused;
+  broadcastState.pauseCountdown = pauseCountdown;
+  broadcastState.pausedBy = pausedBy;
+  
+  // Fill missiles array (reuse existing objects)
+  const missileCount = missiles.length;
+  // Grow array if needed
+  while (broadcastState.missiles.length < missileCount) {
+    broadcastState.missiles.push({});
+  }
+  for (let i = 0; i < missileCount; i++) {
+    const m = missiles[i];
+    const obj = broadcastState.missiles[i];
+    obj.id = m.id;
+    obj.x = Math.round(m.x * 10) / 10;
+    obj.y = Math.round(m.y * 10) / 10;
+    obj.r = m.r;
+    obj.hp = Math.round(m.hp * 10) / 10;
+    obj.maxHp = m.maxHp;
+    obj.type = m.type;
+    obj.vx = Math.round(m.vx * 10) / 10;
+    obj.vy = Math.round(m.vy * 10) / 10;
+    obj.inFTL = m.inFTL;
+    // Optional fields - set or delete
+    if (m.attackType) obj.attackType = m.attackType; else delete obj.attackType;
+    if (m.isPhased) obj.isPhased = true; else delete obj.isPhased;
+    if (m.isBoss) obj.isBoss = true; else delete obj.isBoss;
+    if (m.isBossAd) { obj.isBossAd = true; obj.bossAdVariant = m.bossAdVariant; } 
+    else { delete obj.isBossAd; delete obj.bossAdVariant; }
+    if (m.isMiniBoss) obj.isMiniBoss = true; else delete obj.isMiniBoss;
+    if (m.isMiniBossAd) obj.isMiniBossAd = true; else delete obj.isMiniBossAd;
+    if (m.isBerserker) obj.isBerserker = true; else delete obj.isBerserker;
+    if (m.staticCharge > 0) obj.staticCharge = m.staticCharge; else delete obj.staticCharge;
+  }
+  // Truncate array to actual size (JSON.stringify respects .length)
+  broadcastState.missiles.length = missileCount;
+  
+  // Fill bullets array
+  const bulletCount = bullets.length;
+  while (broadcastState.bullets.length < bulletCount) {
+    broadcastState.bullets.push({});
+  }
+  for (let i = 0; i < bulletCount; i++) {
+    const b = bullets[i];
+    const obj = broadcastState.bullets[i];
+    obj.id = b.id;
+    obj.x = Math.round(b.x * 10) / 10;
+    obj.y = Math.round(b.y * 10) / 10;
+    obj.r = b.r;
+    obj.vx = Math.round(b.vx * 10) / 10;
+    obj.vy = Math.round(b.vy * 10) / 10;
+    obj.slot = b.ownerSlot;
+    obj.lifespan = Math.round(b.lifespan * 10) / 10;
+    if (b.isCrit) obj.isCrit = true; else delete obj.isCrit;
+    if (b.isTowerBullet) obj.isTower = true; else delete obj.isTower;
+    if (b.bulletType && b.bulletType !== "gatling") obj.bulletType = b.bulletType; else delete obj.bulletType;
+    if (b.bulletColor) obj.bulletColor = b.bulletColor; else delete obj.bulletColor;
+  }
+  broadcastState.bullets.length = bulletCount;
+  
+  // Events - just reference the queue (will be cleared after)
+  broadcastState.events = eventQueue;
+  
+  // Fill shieldExplosions
+  const seCount = shieldExplosions.length;
+  while (broadcastState.shieldExplosions.length < seCount) {
+    broadcastState.shieldExplosions.push({});
+  }
+  for (let i = 0; i < seCount; i++) {
+    const exp = shieldExplosions[i];
+    const obj = broadcastState.shieldExplosions[i];
+    obj.x = Math.round(exp.x);
+    obj.y = Math.round(exp.y);
+    obj.radius = Math.round(exp.radius);
+    obj.maxRadius = exp.maxRadius;
+    obj.life = Math.round(exp.life * 10) / 10;
+    obj.duration = exp.duration;
+    obj.color = exp.color;
+    obj.slot = exp.slot;
+  }
+  broadcastState.shieldExplosions.length = seCount;
+  
+  // Fill ghostAllies
+  const gaCount = ghostAllies.length;
+  while (broadcastState.ghostAllies.length < gaCount) {
+    broadcastState.ghostAllies.push({});
+  }
+  for (let i = 0; i < gaCount; i++) {
+    const g = ghostAllies[i];
+    const obj = broadcastState.ghostAllies[i];
+    obj.x = Math.round(g.x);
+    obj.y = Math.round(g.y);
+    obj.r = Math.round(g.r);
+    obj.life = Math.round(g.life * 10) / 10;
+    obj.ownerSlot = g.ownerSlot;
+  }
+  broadcastState.ghostAllies.length = gaCount;
+  
+  // Fill gravityWells
+  const gwCount = gravityWells.length;
+  while (broadcastState.gravityWells.length < gwCount) {
+    broadcastState.gravityWells.push({});
+  }
+  for (let i = 0; i < gwCount; i++) {
+    const w = gravityWells[i];
+    const obj = broadcastState.gravityWells[i];
+    obj.x = Math.round(w.x);
+    obj.y = Math.round(w.y);
+    obj.radius = w.radius;
+    obj.life = Math.round(w.life * 10) / 10;
+  }
+  broadcastState.gravityWells.length = gwCount;
+  
+  // Fill players
+  const playerCount = lockedSlots.length;
+  while (broadcastState.players.length < playerCount) {
+    broadcastState.players.push({ upgrades: {} });
+  }
+  for (let i = 0; i < playerCount; i++) {
+    const id = lockedSlots[i];
+    const p = players.get(id);
+    const obj = broadcastState.players[i];
+    if (!p) {
+      obj.id = id;
+      obj.slot = -1;
+      continue;
+    }
+    const u = p.upgrades || {};
+    obj.id = p.id;
+    obj.slot = p.slot;
+    obj.name = p.name || `Player ${p.slot + 1}`;
+    obj.score = p.score || 0;
+    obj.gold = p.gold || 0;
+    obj.hp = p.hp;
+    obj.maxHp = p.maxHp;
+    obj.turretAngle = p.turretAngle || -Math.PI / 2;
+    obj.isManual = !!p.manualShooting;
+    obj.towers = p.towers;
+    obj.inventory = p.inventory || [];
+    obj.kills = p.kills || 0;
+    obj.damageDealt = p.damageDealt || 0;
+    obj.waveDamage = p.waveDamage || 0;
+    obj.lastInterest = p.lastInterest || 0;
+    obj.shieldActive = u.shieldActive || 0;
+    obj.slowfield = !!u.slowfield;
+    // Reuse upgrades object
+    obj.upgrades.damageAdd = u.damageAdd || 0;
+    obj.upgrades.bulletSpeedMult = u.bulletSpeedMult || 1;
+    obj.upgrades.fireRateMult = u.fireRateMult || 1;
+    obj.upgrades.multishot = u.multishot || 1;
+    obj.upgrades.critChance = u.critChance || 0;
+    obj.upgrades.explosive = u.explosive || 0;
+    obj.upgrades.pierce = u.pierce || 0;
+    obj.upgrades.chainChance = u.chainChance || 0;
+    obj.upgrades.goldMult = u.goldMult || 1;
+  }
+  broadcastState.players.length = playerCount;
+  
+  broadcastAll(broadcastState);
+  
+  // Clear event queue after broadcast
+  eventQueue = [];
 }
 
 // ===== Networking =====
@@ -2884,6 +2930,21 @@ wss.on("connection", (ws) => {
         saveLeaderboard();
         broadcast({ t: "lobby", ...lobbySnapshot() });
       }
+      return;
+    }
+
+    // Pause game - any player can pause
+    if (msg.t === "pauseGame" && phase === "playing" && !gamePaused && pauseCountdown <= 0) {
+      gamePaused = true;
+      pausedBy = p.name || `Player ${p.slot + 1}`;
+      broadcast({ t: "gamePaused", pausedBy });
+      return;
+    }
+
+    // Unpause game - any player can unpause, starts 5 second countdown
+    if (msg.t === "unpauseGame" && phase === "playing" && gamePaused && pauseCountdown <= 0) {
+      pauseCountdown = 5.0; // 5 second countdown
+      broadcast({ t: "gameUnpausing", countdown: 5 });
       return;
     }
 

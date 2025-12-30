@@ -194,6 +194,12 @@
   let hoveredModuleSlot = null; // Tower slot being hovered
   let hoveredModuleCard = -1; // Module card being hovered during selection
   
+  // Pause system
+  let gamePaused = false;
+  let pauseCountdown = 0;
+  let pausedBy = null;
+  let hoveredPauseButton = false;
+  
   // Spectator mode
   let isSpectator = false;
   let spectatorCount = 0;
@@ -715,6 +721,10 @@
         upgradePicked = false;
         buildMenuOpen = null;
         incomingAttacks = [];
+        // Reset pause state
+        gamePaused = false;
+        pauseCountdown = 0;
+        pausedBy = null;
         // If this is a spectator watching from lobby, mark as spectator
         if (msg.isSpectator) {
           isSpectator = true;
@@ -834,6 +844,25 @@
         moduleErrorFeedback = { error: msg.error, time: Date.now() };
         break;
 
+      case "gamePaused":
+        // Game was paused
+        gamePaused = true;
+        pausedBy = msg.pausedBy;
+        pauseCountdown = 0;
+        break;
+
+      case "gameUnpausing":
+        // Countdown started to resume
+        pauseCountdown = msg.countdown;
+        break;
+
+      case "gameResumed":
+        // Game has resumed
+        gamePaused = false;
+        pauseCountdown = 0;
+        pausedBy = null;
+        break;
+
       case "state":
         // Process server events - skip visual effects if tab is hidden
         if (msg.events) {
@@ -908,6 +937,23 @@
         }
         if (msg.currentModulePicker !== undefined) {
           currentModulePicker = msg.currentModulePicker;
+        }
+        // Always update module cards from state (fixes issue with backed up upgrades)
+        if (msg.moduleCards !== undefined && msg.moduleCards.length > 0) {
+          moduleCards = msg.moduleCards;
+        }
+        if (msg.modulePickOrder !== undefined && msg.modulePickOrder.length > 0) {
+          modulePickOrder = msg.modulePickOrder;
+        }
+        // Update pause state
+        if (msg.gamePaused !== undefined) {
+          gamePaused = msg.gamePaused;
+        }
+        if (msg.pauseCountdown !== undefined) {
+          pauseCountdown = msg.pauseCountdown;
+        }
+        if (msg.pausedBy !== undefined) {
+          pausedBy = msg.pausedBy;
         }
         break;
 
@@ -1268,6 +1314,17 @@
       return;
     }
     
+    // Space bar to pause/unpause (only when not typing)
+    if (e.key === " " && !gameChatTyping && !isSpectator && phase === "playing") {
+      if (gamePaused && pauseCountdown <= 0) {
+        send({ t: "unpauseGame" });
+      } else if (!gamePaused && pauseCountdown <= 0) {
+        send({ t: "pauseGame" });
+      }
+      e.preventDefault();
+      return;
+    }
+    
     // Enter to send message when typing
     if (e.key === "Enter" && gameChatTyping && gameChatInputText.trim()) {
       sendChatMessage(gameChatInputText);
@@ -1350,6 +1407,17 @@
         mouseDown = false;
         return;
       }
+    }
+
+    // Handle pause button click
+    if (phase === "playing" && hoveredPauseButton && !isSpectator) {
+      if (gamePaused && pauseCountdown <= 0) {
+        send({ t: "unpauseGame" });
+      } else if (!gamePaused) {
+        send({ t: "pauseGame" });
+      }
+      mouseDown = false;
+      return;
     }
 
     // Handle reroll button click
@@ -3850,6 +3918,83 @@
         ctx.textAlign = "center";
         ctx.fillStyle = "#666";
         ctx.fillText(`${moduleCards.length} card${moduleCards.length !== 1 ? 's' : ''} remaining`, panelX + panelW / 2, panelY + panelH - 12);
+        
+        ctx.textAlign = "left";
+      }
+
+      // ===== PAUSE BUTTON AND OVERLAY =====
+      if (phase === "playing" && !isSpectator) {
+        // Pause button (top-right corner, below wave indicator if visible)
+        const pauseBtnW = 90;
+        const pauseBtnH = 32;
+        const pauseBtnX = canvas.width - pauseBtnW - 15;
+        const pauseBtnY = 15;
+        
+        hoveredPauseButton = mouseX >= pauseBtnX && mouseX <= pauseBtnX + pauseBtnW && 
+                             mouseY >= pauseBtnY && mouseY <= pauseBtnY + pauseBtnH;
+        
+        // Button style based on state
+        const isPaused = gamePaused || pauseCountdown > 0;
+        const btnColor = isPaused ? "#ff6600" : "#0088ff";
+        const btnText = isPaused ? (pauseCountdown > 0 ? `▶ ${Math.ceil(pauseCountdown)}` : "▶ RESUME") : "⏸ PAUSE";
+        
+        ctx.fillStyle = hoveredPauseButton ? `rgba(${isPaused ? '255,102,0' : '0,136,255'},0.4)` : `rgba(${isPaused ? '255,102,0' : '0,136,255'},0.2)`;
+        ctx.strokeStyle = btnColor;
+        ctx.lineWidth = hoveredPauseButton ? 2 : 1;
+        ctx.shadowColor = hoveredPauseButton ? btnColor : "transparent";
+        ctx.shadowBlur = hoveredPauseButton ? 10 : 0;
+        ctx.beginPath();
+        ctx.roundRect(pauseBtnX, pauseBtnY, pauseBtnW, pauseBtnH, 6);
+        ctx.fill();
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        
+        ctx.font = "bold 12px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = hoveredPauseButton ? "#fff" : btnColor;
+        ctx.fillText(btnText, pauseBtnX + pauseBtnW / 2, pauseBtnY + pauseBtnH / 2);
+        ctx.textBaseline = "alphabetic";
+      }
+      
+      // Pause overlay (when game is paused)
+      if (phase === "playing" && (gamePaused || pauseCountdown > 0)) {
+        // Semi-transparent overlay
+        ctx.fillStyle = "rgba(0,0,0,0.7)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Pause message
+        ctx.textAlign = "center";
+        
+        if (pauseCountdown > 0) {
+          // Countdown to resume
+          ctx.font = "bold 72px 'Courier New', monospace";
+          ctx.fillStyle = "#ff6600";
+          ctx.shadowColor = "#ff6600";
+          ctx.shadowBlur = 20;
+          ctx.fillText(Math.ceil(pauseCountdown), canvas.width / 2, canvas.height / 2 - 20);
+          ctx.shadowBlur = 0;
+          
+          ctx.font = "bold 24px 'Courier New', monospace";
+          ctx.fillStyle = "#fff";
+          ctx.fillText("RESUMING...", canvas.width / 2, canvas.height / 2 + 40);
+        } else {
+          // Paused state
+          ctx.font = "bold 48px 'Courier New', monospace";
+          ctx.fillStyle = "#0088ff";
+          ctx.shadowColor = "#0088ff";
+          ctx.shadowBlur = 20;
+          ctx.fillText("⏸ PAUSED", canvas.width / 2, canvas.height / 2 - 20);
+          ctx.shadowBlur = 0;
+          
+          ctx.font = "16px 'Courier New', monospace";
+          ctx.fillStyle = "#aaa";
+          ctx.fillText(`Paused by ${pausedBy || 'a player'}`, canvas.width / 2, canvas.height / 2 + 25);
+          
+          ctx.font = "bold 14px 'Courier New', monospace";
+          ctx.fillStyle = "#ff6600";
+          ctx.fillText("Click RESUME or press SPACE to continue", canvas.width / 2, canvas.height / 2 + 55);
+        }
         
         ctx.textAlign = "left";
       }
