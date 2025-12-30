@@ -68,6 +68,11 @@ const ASTEROID_R_MAX = 16;
 const WAVE_BASE_COUNT = 3;
 const WAVE_COUNT_SCALE = 0.5;  // Halved again to reduce wave length at high waves
 
+// ===== PERFORMANCE CAPS =====
+const MAX_MISSILES = 150;      // Hard cap on total asteroids (prevents lag at high waves)
+const MAX_BULLETS = 80;        // Hard cap on total bullets
+const MAX_PARTICLES_SERVER = 50; // Cap on visual effects sent to clients
+
 const MAX_AIM_ANGLE = (80 * Math.PI) / 180;
 
 // ===== Player Colors =====
@@ -701,15 +706,21 @@ function spawnWave() {
     }
   }
 
-  const extremeScaleMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
+  const extremeScaleMult = wave >= 20 ? Math.pow(1.10, wave - 19) : 1; // Reduced from 1.12 to 1.10
   const baseWaveHp = wave * 0.6; // Reduced from 0.8 (25% less scaling)
   const waveHpScale = baseWaveHp * extremeScaleMult;
 
   const playerCount = lockedSlots.length;
   const baseTotal = WAVE_BASE_COUNT + Math.floor(wave * WAVE_COUNT_SCALE);
-  const countMult = wave >= 20 ? 1 + (wave - 19) * 0.05 : 1;  // Halved from 0.1
+  const countMult = wave >= 20 ? 1 + (wave - 19) * 0.03 : 1;  // Reduced from 0.05 to 0.03
   const scaledTotal = Math.floor(baseTotal * countMult);
-  const totalCount = (soloMode || playerCount === 1) ? scaledTotal : Math.floor(scaledTotal * 0.5);
+  
+  // Apply entity cap - don't queue more asteroids than we can handle
+  const currentEntities = missiles.length + spawnQueue.length;
+  const availableSlots = Math.max(0, MAX_MISSILES - currentEntities);
+  const totalCountRaw = (soloMode || playerCount === 1) ? scaledTotal : Math.floor(scaledTotal * 0.5);
+  const totalCount = Math.min(totalCountRaw, availableSlots);
+  
   const asteroidsPerPlayer = Math.max(1, Math.floor(totalCount / playerCount));
   
   for (let playerIdx = 0; playerIdx < playerCount; playerIdx++) {
@@ -1110,6 +1121,9 @@ function endGame(winnerId) {
 
 // ===== Simulation =====
 function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, overrideProps = null) {
+  // Performance cap: Don't create more bullets if at max
+  if (bullets.length >= MAX_BULLETS) return;
+  
   let dmg, speed, isCrit, explosive, lifespan, bulletType, ricochet, pierce, chainChance;
   let modules = [];
   let ownerGold = 0;
@@ -1483,11 +1497,12 @@ function tick() {
       }
     }
     
-    // Process spawn queue
-    if (spawnQueue.length > 0) {
+    // Process spawn queue (with entity cap)
+    if (spawnQueue.length > 0 && missiles.length < MAX_MISSILES) {
       spawnTimer -= DT;
       if (spawnTimer <= 0) {
-        const spawnCount = Math.min(spawnQueue.length, Math.random() < 0.5 ? 1 : Math.random() < 0.8 ? 2 : 3);
+        const availableSlots = MAX_MISSILES - missiles.length;
+        const spawnCount = Math.min(spawnQueue.length, availableSlots, Math.random() < 0.5 ? 1 : Math.random() < 0.8 ? 2 : 3);
         for (let i = 0; i < spawnCount && spawnQueue.length > 0; i++) {
           const queued = spawnQueue.shift();
           missiles.push(createAsteroid(
@@ -1654,12 +1669,12 @@ function tick() {
       m.y += m.vy * DT * speedMult;
       // Rotation is handled client-side
       
-      // Carrier: Spawns mini asteroids periodically
-      if (m.isCarrier && m.carrierSpawnTimer !== null && !m.inFTL) {
+      // Carrier: Spawns mini asteroids periodically (with cap check)
+      if (m.isCarrier && m.carrierSpawnTimer !== null && !m.inFTL && missiles.length < MAX_MISSILES) {
         m.carrierSpawnTimer -= DT;
         if (m.carrierSpawnTimer <= 0) {
-          // Spawn mini asteroids
-          const spawnCount = ATTACK_TYPES.carrier?.spawnCount || 2;
+          // Spawn mini asteroids (limited by entity cap)
+          const spawnCount = Math.min(ATTACK_TYPES.carrier?.spawnCount || 2, MAX_MISSILES - missiles.length);
           for (let i = 0; i < spawnCount; i++) {
             const offsetX = (Math.random() - 0.5) * 30;
             const miniHp = 0.25 + wave * 0.075; // Reduced by 50% base, 25% scaling
@@ -2185,11 +2200,13 @@ function tick() {
               broadcast({ t: "bossKilled", killerId: owner.id, killerName: owner.name });
             }
             
-            // Splitter: spawn children with noGold flag
-            if (m.splits > 0) {
-              const extremeMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
-              const splitHp = Math.ceil((0.5 + wave * 0.3) * extremeMult); // Reduced by 50% base, 25% scaling
-              for (let s = 0; s < m.splits; s++) {
+            // Splitter: spawn children with noGold flag (capped for performance)
+            if (m.splits > 0 && missiles.length < MAX_MISSILES) {
+              const extremeMult = wave >= 20 ? Math.pow(1.10, wave - 19) : 1; // Reduced from 1.12
+              const splitHp = Math.ceil((0.5 + wave * 0.3) * extremeMult);
+              // Cap splits based on available entity slots
+              const actualSplits = Math.min(m.splits, MAX_MISSILES - missiles.length, 10); // Max 10 splits for performance
+              for (let s = 0; s < actualSplits; s++) {
                 const nx = m.x + rand(-30, 30);
                 const ny = m.y + rand(-20, 20);
                 const splitAsteroid = createAsteroid(nx, ny, "small", splitHp, m.targetSlot, null, m.senderId, null, true); // noGold=true

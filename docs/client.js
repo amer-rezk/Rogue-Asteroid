@@ -3,6 +3,97 @@
   // Updated to new Netlify address
   const DEFAULT_SERVER = "wss://mute-lungfish-no-name-orgs-aef98851.koyeb.app/ws";
 
+  // ===== PERFORMANCE SETTINGS =====
+  // Quality levels: 0=Low (best performance), 1=Medium, 2=High (best visuals)
+  let graphicsQuality = parseInt(localStorage.getItem("rogueAsteroidQuality") || "1");
+  
+  // Performance thresholds - automatically reduce quality when entity counts are high
+  const QUALITY_THRESHOLDS = {
+    missiles: { low: 80, medium: 50 },
+    bullets: { low: 60, medium: 35 }
+  };
+  
+  // Cached quality-dependent settings
+  let qualitySettings = {
+    useShadows: true,
+    useGradients: true,
+    useTrails: true,
+    particleMultiplier: 1.0,
+    maxDamageNumbers: 50,
+    maxParticles: 100
+  };
+  
+  function updateQualitySettings() {
+    switch (graphicsQuality) {
+      case 0: // Low - maximum performance
+        qualitySettings = {
+          useShadows: false,
+          useGradients: false,
+          useTrails: false,
+          particleMultiplier: 0.3,
+          maxDamageNumbers: 20,
+          maxParticles: 30
+        };
+        break;
+      case 1: // Medium - balanced
+        qualitySettings = {
+          useShadows: false,
+          useGradients: true,
+          useTrails: true,
+          particleMultiplier: 0.6,
+          maxDamageNumbers: 35,
+          maxParticles: 60
+        };
+        break;
+      case 2: // High - full effects
+      default:
+        qualitySettings = {
+          useShadows: true,
+          useGradients: true,
+          useTrails: true,
+          particleMultiplier: 1.0,
+          maxDamageNumbers: 50,
+          maxParticles: 100
+        };
+        break;
+    }
+  }
+  updateQualitySettings();
+  
+  // Auto-quality adjustment based on entity counts
+  function checkAutoQuality(missiles, bullets) {
+    if (graphicsQuality === 0) return;
+    const missileCount = missiles?.length || 0;
+    const bulletCount = bullets?.length || 0;
+    
+    if (missileCount > QUALITY_THRESHOLDS.missiles.low || bulletCount > QUALITY_THRESHOLDS.bullets.low) {
+      if (graphicsQuality > 0) {
+        graphicsQuality = 0;
+        updateQualitySettings();
+      }
+    } else if (missileCount > QUALITY_THRESHOLDS.missiles.medium || bulletCount > QUALITY_THRESHOLDS.bullets.medium) {
+      if (graphicsQuality > 1) {
+        graphicsQuality = 1;
+        updateQualitySettings();
+      }
+    }
+  }
+  
+  // Optimized shadow functions - NO-OP when shadows disabled
+  function setShadowOpt(ctx, color, blur) {
+    if (qualitySettings.useShadows && blur > 0) {
+      ctx.shadowColor = color;
+      ctx.shadowBlur = blur;
+    }
+  }
+  
+  function clearShadowOpt(ctx) {
+    if (qualitySettings.useShadows) {
+      ctx.shadowColor = "transparent";
+      ctx.shadowBlur = 0;
+    }
+  }
+
   // Polyfill for roundRect
   if (!CanvasRenderingContext2D.prototype.roundRect) {
     CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
@@ -300,6 +391,8 @@
   let currentShadowBlur = 0;
   
   function setShadow(ctx, color, blur) {
+    // Performance optimization: Skip shadows at low/medium quality
+    if (!qualitySettings.useShadows) return;
     if (currentShadowColor !== color || currentShadowBlur !== blur) {
       ctx.shadowColor = color;
       ctx.shadowBlur = blur;
@@ -309,6 +402,7 @@
   }
   
   function clearShadow(ctx) {
+    if (!qualitySettings.useShadows) return;
     if (currentShadowBlur !== 0) {
       ctx.shadowBlur = 0;
       currentShadowBlur = 0;
@@ -332,8 +426,13 @@
 
   // ===== CLIENT-SIDE VISUAL EFFECTS (offloaded from server) =====
   function createClientParticle(x, y, color, count = 8, speedMult = 1) {
-    for (let i = 0; i < count; i++) {
-      const angle = (i / count) * Math.PI * 2 + Math.random() * 0.5;
+    // Respect quality limits
+    const adjustedCount = Math.ceil(count * qualitySettings.particleMultiplier);
+    if (clientParticles.length >= qualitySettings.maxParticles) return;
+    
+    for (let i = 0; i < adjustedCount; i++) {
+      if (clientParticles.length >= qualitySettings.maxParticles) break;
+      const angle = (i / adjustedCount) * Math.PI * 2 + Math.random() * 0.5;
       const speed = (60 + Math.random() * 60) * speedMult;
       clientParticles.push({
         x, y,
@@ -348,6 +447,11 @@
   }
 
   function createClientDamageNumber(x, y, amount, isCrit) {
+    // Limit damage numbers for performance
+    if (clientDamageNumbers.length >= qualitySettings.maxDamageNumbers) {
+      // Remove oldest damage number
+      clientDamageNumbers.shift();
+    }
     clientDamageNumbers.push({
       x, y,
       amount: Math.round(amount * 10) / 10,
@@ -913,6 +1017,9 @@
         
         // Bullets now come with vx/vy directly from server (homing changes direction)
         
+        // Auto-adjust quality based on entity counts (performance optimization)
+        checkAutoQuality(msg.missiles, msg.bullets);
+        
         // Use client-side particles/damage numbers if server didn't send them
         if (!msg.particles || msg.particles.length === 0) {
           msg.particles = clientParticles;
@@ -1462,6 +1569,18 @@
         return;
       }
     }
+    
+    // Handle graphics quality toggle click
+    if (phase === "playing" && statsPanelOpen && window.gfxToggleBounds) {
+      const b = window.gfxToggleBounds;
+      if (mouseX >= b.x && mouseX <= b.x + b.w && mouseY >= b.y && mouseY <= b.y + b.h) {
+        graphicsQuality = (graphicsQuality + 1) % 3; // Cycle: 0 (Low) -> 1 (Med) -> 2 (High) -> 0
+        updateQualitySettings();
+        localStorage.setItem("rogueAsteroidQuality", graphicsQuality.toString());
+        mouseDown = false;
+        return;
+      }
+    }
 
     // Handle quantity mode button clicks
     if (hoveredQuantityBtn && phase === "playing") {
@@ -1648,13 +1767,23 @@
     ctx.restore();
   }
 
-  // ===== Unique Projectile Rendering =====
+  // ===== Unique Projectile Rendering (OPTIMIZED) =====
   function drawBullet(b, sx, sy, baseColor) {
     const x = b.x * sx;
     const y = b.y * sy;
     const r = b.r * sx;
-    const angle = Math.atan2(b.vy, b.vx);
 
+    // LOW QUALITY: Simple circles only
+    if (graphicsQuality === 0) {
+      const color = b.isCrit ? "#ffffff" : (b.bulletColor || baseColor);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
+
+    const angle = Math.atan2(b.vy, b.vx);
     const fadeStart = 0.5;
     const alpha = b.lifespan < fadeStart ? Math.max(0.2, b.lifespan / fadeStart) : 1.0;
 
@@ -1662,58 +1791,34 @@
 
     switch (b.bulletType) {
       case "gatling":
-        // Gatling: Small rapid yellow tracers with short trail
-        const gatlingTrail = 10 * sx;
-        ctx.strokeStyle = hexToRgba("#ffff00", 0.5 * alpha);
-        ctx.lineWidth = r * 1.5;
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        ctx.moveTo(x, y);
-        ctx.lineTo(x - Math.cos(angle) * gatlingTrail, y - Math.sin(angle) * gatlingTrail);
-        ctx.stroke();
-
-        // Bullet core
+        // Gatling: Simple yellow tracer
+        if (qualitySettings.useTrails) {
+          const gatlingTrail = 10 * sx;
+          ctx.strokeStyle = hexToRgba("#ffff00", 0.5 * alpha);
+          ctx.lineWidth = r * 1.5;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(x - Math.cos(angle) * gatlingTrail, y - Math.sin(angle) * gatlingTrail);
+          ctx.stroke();
+        }
         ctx.fillStyle = hexToRgba("#ffff00", alpha);
-        ctx.shadowColor = "#ffff00";
-        ctx.shadowBlur = 6 * alpha;
         ctx.beginPath();
         ctx.arc(x, y, r * 0.7, 0, Math.PI * 2);
         ctx.fill();
         break;
 
       case "sniper":
-        // Sniper: Long green laser beam with afterglow
+        // Sniper: Green laser - simplified
         const laserLen = 35 * sx;
         const laserWidth = r * 0.6;
-
-        // Outer glow
-        ctx.strokeStyle = hexToRgba("#00ff00", 0.2 * alpha);
-        ctx.lineWidth = laserWidth * 4;
+        ctx.strokeStyle = hexToRgba("#00ff00", 0.8 * alpha);
+        ctx.lineWidth = laserWidth * 2;
         ctx.lineCap = "round";
         ctx.beginPath();
         ctx.moveTo(x + Math.cos(angle) * 5, y + Math.sin(angle) * 5);
         ctx.lineTo(x - Math.cos(angle) * laserLen, y - Math.sin(angle) * laserLen);
         ctx.stroke();
-
-        // Inner beam
-        ctx.strokeStyle = hexToRgba("#00ff00", 0.8 * alpha);
-        ctx.lineWidth = laserWidth * 2;
-        ctx.beginPath();
-        ctx.moveTo(x + Math.cos(angle) * 5, y + Math.sin(angle) * 5);
-        ctx.lineTo(x - Math.cos(angle) * laserLen, y - Math.sin(angle) * laserLen);
-        ctx.stroke();
-
-        // Core line
-        ctx.strokeStyle = hexToRgba("#aaffaa", alpha);
-        ctx.lineWidth = laserWidth;
-        ctx.shadowColor = "#00ff00";
-        ctx.shadowBlur = 10 * alpha;
-        ctx.beginPath();
-        ctx.moveTo(x + Math.cos(angle) * 5, y + Math.sin(angle) * 5);
-        ctx.lineTo(x - Math.cos(angle) * laserLen, y - Math.sin(angle) * laserLen);
-        ctx.stroke();
-
-        // Bright tip
         ctx.fillStyle = "#ffffff";
         ctx.beginPath();
         ctx.arc(x, y, r * 0.5, 0, Math.PI * 2);
@@ -1721,48 +1826,26 @@
         break;
 
       case "missile":
-        // Missile: Red rocket with fire/smoke trail
+        // Missile: Simplified red rocket
         const missileLen = 12 * sx;
         const missileWidth = r * 1.2;
-
-        // Smoke trail
-        for (let i = 0; i < 5; i++) {
-          const smokeX = x - Math.cos(angle) * (8 + i * 6) * sx + (Math.random() - 0.5) * 4;
-          const smokeY = y - Math.sin(angle) * (8 + i * 6) * sx + (Math.random() - 0.5) * 4;
-          const smokeAlpha = (1 - i / 5) * 0.3 * alpha;
-          ctx.fillStyle = hexToRgba("#666666", smokeAlpha);
+        // Skip smoke trail at medium quality
+        if (qualitySettings.useTrails) {
+          ctx.fillStyle = hexToRgba("#ff6600", 0.6 * alpha);
           ctx.beginPath();
-          ctx.arc(smokeX, smokeY, (3 + i) * sx, 0, Math.PI * 2);
+          ctx.moveTo(x - Math.cos(angle) * missileLen * 0.5, y - Math.sin(angle) * missileLen * 0.5);
+          ctx.lineTo(x - Math.cos(angle) * missileLen * 2, y - Math.sin(angle) * missileLen * 2);
+          ctx.lineTo(x - Math.cos(angle) * missileLen * 1.5 + Math.cos(angle - 0.5) * 4 * sx,
+                     y - Math.sin(angle) * missileLen * 1.5 + Math.sin(angle - 0.5) * 4 * sx);
+          ctx.closePath();
           ctx.fill();
         }
-
-        // Fire trail
-        ctx.fillStyle = hexToRgba("#ff6600", 0.7 * alpha);
-        ctx.beginPath();
-        ctx.moveTo(x - Math.cos(angle) * missileLen * 0.5, y - Math.sin(angle) * missileLen * 0.5);
-        ctx.lineTo(x - Math.cos(angle) * missileLen * 1.5 + Math.cos(angle + 0.5) * 4 * sx, 
-                   y - Math.sin(angle) * missileLen * 1.5 + Math.sin(angle + 0.5) * 4 * sx);
-        ctx.lineTo(x - Math.cos(angle) * missileLen * 2, y - Math.sin(angle) * missileLen * 2);
-        ctx.lineTo(x - Math.cos(angle) * missileLen * 1.5 + Math.cos(angle - 0.5) * 4 * sx,
-                   y - Math.sin(angle) * missileLen * 1.5 + Math.sin(angle - 0.5) * 4 * sx);
-        ctx.closePath();
-        ctx.fill();
-
-        // Missile body
         ctx.save();
         ctx.translate(x, y);
         ctx.rotate(angle);
         ctx.fillStyle = hexToRgba("#ff4444", alpha);
-        ctx.shadowColor = "#ff0000";
-        ctx.shadowBlur = 8 * alpha;
         ctx.beginPath();
         ctx.ellipse(0, 0, missileLen, missileWidth, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Nose cone
-        ctx.fillStyle = hexToRgba("#ffaaaa", alpha);
-        ctx.beginPath();
-        ctx.ellipse(missileLen * 0.7, 0, missileLen * 0.4, missileWidth * 0.6, 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
         break;
@@ -1770,40 +1853,34 @@
       default:
         // Main turret: Player-colored energy bolt
         const trail = 12 * sx;
-        const color = b.isCrit ? "#ffffff" : baseColor;
-        const glowColor = b.isCrit ? "#ffff00" : baseColor;
-
-        // Trail gradient
-        const gradient = ctx.createLinearGradient(
-          x, y,
-          x - Math.cos(angle) * trail, y - Math.sin(angle) * trail
-        );
-        gradient.addColorStop(0, hexToRgba(color, 0.8 * alpha));
-        gradient.addColorStop(1, hexToRgba(color, 0));
-
-        ctx.strokeStyle = gradient;
-        ctx.lineWidth = r * 1.8;
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        ctx.moveTo(x, y);
-        ctx.lineTo(x - Math.cos(angle) * trail, y - Math.sin(angle) * trail);
-        ctx.stroke();
+        const color = b.isCrit ? "#ffffff" : (b.bulletColor || baseColor);
+        
+        if (qualitySettings.useTrails) {
+          // Trail - use solid color instead of gradient at medium quality
+          if (qualitySettings.useGradients) {
+            const gradient = ctx.createLinearGradient(
+              x, y,
+              x - Math.cos(angle) * trail, y - Math.sin(angle) * trail
+            );
+            gradient.addColorStop(0, hexToRgba(color, 0.8 * alpha));
+            gradient.addColorStop(1, hexToRgba(color, 0));
+            ctx.strokeStyle = gradient;
+          } else {
+            ctx.strokeStyle = hexToRgba(color, 0.5 * alpha);
+          }
+          ctx.lineWidth = r * 1.8;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(x - Math.cos(angle) * trail, y - Math.sin(angle) * trail);
+          ctx.stroke();
+        }
 
         // Bullet body
         ctx.fillStyle = hexToRgba(color, alpha);
-        ctx.shadowColor = glowColor;
-        ctx.shadowBlur = (b.isCrit ? 15 : 10) * alpha;
         ctx.beginPath();
         ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fill();
-
-        // Bright core
-        if (b.isCrit) {
-          ctx.fillStyle = "#ffffff";
-          ctx.beginPath();
-          ctx.arc(x, y, r * 0.5, 0, Math.PI * 2);
-          ctx.fill();
-        }
         break;
     }
 
@@ -3373,7 +3450,7 @@
         if (statsPanelOpen) {
           const u = myPlayer.upgrades || {};
           const panelW = 200;
-          const panelH = 365; // Taller to fit two options
+          const panelH = 400; // Taller to fit quality option
           const panelX = canvas.width - panelW - 15;
           const panelY = btnY - panelH - 10;
           
@@ -3474,6 +3551,31 @@
           ctx.textAlign = "right";
           ctx.fillStyle = showDamageNumbers ? "#66ff66" : "#ff6666";
           ctx.fillText(showDamageNumbers ? "ON" : "OFF", toggleX + toggleW - 8, toggleY + 18);
+          
+          // Graphics Quality toggle button
+          const gfxToggleY = toggleY + toggleH + 8;
+          const isHoveringGfxToggle = mouseX >= toggleX && mouseX <= toggleX + toggleW && 
+                                       mouseY >= gfxToggleY && mouseY <= gfxToggleY + toggleH;
+          window.gfxToggleBounds = { x: toggleX, y: gfxToggleY, w: toggleW, h: toggleH };
+          
+          ctx.fillStyle = isHoveringGfxToggle ? "rgba(100,180,255,0.3)" : "rgba(40,60,100,0.4)";
+          ctx.strokeStyle = isHoveringGfxToggle ? "#7ae0ff" : "rgba(122,224,255,0.3)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(toggleX, gfxToggleY, toggleW, toggleH, 5);
+          ctx.fill();
+          ctx.stroke();
+          
+          ctx.font = "11px 'Courier New', monospace";
+          ctx.textAlign = "left";
+          ctx.fillStyle = "#ccc";
+          ctx.fillText("Graphics:", toggleX + 8, gfxToggleY + 18);
+          
+          ctx.textAlign = "right";
+          const gfxLabels = ["LOW", "MED", "HIGH"];
+          const gfxColors = ["#ff6666", "#ffaa00", "#66ff66"];
+          ctx.fillStyle = gfxColors[graphicsQuality] || "#fff";
+          ctx.fillText(gfxLabels[graphicsQuality] || "???", toggleX + toggleW - 8, gfxToggleY + 18);
         }
         
         ctx.textAlign = "left";
