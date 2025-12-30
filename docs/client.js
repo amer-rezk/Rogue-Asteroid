@@ -284,6 +284,7 @@
   let selectedInventoryModule = null; // For drag-drop
   let hoveredModuleSlot = null; // Tower slot being hovered
   let hoveredModuleCard = -1; // Module card being hovered during selection
+  let selectedInventoryIndex = -1; // Track which module we are holding
   
   // Pause system
   let gamePaused = false;
@@ -926,15 +927,8 @@
 
       case "wave":
         wave = msg.wave;
-        // Don't clear upgradeOptions - continuous wave system keeps cards visible
-        buildMenuOpen = null;
-        incomingAttacks = [];
-        screenShake = 10;
-        // Clear particles between waves for cleaner visuals
-        clientParticles = [];
-        // Clear prediction states for new wave
-        missileStates.clear();
-        bulletStates.clear();
+        // FIX: Comment out this line so the menu stays open!
+        // selectedTower = null; 
         break;
 
       case "upgrade":
@@ -1453,7 +1447,66 @@
 
   // ===== Input =====
   canvas.addEventListener("mousemove", (e) => { mouseX = e.clientX; mouseY = e.clientY; });
-  canvas.addEventListener("mousedown", (e) => { if (e.button === 0) { mouseDown = true; handleClick(); } });
+  canvas.addEventListener("mousedown", (e) => {
+    // ===== START OF NEW INTERACTION CODE =====
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const my = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+    // 1. Handle Inventory Clicks (Select Module)
+    if (window.invBounds) {
+      for (let i = 0; i < window.invBounds.length; i++) {
+        const b = window.invBounds[i];
+        if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+          // Toggle selection
+          if (selectedInventoryIndex === i) selectedInventoryIndex = -1;
+          else selectedInventoryIndex = i;
+          return; // Stop other clicks
+        }
+      }
+    }
+
+    // 2. Handle Tower Clicks (Drop Module)
+    if (selectedInventoryIndex !== -1 && lastSnap) {
+      const myP = lastSnap.players.find(p => p.id === myId);
+      if (myP) {
+        const pos = turretPositions(myP.slot);
+        for (let tIdx = 0; tIdx < 4; tIdx++) {
+           const tPos = pos.slots[tIdx];
+           const dx = mx - tPos.x;
+           const dy = my - tPos.y;
+           // Hit tower?
+           if (dx*dx + dy*dy < 30*30) {
+             const tower = myP.towers[tIdx];
+             if (tower) {
+               // Find first empty slot
+               const emptySlotIdx = tower.modules.indexOf(null);
+               if (emptySlotIdx !== -1) {
+                 // SLOT IT!
+                 send({ 
+                   t: "slotModule", 
+                   towerIndex: tIdx, 
+                   moduleSlot: emptySlotIdx, 
+                   inventoryIndex: selectedInventoryIndex 
+                 });
+                 selectedInventoryIndex = -1; // Deselect
+                 return;
+               }
+             }
+           }
+        }
+      }
+    }
+    
+    // Right click to cancel selection
+    if (e.button === 2 && selectedInventoryIndex !== -1) {
+      selectedInventoryIndex = -1;
+      return;
+    }
+    // ===== END OF NEW INTERACTION CODE =====
+
+    // (The original code continues below here...)
+  if (e.button === 0) { mouseDown = true; handleClick(); } });
   window.addEventListener("mouseup", (e) => { if (e.button === 0) mouseDown = false; });
   canvas.addEventListener("touchstart", (e) => { e.preventDefault(); mouseDown = true; if (e.touches[0]) { mouseX = e.touches[0].clientX; mouseY = e.touches[0].clientY; } handleClick(); });
   canvas.addEventListener("touchmove", (e) => { e.preventDefault(); if (e.touches[0]) { mouseX = e.touches[0].clientX; mouseY = e.touches[0].clientY; } });
@@ -4523,6 +4576,85 @@
           window.gameChatBounds = { x: chatX, y: chatY, w: chatW, h: chatH };
         }
       }
+	  
+	  // ===== MODULE INVENTORY & HIGHLIGHTING SYSTEM =====
+    const myP = lastSnap?.players.find(p => p.id === myId);
+    if (myP && myP.inventory) {
+      const invSize = 40;
+      const invPad = 10;
+      const totalInvW = myP.inventory.length * (invSize + invPad);
+      const invX = canvas.width / 2 - totalInvW / 2;
+      const invY = canvas.height - 80; // Bottom center
+
+      // 1. Draw Inventory Bar
+      for (let i = 0; i < myP.inventory.length; i++) {
+        const modId = myP.inventory[i];
+        const modDef = window.TOWER_MODULES[modId];
+        const ix = invX + i * (invSize + invPad);
+        const iy = invY;
+        
+        // Highlight selected card
+        const isSelected = selectedInventoryIndex === i;
+        
+        ctx.fillStyle = isSelected ? "#fff" : "#222";
+        ctx.fillRect(ix - 2, iy - 2, invSize + 4, invSize + 4);
+        
+        ctx.fillStyle = modDef ? modDef.color : "#555";
+        ctx.fillRect(ix, iy, invSize, invSize);
+        
+        ctx.font = "20px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#000";
+        ctx.fillText(modDef ? modDef.icon : "?", ix + invSize/2, iy + invSize/2 + 7);
+        
+        // Store bounds for click detection (we'll use this in mousedown)
+        if (!window.invBounds) window.invBounds = [];
+        window.invBounds[i] = { x: ix, y: iy, w: invSize, h: invSize };
+      }
+
+      // 2. Highlight Towers if Card Selected
+      if (selectedInventoryIndex !== -1) {
+        ctx.save();
+        const { x0 } = segmentBounds(myP.slot); // Helper function usage
+        const pos = turretPositions(myP.slot); // Helper function usage
+        
+        // Check all 4 towers
+        for (let tIdx = 0; tIdx < 4; tIdx++) {
+          const tower = myP.towers[tIdx];
+          const tPos = pos.slots[tIdx];
+          
+          if (tower && tPos) {
+            // Check if tower has an empty slot
+            const firstEmptySlot = tower.modules.indexOf(null);
+            
+            if (firstEmptySlot !== -1) {
+              // PULSING HIGHLIGHT: Valid Drop Target
+              const pulse = 10 + Math.sin(Date.now() / 150) * 5;
+              ctx.strokeStyle = "#00ff00"; // Green glow
+              ctx.lineWidth = 3;
+              ctx.shadowColor = "#00ff00";
+              ctx.shadowBlur = 15;
+              
+              ctx.beginPath();
+              ctx.arc(tPos.x, tPos.y, 25 + pulse/5, 0, Math.PI * 2);
+              ctx.stroke();
+              
+              // Draw "CLICK TO SLOT" text above
+              ctx.font = "bold 12px sans-serif";
+              ctx.fillStyle = "#00ff00";
+              ctx.fillText("SLOT HERE", tPos.x, tPos.y - 40);
+              ctx.shadowBlur = 0;
+            }
+          }
+        }
+        ctx.restore();
+        
+        // Draw "CANCEL" hint
+        ctx.fillStyle = "#fff";
+        ctx.font = "14px sans-serif";
+        ctx.fillText("Click tower to slot • Right-click to cancel", canvas.width/2, invY - 20);
+      }
+    }
     } catch (err) {
       console.error('Draw error:', err);
     }

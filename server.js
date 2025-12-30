@@ -1481,7 +1481,36 @@ function tick() {
     if (moduleCardPhase) {
       modulePickTimer -= DT;
       if (modulePickTimer <= 0) {
-        // Time's up for current picker, skip to next
+        // AUTO-PICK LOGIC: Time's up!
+        const playerId = modulePickOrder[currentModulePicker];
+        const p = players.get(playerId);
+        
+        // If player is still here and hasn't picked, force a random pick
+        if (p && moduleCards.length > 0 && !modulePlayersPicked.has(playerId)) {
+           // Pick random available card
+           const cardIndex = Math.floor(Math.random() * moduleCards.length);
+           const moduleId = moduleCards[cardIndex];
+           
+           // Add to inventory
+           p.inventory.push(moduleId);
+           modulePlayersPicked.add(playerId); // Mark as picked
+           
+           // Remove from deck
+           moduleCards.splice(cardIndex, 1);
+           
+           // Notify everyone (same as a normal pick, but forced)
+           broadcast({ 
+            t: "moduleCardPicked", 
+            playerId: p.id, 
+            playerName: p.name, 
+            moduleId, 
+            cardIndex,
+            remainingCards: moduleCards.map(id => ({ id, ...TOWER_MODULES[id] })),
+            isAutoPick: true
+          });
+        }
+
+        // Move to next picker
         currentModulePicker++;
         modulePickTimer = MODULE_PICK_TIME;
         
