@@ -550,6 +550,11 @@ function makeUpgradeOptions(player) {
       rarityKey = "rare";
     }
     
+    // Ricochet is epic+ only (reroll if common or rare)
+    if (def.id === "rico" && (rarityKey === "common" || rarityKey === "rare")) {
+      rarityKey = Math.random() < 0.75 ? "epic" : "legendary";
+    }
+    
     const rarity = RARITY_CONFIG[rarityKey];
 
     let val = def.base;
@@ -569,6 +574,11 @@ function makeUpgradeOptions(player) {
       desc = def.desc.replace("{val}", val);
       effect.val = val / 100; // Convert to decimal
       effect.type = "add";
+    } else if (def.id === "rico") {
+      // Ricochet: Epic: +1, Legendary: +2
+      val = rarityKey === "legendary" ? 2 : 1;
+      desc = def.desc.replace("{val}", val);
+      effect.val = val;
     } else if (def.type === "add" || def.type === "mult" || def.type === "add_cap") {
       val = def.base * rarity.scale;
       if (def.stat === "shield" || def.stat === "ricochet" || def.stat === "pierce") {

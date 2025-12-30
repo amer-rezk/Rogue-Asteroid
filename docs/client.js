@@ -534,31 +534,8 @@
       const x0 = b.slot * segW;
       const x1 = (b.slot + 1) * segW;
       
-      let hitWall = false;
-
-      // Left Wall
-      if (b.x < x0) {
-        if (b.ricochet > 0) { b.x = x0; b.vx = -b.vx; b.ricochet--; } 
-        else { hitWall = true; }
-      }
-      // Right Wall
-      else if (b.x > x1) {
-        if (b.ricochet > 0) { b.x = x1; b.vx = -b.vx; b.ricochet--; }
-        else { hitWall = true; }
-      }
-      // Ceiling (approximate limit)
-      else if (b.y < -50) {
-        if (b.ricochet > 0) { b.y = -50; b.vy = -b.vy; b.ricochet--; }
-        else { hitWall = true; }
-      }
-      // Floor
-      else if (b.y > GROUND_Y) {
-        if (b.ricochet > 0) { b.y = GROUND_Y; b.vy = -b.vy; b.ricochet--; }
-        else { hitWall = true; }
-      }
-
-      // If it hit a wall and had no ricochets left, destroy it locally
-      if (hitWall) {
+      // Bullets die at boundaries (no wall bouncing - ricochet chains between enemies now)
+      if (b.x < x0 || b.x > x1 || b.y < -50 || b.y > GROUND_Y) {
         clientBullets.splice(i, 1);
       }
     }
