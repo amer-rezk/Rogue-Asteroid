@@ -233,6 +233,10 @@ const SPAWN_INTERVAL = 0.3;
 // OPTIMIZED: Event queue for client-side effects
 let eventQueue = [];
 
+// SPATIAL PARTITIONING: Pre-bucket missiles by targetSlot for O(1) lookup
+// Reused each tick to avoid allocation
+const missilesBySlot = [[], [], [], []];
+
 // Tick counter for broadcast throttling
 let tickCount = 0;
 
@@ -1274,12 +1278,14 @@ function fireWithMultishot(owner, originX, originY, targetX, targetY, isManual =
 function findBestTarget(x0, x1, turretX, turretY, rangeMult = 1.0, ownerSlot = 0) {
   let best = null;
   let bestScore = -Infinity;
-  const { x0: segX0, x1: segX1 } = segmentBounds(ownerSlot);
+  
+  // Use slot bucket instead of all missiles
+  const slotMissiles = missilesBySlot[ownerSlot];
+  if (!slotMissiles) return null;
 
-  for (const m of missiles) {
-    if (m.x < segX0 || m.x > segX1) continue;
+  for (let i = 0; i < slotMissiles.length; i++) {
+    const m = slotMissiles[i];
     if (m.y < 0) continue;
-    if (m.attackType && m.targetSlot !== ownerSlot) continue;
     
     const danger = m.y / GROUND_Y;
     const dx = m.x - turretX;
@@ -1298,15 +1304,17 @@ function findBestTarget(x0, x1, turretX, turretY, rangeMult = 1.0, ownerSlot = 0
 // Find multiple targets for multishot, excluding already-targeted missiles
 function findMultipleTargets(turretX, turretY, ownerSlot, count, excludeIds = new Set()) {
   const targets = [];
-  const { x0: segX0, x1: segX1 } = segmentBounds(ownerSlot);
+  
+  // Use slot bucket instead of all missiles
+  const slotMissiles = missilesBySlot[ownerSlot];
+  if (!slotMissiles || slotMissiles.length === 0) return targets;
   
   // Score all valid targets
   const scored = [];
-  for (const m of missiles) {
+  for (let i = 0; i < slotMissiles.length; i++) {
+    const m = slotMissiles[i];
     if (m.dead || m.isPhased) continue;
-    if (m.x < segX0 || m.x > segX1) continue;
     if (m.y < 0) continue;
-    if (m.attackType && m.targetSlot !== ownerSlot) continue;
     if (excludeIds.has(m.id)) continue;
     
     const danger = m.y / GROUND_Y;
@@ -1461,6 +1469,16 @@ function tick() {
       }
     }
 
+    // SPATIAL PARTITIONING: Bucket missiles by slot BEFORE any targeting/collision
+    // This makes all target finding and collision O(n) per slot instead of O(n) total
+    for (let s = 0; s < 4; s++) missilesBySlot[s].length = 0;
+    for (let i = 0; i < missiles.length; i++) {
+      const m = missiles[i];
+      if (!m.dead && m.targetSlot >= 0 && m.targetSlot < 4) {
+        missilesBySlot[m.targetSlot].push(m);
+      }
+    }
+
     // Player shooting
     for (const id of lockedSlots) {
       const p = players.get(id);
@@ -1564,6 +1582,16 @@ function tick() {
       }
     }
 
+    // Pre-compute which slots have slowfield active (avoid nested loop)
+    const slowfieldSlots = [];
+    for (const id of lockedSlots) {
+      const p = players.get(id);
+      if (p?.upgrades?.slowfield) {
+        const { x0, x1 } = segmentBounds(p.slot);
+        slowfieldSlots.push({ x0, x1 });
+      }
+    }
+
     // Update missiles
     for (const m of missiles) {
       if (m.phaseTimer !== null) {
@@ -1587,11 +1615,9 @@ function tick() {
       }
 
       let speedMult = 1;
-      for (const id of lockedSlots) {
-        const p = players.get(id);
-        if (!p?.upgrades?.slowfield) continue;
-        const { x0, x1 } = segmentBounds(p.slot);
-        if (m.x >= x0 && m.x <= x1) { speedMult = 0.75; break; }
+      for (let si = 0; si < slowfieldSlots.length; si++) {
+        const sf = slowfieldSlots[si];
+        if (m.x >= sf.x0 && m.x <= sf.x1) { speedMult = 0.75; break; }
       }
       
       m.x += m.vx * DT * speedMult;
@@ -1789,13 +1815,17 @@ function tick() {
       if (didRicochet && b.hitSet) b.hitSet.clear();
     }
 
+    // Buckets already built above before player shooting
+
+    // Bullet-missile collision (now O(bullets × missiles_per_slot) instead of O(bullets × all_missiles))
     for (const b of bullets) {
       if (b.dead) continue;
-      const { x0: ownerX0, x1: ownerX1 } = segmentBounds(b.ownerSlot);
-      for (const m of missiles) {
-        if (m.dead) continue;
-        if (m.x < ownerX0 || m.x > ownerX1) continue;
-        if (m.attackType && m.targetSlot !== b.ownerSlot) continue;
+      const slot = b.ownerSlot;
+      const slotMissiles = missilesBySlot[slot];
+      if (!slotMissiles) continue;
+      
+      for (let mi = 0; mi < slotMissiles.length; mi++) {
+        const m = slotMissiles[mi];
         if (m.isPhased && Math.random() > 0.3) continue;
         if (b.hitSet && b.hitSet.has(m.id)) continue; // O(1) Set lookup
         const dx = m.x - b.x;
@@ -1958,14 +1988,13 @@ function tick() {
             // Consume bullet and hit 3 nearest enemies with lightning
             b.dead = true;
             
-            // Find 3 nearest enemies (excluding current target)
-            const { x0: segX0, x1: segX1 } = segmentBounds(b.ownerSlot);
+            // Find 3 nearest enemies (excluding current target) - use slot bucket
             const lightningTargets = [];
             const rangeSq = 150 * 150; // Squared lightning range
-            for (const m2 of missiles) {
+            const slotMissilesLightning = missilesBySlot[b.ownerSlot];
+            for (let li = 0; li < slotMissilesLightning.length; li++) {
+              const m2 = slotMissilesLightning[li];
               if (m2.dead || m2 === m) continue;
-              if (m2.x < segX0 || m2.x > segX1) continue;
-              if (m2.attackType && m2.targetSlot !== b.ownerSlot) continue;
               const dx = m2.x - m.x;
               const dy = m2.y - m.y;
               const dSq = dx * dx + dy * dy;
@@ -2143,7 +2172,10 @@ function tick() {
           
           if (b.explosive > 0) {
             createExplosion(b.x, b.y, 35, "#fa0");
-            for (const m2 of missiles) {
+            // Use slot bucket instead of all missiles
+            const explosiveSlotMissiles = missilesBySlot[b.ownerSlot];
+            for (let ei = 0; ei < explosiveSlotMissiles.length; ei++) {
+              const m2 = explosiveSlotMissiles[ei];
               if (m2.dead || m2 === m) continue;
               const dx = m2.x - b.x;
               const dy = m2.y - b.y;
@@ -2166,22 +2198,26 @@ function tick() {
         exp.radius = Math.min(exp.maxRadius, exp.radius + (exp.maxRadius * DT * 2));
       }
       
-      // Deal damage to asteroids in radius (once per asteroid)
-      for (const m of missiles) {
-        if (m.dead || exp.hitSet.has(m.id)) continue;
-        
-        const dx = m.x - exp.x;
-        const dy = m.y - exp.y;
-        const combinedR = exp.radius + m.r;
-        
-        if (dx * dx + dy * dy <= combinedR * combinedR) {
-          m.hp -= exp.damage;
-          exp.hitSet.add(m.id);
-          createExplosion(m.x, m.y, 15, exp.color);
+      // Deal damage to asteroids in radius (once per asteroid) - use slot bucket
+      const expSlotMissiles = missilesBySlot[exp.slot];
+      if (expSlotMissiles) {
+        for (let ei = 0; ei < expSlotMissiles.length; ei++) {
+          const m = expSlotMissiles[ei];
+          if (m.dead || exp.hitSet.has(m.id)) continue;
           
-          if (m.hp <= 0) {
-            m.dead = true;
-            createExplosion(m.x, m.y, 25, "#fff");
+          const dx = m.x - exp.x;
+          const dy = m.y - exp.y;
+          const combinedR = exp.radius + m.r;
+          
+          if (dx * dx + dy * dy <= combinedR * combinedR) {
+            m.hp -= exp.damage;
+            exp.hitSet.add(m.id);
+            createExplosion(m.x, m.y, 15, exp.color);
+            
+            if (m.hp <= 0) {
+              m.dead = true;
+              createExplosion(m.x, m.y, 25, "#fff");
+            }
           }
         }
       }
@@ -2201,22 +2237,26 @@ function tick() {
       ghost.y += ghost.vy * DT;
       ghost.life -= DT;
       
-      // Check for collision with enemies
-      for (const m of missiles) {
-        if (m.dead || ghost.hitSet.has(m.id)) continue;
-        const dx = m.x - ghost.x;
-        const dy = m.y - ghost.y;
-        const combinedR = ghost.r + m.r;
-        
-        if (dx * dx + dy * dy < combinedR * combinedR) {
-          m.hp -= ghost.damage;
-          ghost.hitSet.add(m.id);
-          createExplosion(m.x, m.y, 15, "#8844ff");
-          addDamageNumber(m.x, m.y - m.r, ghost.damage, false);
+      // Check for collision with enemies in owner's slot
+      const ghostSlotMissiles = missilesBySlot[ghost.ownerSlot];
+      if (ghostSlotMissiles) {
+        for (let gi = 0; gi < ghostSlotMissiles.length; gi++) {
+          const m = ghostSlotMissiles[gi];
+          if (m.dead || ghost.hitSet.has(m.id)) continue;
+          const dx = m.x - ghost.x;
+          const dy = m.y - ghost.y;
+          const combinedR = ghost.r + m.r;
           
-          if (m.hp <= 0) {
-            m.dead = true;
-            createExplosion(m.x, m.y, 20, "#8844ff");
+          if (dx * dx + dy * dy < combinedR * combinedR) {
+            m.hp -= ghost.damage;
+            ghost.hitSet.add(m.id);
+            createExplosion(m.x, m.y, 15, "#8844ff");
+            addDamageNumber(m.x, m.y - m.r, ghost.damage, false);
+            
+            if (m.hp <= 0) {
+              m.dead = true;
+              createExplosion(m.x, m.y, 20, "#8844ff");
+            }
           }
         }
       }
@@ -2236,19 +2276,23 @@ function tick() {
       well.life -= DT;
       const radiusSq = well.radius * well.radius;
       
-      // Pull nearby enemies toward the well center
-      for (const m of missiles) {
-        if (m.dead) continue;
-        const dx = well.x - m.x;
-        const dy = well.y - m.y;
-        const distSq = dx * dx + dy * dy;
-        
-        // Quick squared distance check before expensive sqrt
-        if (distSq < radiusSq && distSq > 25) { // 25 = 5*5
-          const dist = Math.sqrt(distSq);
-          const pullStrength = (well.strength / dist) * DT;
-          m.x += (dx / dist) * pullStrength;
-          m.y += (dy / dist) * pullStrength;
+      // Pull nearby enemies toward the well center - use slot bucket
+      const wellSlotMissiles = missilesBySlot[well.ownerSlot];
+      if (wellSlotMissiles) {
+        for (let wi = 0; wi < wellSlotMissiles.length; wi++) {
+          const m = wellSlotMissiles[wi];
+          if (m.dead) continue;
+          const dx = well.x - m.x;
+          const dy = well.y - m.y;
+          const distSq = dx * dx + dy * dy;
+          
+          // Quick squared distance check before expensive sqrt
+          if (distSq < radiusSq && distSq > 25) { // 25 = 5*5
+            const dist = Math.sqrt(distSq);
+            const pullStrength = (well.strength / dist) * DT;
+            m.x += (dx / dist) * pullStrength;
+            m.y += (dy / dist) * pullStrength;
+          }
         }
       }
     }
@@ -2262,43 +2306,48 @@ function tick() {
     gravityWells.length = gwWriteIdx;
     
     // Chain Reaction - check for static charged asteroid collisions
-    // OPTIMIZED: Only iterate missiles with static charge (usually very few)
-    for (let i = 0; i < missiles.length; i++) {
-      const m1 = missiles[i];
-      if (m1.dead || !m1.staticCharge) continue;
+    // OPTIMIZED: Only check within same slot (missiles can't leave their slot)
+    for (let slot = 0; slot < 4; slot++) {
+      const slotMissiles = missilesBySlot[slot];
+      if (!slotMissiles || slotMissiles.length < 2) continue;
       
-      // Only check missiles after this one to avoid double-checking pairs
-      for (let j = i + 1; j < missiles.length; j++) {
-        const m2 = missiles[j];
-        if (m2.dead) continue;
+      for (let i = 0; i < slotMissiles.length; i++) {
+        const m1 = slotMissiles[i];
+        if (m1.dead || !m1.staticCharge) continue;
         
-        const dx = m2.x - m1.x;
-        const dy = m2.y - m1.y;
-        const combinedR = m1.r + m2.r + 5;
-        
-        if (dx * dx + dy * dy < combinedR * combinedR) {
-          // Both take massive damage
-          const staticDamage = m1.staticCharge;
-          m1.hp -= staticDamage;
-          m2.hp -= staticDamage;
+        // Only check missiles after this one to avoid double-checking pairs
+        for (let j = i + 1; j < slotMissiles.length; j++) {
+          const m2 = slotMissiles[j];
+          if (m2.dead) continue;
           
-          createExplosion((m1.x + m2.x) / 2, (m1.y + m2.y) / 2, 30, "#ffff00");
-          addDamageNumber(m1.x, m1.y - m1.r, staticDamage, true);
-          addDamageNumber(m2.x, m2.y - m2.r, staticDamage, true);
+          const dx = m2.x - m1.x;
+          const dy = m2.y - m1.y;
+          const combinedR = m1.r + m2.r + 5;
           
-          // Transfer charge to m2 if it survives
-          if (m2.hp > 0) {
-            m2.staticCharge = (m2.staticCharge || 0) + staticDamage * 0.5;
+          if (dx * dx + dy * dy < combinedR * combinedR) {
+            // Both take massive damage
+            const staticDamage = m1.staticCharge;
+            m1.hp -= staticDamage;
+            m2.hp -= staticDamage;
+            
+            createExplosion((m1.x + m2.x) / 2, (m1.y + m2.y) / 2, 30, "#ffff00");
+            addDamageNumber(m1.x, m1.y - m1.r, staticDamage, true);
+            addDamageNumber(m2.x, m2.y - m2.r, staticDamage, true);
+            
+            // Transfer charge to m2 if it survives
+            if (m2.hp > 0) {
+              m2.staticCharge = (m2.staticCharge || 0) + staticDamage * 0.5;
+            }
+            
+            // Clear charge from m1
+            m1.staticCharge = 0;
+            
+            if (m1.hp <= 0) { m1.dead = true; createExplosion(m1.x, m1.y, 20, "#ffff00"); }
+            if (m2.hp <= 0) { m2.dead = true; createExplosion(m2.x, m2.y, 20, "#ffff00"); }
+            
+            queueEvent("staticDischarge", { x: (m1.x + m2.x) / 2, y: (m1.y + m2.y) / 2 });
+            break; // Only one collision per frame per charged asteroid
           }
-          
-          // Clear charge from m1
-          m1.staticCharge = 0;
-          
-          if (m1.hp <= 0) { m1.dead = true; createExplosion(m1.x, m1.y, 20, "#ffff00"); }
-          if (m2.hp <= 0) { m2.dead = true; createExplosion(m2.x, m2.y, 20, "#ffff00"); }
-          
-          queueEvent("staticDischarge", { x: (m1.x + m2.x) / 2, y: (m1.y + m2.y) / 2 });
-          break; // Only one collision per frame per charged asteroid
         }
       }
     }
