@@ -23,6 +23,10 @@ const BROADCAST_RATE = 30;     // Network at 30Hz (same as physics, no client pr
 const DT = 1 / TICK_RATE;
 const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 1 tick (every frame)
 
+const WORLD_H = 600;
+const GROUND_Y = 560;
+const SEGMENT_W = 360;
+
 // PRE-ALLOCATED BROADCAST STATE - reused every frame to avoid GC pressure
 const broadcastState = {
   t: "state",
@@ -49,10 +53,6 @@ for (let i = 0; i < 10; i++) broadcastState.shieldExplosions.push({});
 for (let i = 0; i < 20; i++) broadcastState.ghostAllies.push({});
 for (let i = 0; i < 10; i++) broadcastState.gravityWells.push({});
 for (let i = 0; i < 4; i++) broadcastState.players.push({ upgrades: {} });
-
-const WORLD_H = 600;
-const GROUND_Y = 560;
-const SEGMENT_W = 360;
 
 const BASE_HP_PER_PLAYER = 20;
 
