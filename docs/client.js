@@ -1382,8 +1382,14 @@
       }
     }
     
+    // Debug: Log state when clicking in upgrade card area
+    if (phase === "playing" && upgradeOptions.length > 0 && !upgradePicked) {
+      console.log('Click debug - hoveredUpgrade:', hoveredUpgrade, 'mouseX:', mouseX, 'mouseY:', mouseY);
+    }
+    
     if (phase === "playing" && hoveredUpgrade >= 0 && !upgradePicked && upgradeOptions.length > 0) {
       const opt = upgradeOptions[hoveredUpgrade];
+      console.log('Picking upgrade:', opt?.key);
       if (opt) send({ t: "pickUpgrade", key: opt.key });
       mouseDown = false;
       return;
@@ -3882,36 +3888,6 @@
         ctx.font = "bold 10px 'Courier New', monospace";
         ctx.fillText(`${currentRerollCost}g`, rerollBtnX + rerollBtnW / 2, rerollBtnY + 42);
         
-        // Buy button definitions (positioned to the right of reroll button)
-        const canAffordBuy = myGold >= buyUpgradeCost;
-        const buyBtnW = 70;
-        const buyBtnH = 50;
-        const buyBtnX = rerollBtnX + rerollBtnW + 10;
-        const buyBtnY = rerollBtnY;
-        
-        const isBuyHovered = mouseX >= buyBtnX && mouseX <= buyBtnX + buyBtnW && 
-                             mouseY >= buyBtnY && mouseY <= buyBtnY + buyBtnH;
-        hoveredBuyUpgrade = isBuyHovered;
-        
-        // Buy button background
-        ctx.fillStyle = isBuyHovered && canAffordBuy ? "rgba(100,255,150,0.4)" : 
-                        canAffordBuy ? "rgba(60,200,120,0.25)" : "rgba(40,40,60,0.4)";
-        ctx.strokeStyle = isBuyHovered && canAffordBuy ? "#7affaa" : 
-                          canAffordBuy ? "rgba(122,255,170,0.5)" : "#444";
-        ctx.lineWidth = isBuyHovered && canAffordBuy ? 2 : 1;
-        ctx.beginPath();
-        ctx.roundRect(buyBtnX, buyBtnY, buyBtnW, buyBtnH, 6);
-        ctx.fill();
-        ctx.stroke();
-        
-        // Buy button text
-        ctx.font = "18px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillStyle = canAffordBuy ? "#7affaa" : "#555";
-        ctx.fillText("➕", buyBtnX + buyBtnW / 2, buyBtnY + 25);
-        ctx.font = "bold 10px 'Courier New', monospace";
-        ctx.fillText(`${buyUpgradeCost}g`, buyBtnX + buyBtnW / 2, buyBtnY + 42);
-        
         ctx.textAlign = "left";
       }
 
@@ -4374,6 +4350,14 @@
           window.gameChatInputBounds = { x: chatX + 5, y: chatY + chatH - 35, w: chatW - 10, h: 28 };
           window.gameChatBounds = { x: chatX, y: chatY, w: chatW, h: chatH };
         }
+      }
+      
+      // Update cursor based on hover state
+      if (hoveredUpgrade >= 0 || hoveredReroll || hoveredBuyUpgrade || hoveredModuleCard >= 0 || 
+          hoveredAttack || hoveredBuildOption !== null || hoveredPauseButton || hoveredStatsBtn) {
+        canvas.style.cursor = 'pointer';
+      } else {
+        canvas.style.cursor = 'crosshair';
       }
     } catch (err) {
       console.error('Draw error:', err);
