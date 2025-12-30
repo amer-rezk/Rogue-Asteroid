@@ -2144,12 +2144,11 @@ function tick() {
             m.staticColor = "#ffff00";
           }
           
-          // Ricochet (wave card): Chain between enemies using prediction targeting
+          // Ricochet (wave card): Spawn new bullet toward nearest enemy
           // -10% damage per bounce, vanishes if no target found
-          let didRicochet = false;
-          if (b.ricochet > 0 && m.hp > 0) {
+          if (b.ricochet > 0 && m.hp > 0 && bullets.length < MAX_BULLETS) {
             // Find nearest enemy (excluding ones we've already hit)
-            const bounceRange = 200;
+            const bounceRange = 250;
             const bounceRangeSq = bounceRange * bounceRange;
             let nearestTarget = null;
             let nearestDistSq = Infinity;
@@ -2168,7 +2167,7 @@ function tick() {
             }
             
             if (nearestTarget) {
-              // Use prediction targeting to lead the shot
+              // Calculate intercept point using prediction
               const bulletSpeed = Math.hypot(b.vx, b.vy);
               const speedMult = slotSpeedMultipliers[b.ownerSlot] || 1;
               const intercept = calculateInterceptPoint(m.x, m.y, bulletSpeed, nearestTarget, speedMult);
@@ -2178,20 +2177,49 @@ function tick() {
               const dy = intercept.y - m.y;
               const dist = Math.hypot(dx, dy);
               
-              // Redirect bullet towards intercept point
-              b.vx = (dx / dist) * bulletSpeed;
-              b.vy = (dy / dist) * bulletSpeed;
-              b.x = m.x + (dx / dist) * (m.r + 5); // Move bullet outside current enemy
-              b.y = m.y + (dy / dist) * (m.r + 5);
+              // Spawn fresh bullet from enemy position
+              const newBullet = {
+                id: uid(),
+                ownerId: b.ownerId,
+                ownerSlot: b.ownerSlot,
+                x: m.x + (dx / dist) * (m.r + 5),
+                y: m.y + (dy / dist) * (m.r + 5),
+                vx: (dx / dist) * bulletSpeed,
+                vy: (dy / dist) * bulletSpeed,
+                r: b.r,
+                dmg: b.dmg * 0.9, // -10% damage
+                isCrit: b.isCrit,
+                explosive: b.explosive,
+                lifespan: 3.0,
+                isTowerBullet: b.isTowerBullet,
+                bulletType: b.bulletType,
+                chainChance: b.chainChance,
+                ricochet: b.ricochet - 1,
+                pierce: b.pierce,
+                hitSet: new Set([m.id, ...(b.hitSet || [])]),
+                modules: b.modules || [],
+                bulletColor: b.bulletColor,
+              };
+              bullets.push(newBullet);
               
-              // Apply -10% damage per bounce
-              b.dmg *= 0.9;
-              b.ricochet--;
+              // Notify client about new bullet
+              queueEvent("bulletSpawn", {
+                id: newBullet.id,
+                x: newBullet.x,
+                y: newBullet.y,
+                vx: newBullet.vx,
+                vy: newBullet.vy,
+                slot: newBullet.ownerSlot,
+                isCrit: newBullet.isCrit,
+                bulletColor: newBullet.bulletColor,
+                r: newBullet.r
+              });
               
-              didRicochet = true; // Flag to skip pierce death
+              // Original bullet dies after spawning ricochet
+              b.dead = true;
             } else {
-              // No target found - bullet vanishes (don't keep bouncing)
-              b.ricochet = 0;
+              // No target found - bullet dies (can't ricochet to nothing)
+              b.dead = true;
             }
           }
           
@@ -2310,8 +2338,8 @@ function tick() {
                 slot: b.ownerSlot
               });
             }
-          } else if (!didRicochet) {
-            // Normal bullet behavior (skip if ricochet redirected)
+          } else {
+            // Normal bullet behavior
             if (b.pierce > 0) { b.pierce--; } else { b.dead = true; }
           }
           
