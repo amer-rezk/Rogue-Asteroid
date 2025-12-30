@@ -97,7 +97,7 @@ const ATTACK_TYPES = {
   carrier: { name: "Carrier", cost: 60, count: 1, baseHp: 3, hpScale: 0.975, size: "large", speed: 0.5, spawner: true, spawnInterval: 2.0, spawnCount: 2, desc: "Spawns minions!", color: "#ff00ff", icon: "👑" },
   splitter: { name: "Splitter", cost: 50, count: 1, baseHp: 2.5, hpScale: 0.975, size: "large", speed: 0.75, splits: 15, desc: "Splits into 15 on death", color: "#00ffff", icon: "💎" },
   ghost: { name: "Ghost", cost: 40, count: 2, baseHp: 1, hpScale: 0.9, size: "medium", speed: 1.1, phasing: true, desc: "2 phasing asteroids", color: "#8800ff", icon: "👻" },
-  berserker: { name: "Berserker", cost: 0, count: 1, baseHp: 3, hpScale: 1.2, size: "large", speed: 0.8, desc: "Speeds up when damaged!", color: "#ff2200", icon: "🔥" }
+  berserker: { name: "Berserker", cost: 100, count: 1, baseHp: 3, hpScale: 1.2, size: "large", speed: 0.8, desc: "Speeds up when damaged!", color: "#ff2200", icon: "🔥" }
 };
 
 // ===== Tower Modules (Boss Rewards) =====
@@ -206,7 +206,7 @@ const TOWER_MODULES = {
     name: "The Taxman",
     icon: "🏦",
     color: "#00aa00",
-    desc: "-90% damage, but +1 gold per hit. Farm enemies!",
+    desc: "-90% damage, but +0.1 gold per hit. Farm enemies!",
     effect: "goldFarm"
   },
   viralPayload: {
@@ -2362,9 +2362,15 @@ function tick() {
           
           // Taxman: Generate gold on hit (damage already reduced at bullet creation)
           // SYNERGY: Works with any bullet source - shards, ricochets, pinballs all generate gold!
+          // BALANCE: 0.1 gold per hit (accumulates, awards 1 gold when >= 1.0)
           if (bulletModules.includes("taxman") && owner) {
-            owner.gold = (owner.gold || 0) + 1;
-            queueEvent("taxmanGold", { slot: owner.slot, x: m.x, y: m.y });
+            owner.taxmanAccum = (owner.taxmanAccum || 0) + 0.1;
+            if (owner.taxmanAccum >= 1.0) {
+              const goldToAdd = Math.floor(owner.taxmanAccum);
+              owner.gold = (owner.gold || 0) + goldToAdd;
+              owner.taxmanAccum -= goldToAdd;
+              queueEvent("taxmanGold", { slot: owner.slot, x: m.x, y: m.y });
+            }
           }
           
           // Viral Payload: Infect enemy with spreading DOT
