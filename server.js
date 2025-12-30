@@ -1321,7 +1321,8 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     bulletColor: bullet.bulletColor,
     bulletType: bullet.bulletType, // For visual rendering (gatling/sniper/missile/main)
     ricochet: bullet.ricochet,
-    r: bullet.r
+    r: bullet.r,
+    lifespan: bullet.lifespan // DESYNC FIX: Send lifespan so client can expire bullets correctly
   });
 }
 
@@ -1983,6 +1984,7 @@ function tick() {
     // Buckets already built above before player shooting
 
     // Bullet-missile collision (now O(bullets × missiles_per_slot) instead of O(bullets × all_missiles))
+    // PERFORMANCE: Added quick bounding box rejection before expensive distance calc
     for (const b of bullets) {
       if (b.dead) continue;
       const slot = b.ownerSlot;
@@ -1993,9 +1995,13 @@ function tick() {
         const m = slotMissiles[mi];
         if (m.isPhased && Math.random() > 0.3) continue;
         if (b.hitSet && b.hitSet.has(m.id)) continue; // O(1) Set lookup
-        const dx = m.x - b.x;
-        const dy = m.y - b.y;
+        
         const rr = m.r + b.r;
+        const dx = m.x - b.x;
+        if (dx > rr || dx < -rr) continue; // Quick X reject
+        const dy = m.y - b.y;
+        if (dy > rr || dy < -rr) continue; // Quick Y reject
+        
         if (dx * dx + dy * dy <= rr * rr) {
           m.hp -= b.dmg;
 
@@ -2139,7 +2145,8 @@ function tick() {
                 isCrit: shard.isCrit,
                 bulletColor: shard.bulletColor,
                 bulletType: shard.bulletType, // VISUAL: Inherit tower type for rendering
-                r: shard.r
+                r: shard.r,
+                lifespan: shard.lifespan // DESYNC FIX: Send lifespan for client expiration
               });
             }
           }
@@ -2203,6 +2210,7 @@ function tick() {
           // Triggers even if this asteroid dies from the hit
           if (b.ricochet > 0 && bullets.length < MAX_BULLETS) {
             // Find nearest enemy (excluding ones we've already hit)
+            // PERFORMANCE: Added quick bounding box rejection
             const bounceRange = 250;
             const bounceRangeSq = bounceRange * bounceRange;
             let nearestTarget = null;
@@ -2212,8 +2220,12 @@ function tick() {
             for (let bi = 0; bi < slotMissilesBounce.length; bi++) {
               const m2 = slotMissilesBounce[bi];
               if (m2.dead || m2 === m || (b.hitSet && b.hitSet.has(m2.id))) continue;
+              
               const dx = m2.x - m.x;
+              if (dx > bounceRange || dx < -bounceRange) continue; // Quick X reject
               const dy = m2.y - m.y;
+              if (dy > bounceRange || dy < -bounceRange) continue; // Quick Y reject
+              
               const dSq = dx * dx + dy * dy;
               if (dSq < bounceRangeSq && dSq < nearestDistSq) {
                 nearestDistSq = dSq;
@@ -2252,7 +2264,11 @@ function tick() {
                 chainChance: b.chainChance, // Inherit chain lightning
                 ricochet: b.ricochet - 1, // Decrement ricochet counter
                 pierce: b.pierce, // Inherit pierce
-                hitSet: new Set([m.id, ...(b.hitSet || [])]), // Track hit enemies
+                hitSet: (() => { // OPTIMIZED: Avoid spread operator allocation
+                  const newSet = new Set(b.hitSet);
+                  newSet.add(m.id);
+                  return newSet;
+                })(),
                 modules: b.modules || [], // SYNERGY: Inherit ALL modules!
                 bulletColor: b.bulletColor,
               };
@@ -2269,7 +2285,8 @@ function tick() {
                 isCrit: newBullet.isCrit,
                 bulletColor: newBullet.bulletColor,
                 bulletType: newBullet.bulletType, // Inherit tower type for rendering
-                r: newBullet.r
+                r: newBullet.r,
+                lifespan: newBullet.lifespan // DESYNC FIX: Send lifespan for client expiration
               });
               
               // Original bullet dies after spawning ricochet
@@ -2289,6 +2306,7 @@ function tick() {
             
             if (b.enemyBounces < maxBounces) {
               // Find nearest enemy within range (excluding ones we've already hit)
+              // PERFORMANCE: Added quick bounding box rejection
               const bounceRange = 150;
               const bounceRangeSq = bounceRange * bounceRange;
               let nearestTarget = null;
@@ -2298,8 +2316,12 @@ function tick() {
               for (let bi = 0; bi < slotMissilesBounce.length; bi++) {
                 const m2 = slotMissilesBounce[bi];
                 if (m2.dead || m2 === m || (b.hitSet && b.hitSet.has(m2.id))) continue;
+                
                 const dx = m2.x - m.x;
+                if (dx > bounceRange || dx < -bounceRange) continue; // Quick X reject
                 const dy = m2.y - m.y;
+                if (dy > bounceRange || dy < -bounceRange) continue; // Quick Y reject
+                
                 const dSq = dx * dx + dy * dy;
                 if (dSq < bounceRangeSq && dSq < nearestDistSq) {
                   nearestDistSq = dSq;
@@ -2351,14 +2373,20 @@ function tick() {
             b.dead = true;
             
             // Find 3 nearest enemies (excluding current target) - use slot bucket
+            // PERFORMANCE: Added quick bounding box rejection
             const lightningTargets = [];
-            const rangeSq = 150 * 150; // Squared lightning range
+            const range = 150;
+            const rangeSq = range * range; // Squared lightning range
             const slotMissilesLightning = missilesBySlot[b.ownerSlot];
             for (let li = 0; li < slotMissilesLightning.length; li++) {
               const m2 = slotMissilesLightning[li];
               if (m2.dead || m2 === m) continue;
+              
               const dx = m2.x - m.x;
+              if (dx > range || dx < -range) continue; // Quick X reject
               const dy = m2.y - m.y;
+              if (dy > range || dy < -range) continue; // Quick Y reject
+              
               const dSq = dx * dx + dy * dy;
               if (dSq < rangeSq) { // Use squared distance
                 lightningTargets.push({ m: m2, dSq });
@@ -2607,14 +2635,18 @@ function tick() {
       ghost.life -= DT;
       
       // Check for collision with enemies in owner's slot
+      // PERFORMANCE: Added quick bounding box rejection
       const ghostSlotMissiles = missilesBySlot[ghost.ownerSlot];
       if (ghostSlotMissiles) {
         for (let gi = 0; gi < ghostSlotMissiles.length; gi++) {
           const m = ghostSlotMissiles[gi];
           if (m.dead || ghost.hitSet.has(m.id)) continue;
-          const dx = m.x - ghost.x;
-          const dy = m.y - ghost.y;
+          
           const combinedR = ghost.r + m.r;
+          const dx = m.x - ghost.x;
+          if (dx > combinedR || dx < -combinedR) continue; // Quick X reject
+          const dy = m.y - ghost.y;
+          if (dy > combinedR || dy < -combinedR) continue; // Quick Y reject
           
           if (dx * dx + dy * dy < combinedR * combinedR) {
             m.hp -= ghost.damage;
@@ -2641,9 +2673,11 @@ function tick() {
     ghostAllies.length = gaWriteIdx;
     
     // Gravity Well update - pull nearby enemies
+    // PERFORMANCE: Added quick bounding box rejection before distance check
     for (const well of gravityWells) {
       well.life -= DT;
-      const radiusSq = well.radius * well.radius;
+      const radius = well.radius;
+      const radiusSq = radius * radius;
       
       // Pull nearby enemies toward the well center - use slot bucket
       const wellSlotMissiles = missilesBySlot[well.ownerSlot];
@@ -2651,8 +2685,12 @@ function tick() {
         for (let wi = 0; wi < wellSlotMissiles.length; wi++) {
           const m = wellSlotMissiles[wi];
           if (m.dead) continue;
+          
           const dx = well.x - m.x;
+          if (dx > radius || dx < -radius) continue; // Quick X reject
           const dy = well.y - m.y;
+          if (dy > radius || dy < -radius) continue; // Quick Y reject
+          
           const distSq = dx * dx + dy * dy;
           
           // Quick squared distance check before expensive sqrt
@@ -2676,6 +2714,7 @@ function tick() {
     
     // Chain Reaction - check for static charged asteroid collisions
     // OPTIMIZED: Only check within same slot (missiles can't leave their slot)
+    // PERFORMANCE: Added quick bounding box rejection before expensive distance calc
     for (let slot = 0; slot < 4; slot++) {
       const slotMissiles = missilesBySlot[slot];
       if (!slotMissiles || slotMissiles.length < 2) continue;
@@ -2689,9 +2728,11 @@ function tick() {
           const m2 = slotMissiles[j];
           if (m2.dead) continue;
           
-          const dx = m2.x - m1.x;
-          const dy = m2.y - m1.y;
           const combinedR = m1.r + m2.r + 5;
+          const dx = m2.x - m1.x;
+          if (dx > combinedR || dx < -combinedR) continue; // Quick X reject
+          const dy = m2.y - m1.y;
+          if (dy > combinedR || dy < -combinedR) continue; // Quick Y reject
           
           if (dx * dx + dy * dy < combinedR * combinedR) {
             // Both take massive damage
@@ -2722,9 +2763,14 @@ function tick() {
     }
     
     // Viral Payload - process infection DOT and spreading
+    // PERFORMANCE: Limit infection spread checks to prevent O(n²) lag at high wave counts
     for (let slot = 0; slot < 4; slot++) {
       const slotMissiles = missilesBySlot[slot];
       if (!slotMissiles || slotMissiles.length === 0) continue;
+      
+      // Count infected for rate limiting
+      let spreadChecksThisSlot = 0;
+      const maxSpreadChecksPerSlot = 50; // Limit O(n²) spread checks
       
       for (let i = 0; i < slotMissiles.length; i++) {
         const m1 = slotMissiles[i];
@@ -2758,15 +2804,22 @@ function tick() {
           continue;
         }
         
-        // Check for collision-based spreading
+        // Check for collision-based spreading (rate limited)
+        if (spreadChecksThisSlot >= maxSpreadChecksPerSlot) continue;
+        
         for (let j = 0; j < slotMissiles.length; j++) {
           if (i === j) continue;
           const m2 = slotMissiles[j];
           if (m2.dead || m2.infected) continue;
           
-          const dx = m2.x - m1.x;
-          const dy = m2.y - m1.y;
+          // PERFORMANCE: Quick bounding box check before expensive distance calc
           const combinedR = m1.r + m2.r + 5;
+          const dx = m2.x - m1.x;
+          if (dx > combinedR || dx < -combinedR) continue; // Quick X reject
+          const dy = m2.y - m1.y;
+          if (dy > combinedR || dy < -combinedR) continue; // Quick Y reject
+          
+          spreadChecksThisSlot++;
           
           if (dx * dx + dy * dy < combinedR * combinedR) {
             // Spread infection!

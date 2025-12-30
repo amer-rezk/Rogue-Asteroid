@@ -521,12 +521,21 @@
   function updateClientEffects(dt) {
 	
 	// Simulate local bullets (Bandwidth Fix + Wall/Ricochet Logic)
+    // OPTIMIZED: Use forward iteration with swap-and-pop instead of splice
     const GROUND_Y = 560; // Matches server ground level
     
-    for (let i = clientBullets.length - 1; i >= 0; i--) {
+    let bulletWriteIdx = 0;
+    for (let i = 0; i < clientBullets.length; i++) {
       const b = clientBullets[i];
       b.x += b.vx * dt;
       b.y += b.vy * dt;
+      
+      // DESYNC FIX: Decrement lifespan to match server behavior
+      // Server bullets die after BULLET_LIFESPAN (3.0 seconds)
+      b.lifespan -= dt;
+      if (b.lifespan <= 0) {
+        continue; // Don't keep this bullet
+      }
 
       // Calculate lane boundaries for this bullet's owner
       // Default to 360 if world isn't loaded yet
@@ -536,9 +545,13 @@
       
       // Bullets die at boundaries (no wall bouncing - ricochet chains between enemies now)
       if (b.x < x0 || b.x > x1 || b.y < -50 || b.y > GROUND_Y) {
-        clientBullets.splice(i, 1);
+        continue; // Don't keep this bullet
       }
+      
+      // Keep this bullet
+      clientBullets[bulletWriteIdx++] = b;
     }
+    clientBullets.length = bulletWriteIdx;
 	 
     // Pre-calculate common values
     const damping = 1 - (1 - 0.95) * dt * 60; 
@@ -548,38 +561,56 @@
     // Higher value = snappier response, lower = smoother but more lag feel
     const smoothFactor = 1 - Math.pow(0.05, dt); // Slightly slower blend for smoother motion 
 
+    // OPTIMIZED: Use swap-and-pop for all effect arrays to avoid O(n) splice operations
+    
     // Update particles
-    for (let i = clientParticles.length - 1; i >= 0; i--) {
+    let particleWriteIdx = 0;
+    for (let i = 0; i < clientParticles.length; i++) {
       const p = clientParticles[i];
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       p.life -= dt;
       p.vx *= damping;
       p.vy *= damping;
-      if (p.life <= 0) clientParticles.splice(i, 1);
+      if (p.life > 0) {
+        clientParticles[particleWriteIdx++] = p;
+      }
     }
+    clientParticles.length = particleWriteIdx;
     
     // Update damage numbers
-    for (let i = clientDamageNumbers.length - 1; i >= 0; i--) {
+    let dmgWriteIdx = 0;
+    for (let i = 0; i < clientDamageNumbers.length; i++) {
       const d = clientDamageNumbers[i];
       d.y += d.vy * dt;
       d.life -= dt * 1.5;
-      if (d.life <= 0) clientDamageNumbers.splice(i, 1);
+      if (d.life > 0) {
+        clientDamageNumbers[dmgWriteIdx++] = d;
+      }
     }
+    clientDamageNumbers.length = dmgWriteIdx;
     
     // Update lightning effects
-    for (let i = clientLightning.length - 1; i >= 0; i--) {
+    let lightningWriteIdx = 0;
+    for (let i = 0; i < clientLightning.length; i++) {
       const l = clientLightning[i];
       l.life -= dt;
-      if (l.life <= 0) clientLightning.splice(i, 1);
+      if (l.life > 0) {
+        clientLightning[lightningWriteIdx++] = l;
+      }
     }
+    clientLightning.length = lightningWriteIdx;
     
     // Update tracer effects
-    for (let i = pendingTracers.length - 1; i >= 0; i--) {
+    let tracerWriteIdx = 0;
+    for (let i = 0; i < pendingTracers.length; i++) {
       const t = pendingTracers[i];
       t.life -= dt;
-      if (t.life <= 0) pendingTracers.splice(i, 1);
+      if (t.life > 0) {
+        pendingTracers[tracerWriteIdx++] = t;
+      }
     }
+    pendingTracers.length = tracerWriteIdx;
     
     // Update cached asteroid rotations
     for (const [id, data] of asteroidCache) {
@@ -654,6 +685,7 @@
           
         case "bulletSpawn":
           // Create local bullet from server event
+          // DESYNC FIX: Use 3.0 second lifespan to match server BULLET_LIFESPAN
           clientBullets.push({
             id: ev.id,
             x: ev.x, y: ev.y,
@@ -664,15 +696,22 @@
             bulletType: ev.bulletType, // For visual rendering (gatling/sniper/missile/main)
             slot: ev.slot,
             ricochet: ev.ricochet || 0,
-            lifespan: 1.0
+            lifespan: ev.lifespan || 3.0 // Match server BULLET_LIFESPAN
           });
           break;
 
         case "bulletDeaths":
           // Remove bullets that died on server
-          if (ev.ids) {
+          // OPTIMIZED: Use swap-and-pop instead of filter to avoid O(n) array allocation
+          if (ev.ids && ev.ids.length > 0) {
             const deadSet = new Set(ev.ids);
-            clientBullets = clientBullets.filter(b => !deadSet.has(b.id));
+            let writeIdx = 0;
+            for (let i = 0; i < clientBullets.length; i++) {
+              if (!deadSet.has(clientBullets[i].id)) {
+                clientBullets[writeIdx++] = clientBullets[i];
+              }
+            }
+            clientBullets.length = writeIdx;
           }
           break;
           
