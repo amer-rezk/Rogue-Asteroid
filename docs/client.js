@@ -1915,6 +1915,14 @@
         }
       }
       
+      // Pause button (in HUD bar)
+      if (phase === "playing" && !isSpectator) {
+        const pauseBtnX = 110, pauseBtnY = 10, pauseBtnW = 70, pauseBtnH = 30;
+        if (mouseX >= pauseBtnX && mouseX <= pauseBtnX + pauseBtnW && mouseY >= pauseBtnY && mouseY <= pauseBtnY + pauseBtnH) {
+          uiHovered = true;
+        }
+      }
+      
       // Build menu
       if (buildMenuOpen) {
         uiHovered = true;
@@ -2752,6 +2760,37 @@
       ctx.fillRect(0, 0, canvas.width, 50);
       drawNeonText(`WAVE ${wave}`, 20, 25, "#ff0", 18, "left");
       
+      // Pause button in HUD bar (for non-spectators)
+      if (phase === "playing" && !isSpectator) {
+        const pauseBtnW = 70;
+        const pauseBtnH = 30;
+        const pauseBtnX = 110;
+        const pauseBtnY = 10;
+        
+        hoveredPauseButton = mouseX >= pauseBtnX && mouseX <= pauseBtnX + pauseBtnW && 
+                             mouseY >= pauseBtnY && mouseY <= pauseBtnY + pauseBtnH;
+        
+        const isPaused = gamePaused || pauseCountdown > 0;
+        const btnColor = isPaused ? "#ff6600" : "#555";
+        const btnText = isPaused ? (pauseCountdown > 0 ? `▶ ${Math.ceil(pauseCountdown)}` : "▶ PLAY") : "❚❚";
+        
+        ctx.fillStyle = hoveredPauseButton ? (isPaused ? "rgba(255,102,0,0.3)" : "rgba(100,100,100,0.3)") : "rgba(40,40,60,0.5)";
+        ctx.strokeStyle = hoveredPauseButton ? (isPaused ? "#ff6600" : "#888") : btnColor;
+        ctx.lineWidth = hoveredPauseButton ? 2 : 1;
+        ctx.beginPath();
+        ctx.roundRect(pauseBtnX, pauseBtnY, pauseBtnW, pauseBtnH, 4);
+        ctx.fill();
+        ctx.stroke();
+        
+        ctx.font = "bold 12px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = hoveredPauseButton ? "#fff" : (isPaused ? "#ff6600" : "#888");
+        ctx.fillText(btnText, pauseBtnX + pauseBtnW / 2, pauseBtnY + pauseBtnH / 2);
+        ctx.textBaseline = "alphabetic";
+        ctx.textAlign = "left";
+      }
+      
       // Spectator indicator
       if (isSpectator) {
         ctx.fillStyle = "rgba(255,100,100,0.9)";
@@ -2772,17 +2811,17 @@
       
       const myPlayer = lastSnap.players.find(p => p.id === myId);
       if (myPlayer) {
-        // Gold display with more spacing
-        drawNeonText(`${myPlayer.gold} 🟡`, 140, 25, "#fd0", 18, "left");
+        // Gold display (moved right to make room for pause button)
+        drawNeonText(`${myPlayer.gold} 🟡`, 200, 25, "#fd0", 18, "left");
         // Show last interest gained (if any)
         if (myPlayer.lastInterest > 0) {
           ctx.font = "bold 12px 'Courier New', monospace";
           ctx.fillStyle = "#0f0";
           ctx.textAlign = "left";
-          ctx.fillText(`+${myPlayer.lastInterest}`, 215, 25);
+          ctx.fillText(`+${myPlayer.lastInterest}`, 275, 25);
         }
         // Kills further right
-        drawNeonText(`${myPlayer.kills} 💀`, 270, 25, "#f44", 14, "left");
+        drawNeonText(`${myPlayer.kills} 💀`, 330, 25, "#f44", 14, "left");
       }
 
       // Scoreboard
@@ -3222,10 +3261,77 @@
           if (isHovered) {
             selectedInventoryModule = { index: i, moduleId };
             
-            // Tooltip
-            ctx.font = "bold 10px 'Courier New', monospace";
+            // Detailed tooltip panel
+            const tooltipW = 220;
+            const tooltipH = 100;
+            // Position tooltip to the right of the card, or above if near bottom
+            let tooltipX = cardX + cardSize + 10;
+            let tooltipY = cardY - 20;
+            
+            // Keep tooltip on screen
+            if (tooltipX + tooltipW > canvas.width - 10) {
+              tooltipX = cardX - tooltipW - 10;
+            }
+            if (tooltipY + tooltipH > canvas.height - 10) {
+              tooltipY = canvas.height - tooltipH - 10;
+            }
+            if (tooltipY < 10) tooltipY = 10;
+            
+            // Tooltip background
+            ctx.fillStyle = "rgba(5,5,20,0.97)";
+            ctx.strokeStyle = mod.color;
+            ctx.lineWidth = 2;
+            ctx.shadowColor = mod.color;
+            ctx.shadowBlur = 15;
+            ctx.beginPath();
+            ctx.roundRect(tooltipX, tooltipY, tooltipW, tooltipH, 8);
+            ctx.fill();
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            
+            // Module name with icon
+            ctx.font = "bold 14px 'Courier New', monospace";
             ctx.fillStyle = mod.color;
-            ctx.fillText(mod.name, cardX + cardSize / 2, cardY - 5);
+            ctx.textAlign = "left";
+            ctx.fillText(`${mod.icon} ${mod.name}`, tooltipX + 10, tooltipY + 22);
+            
+            // Horizontal divider
+            ctx.strokeStyle = "rgba(255,255,255,0.2)";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(tooltipX + 10, tooltipY + 32);
+            ctx.lineTo(tooltipX + tooltipW - 10, tooltipY + 32);
+            ctx.stroke();
+            
+            // Description text (word-wrapped)
+            ctx.font = "12px 'Courier New', monospace";
+            ctx.fillStyle = "#ddd";
+            const desc = mod.desc || "No description available.";
+            const maxLineW = tooltipW - 20;
+            const words = desc.split(" ");
+            let line = "";
+            let lineY = tooltipY + 50;
+            const lineHeight = 16;
+            for (const word of words) {
+              const testLine = line + (line ? " " : "") + word;
+              if (ctx.measureText(testLine).width > maxLineW) {
+                ctx.fillText(line, tooltipX + 10, lineY);
+                line = word;
+                lineY += lineHeight;
+                if (lineY > tooltipY + tooltipH - 15) break;
+              } else {
+                line = testLine;
+              }
+            }
+            if (line && lineY <= tooltipY + tooltipH - 15) {
+              ctx.fillText(line, tooltipX + 10, lineY);
+            }
+            
+            // Usage hint at bottom
+            ctx.font = "bold 10px 'Courier New', monospace";
+            ctx.fillStyle = "#888";
+            ctx.textAlign = "center";
+            ctx.fillText("Click tower slot to equip", tooltipX + tooltipW / 2, tooltipY + tooltipH - 8);
           }
         }
         
@@ -3407,7 +3513,11 @@
       if (buildMenuOpen) {
         hoveredBuildOption = null;
         hoveredModuleSlot = null;
-        const { x, y, hasTower, tower } = buildMenuOpen;
+        const { x, y, slotIndex } = buildMenuOpen;
+        // Always get fresh tower data from lastSnap (fixes module not showing after slotting)
+        const freshTower = myPlayer?.towers?.[slotIndex];
+        const hasTower = !!freshTower;
+        const tower = freshTower;
         const myGold = myPlayer?.gold || 0;
         const myInventory = myPlayer?.inventory || [];
         const MODULES = window.TOWER_MODULES || {};
@@ -3922,41 +4032,6 @@
         ctx.textAlign = "left";
       }
 
-      // ===== PAUSE BUTTON AND OVERLAY =====
-      if (phase === "playing" && !isSpectator) {
-        // Pause button (top-right corner, below wave indicator if visible)
-        const pauseBtnW = 90;
-        const pauseBtnH = 32;
-        const pauseBtnX = canvas.width - pauseBtnW - 15;
-        const pauseBtnY = 15;
-        
-        hoveredPauseButton = mouseX >= pauseBtnX && mouseX <= pauseBtnX + pauseBtnW && 
-                             mouseY >= pauseBtnY && mouseY <= pauseBtnY + pauseBtnH;
-        
-        // Button style based on state
-        const isPaused = gamePaused || pauseCountdown > 0;
-        const btnColor = isPaused ? "#ff6600" : "#0088ff";
-        const btnText = isPaused ? (pauseCountdown > 0 ? `▶ ${Math.ceil(pauseCountdown)}` : "▶ RESUME") : "⏸ PAUSE";
-        
-        ctx.fillStyle = hoveredPauseButton ? `rgba(${isPaused ? '255,102,0' : '0,136,255'},0.4)` : `rgba(${isPaused ? '255,102,0' : '0,136,255'},0.2)`;
-        ctx.strokeStyle = btnColor;
-        ctx.lineWidth = hoveredPauseButton ? 2 : 1;
-        ctx.shadowColor = hoveredPauseButton ? btnColor : "transparent";
-        ctx.shadowBlur = hoveredPauseButton ? 10 : 0;
-        ctx.beginPath();
-        ctx.roundRect(pauseBtnX, pauseBtnY, pauseBtnW, pauseBtnH, 6);
-        ctx.fill();
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-        
-        ctx.font = "bold 12px 'Courier New', monospace";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillStyle = hoveredPauseButton ? "#fff" : btnColor;
-        ctx.fillText(btnText, pauseBtnX + pauseBtnW / 2, pauseBtnY + pauseBtnH / 2);
-        ctx.textBaseline = "alphabetic";
-      }
-      
       // Pause overlay (when game is paused)
       if (phase === "playing" && (gamePaused || pauseCountdown > 0)) {
         // Semi-transparent overlay
