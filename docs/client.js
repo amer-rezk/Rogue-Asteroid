@@ -2726,8 +2726,8 @@
 
       // Asteroids/Missiles
       // PERFORMANCE: Get render bounds once for culling
-      const renderWidth = scale.renderW;
-      const renderHeight = scale.renderH;
+      const renderWidth = world.width * sx;
+      const renderHeight = world.height * sy;
       
       for (const m of lastSnap.missiles) {
         const x = m.x * sx;
@@ -5314,6 +5314,8 @@
       }
     } catch (err) {
       console.error('Draw error:', err);
+      // SAFETY: Restore context to prevent transform accumulation on error
+      try { ctx.restore(); } catch (e) {}
     }
   }
 
