@@ -1205,8 +1205,11 @@
           moduleCards = moduleCards.filter((c, i) => i !== msg.cardIndex);
         }
         if (msg.playerId === myId) {
-          // We picked - show confirmation
+          // We picked - show confirmation and clear our turn
           moduleFeedback = { moduleId: msg.moduleId, time: Date.now() };
+          // Clear current picker until server tells us who's next
+          // This prevents double-picks if events arrive out of order
+          currentModulePicker = null;
         }
         break;
 
@@ -1930,7 +1933,11 @@
 
     // Handle module card selection (BEFORE buildMenuOpen check!)
     if (phase === "playing" && moduleCardPhase && hoveredModuleCard >= 0 && currentModulePicker === myId) {
-      send({ t: "pickModuleCard", cardIndex: hoveredModuleCard });
+      const selectedCard = moduleCards[hoveredModuleCard];
+      if (selectedCard) {
+        // Send both index and moduleId for server verification
+        send({ t: "pickModuleCard", cardIndex: hoveredModuleCard, moduleId: selectedCard.id });
+      }
       mouseDown = false;
       return;
     }

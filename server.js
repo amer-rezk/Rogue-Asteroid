@@ -1620,6 +1620,9 @@ function tick() {
            // Remove from deck
            moduleCards.splice(cardIndex, 1);
            
+           // CRITICAL: Update cached array for state broadcasts
+           cachedModuleCards = moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }));
+           
            // Notify everyone (same as a normal pick, but forced)
            broadcast({ 
             t: "moduleCardPicked", 
@@ -1627,7 +1630,7 @@ function tick() {
             playerName: p.name, 
             moduleId, 
             cardIndex,
-            remainingCards: moduleCards.map(id => ({ id, ...TOWER_MODULES[id] })),
+            remainingCards: cachedModuleCards,
             isAutoPick: true
           });
         }
@@ -1643,7 +1646,7 @@ function tick() {
             t: "modulePickTurn", 
             playerId: modulePickOrder[currentModulePicker], 
             timeLeft: MODULE_PICK_TIME,
-            remainingCards: moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }))
+            remainingCards: cachedModuleCards
           });
         }
       }
@@ -3663,31 +3666,47 @@ wss.on("connection", (ws) => {
 
     // Pick a module card during boss reward phase
     if (msg.t === "pickModuleCard" && moduleCardPhase) {
-      const { cardIndex } = msg;
-      if (cardIndex < 0 || cardIndex >= moduleCards.length) return;
+      const { cardIndex, moduleId } = msg;
+      
+      // Verify it's this player's turn
       if (modulePickOrder[currentModulePicker] !== p.id) return; // Not your turn
       if (modulePlayersPicked.has(p.id)) return; // Already picked
       
-      const moduleId = moduleCards[cardIndex];
-      if (!TOWER_MODULES[moduleId]) return;
+      // Find the card - prefer moduleId lookup for accuracy, fall back to index
+      let actualIndex = -1;
+      if (moduleId) {
+        // Client sent module ID - find it in the array (handles sync issues)
+        actualIndex = moduleCards.indexOf(moduleId);
+      } else if (cardIndex >= 0 && cardIndex < moduleCards.length) {
+        // Fall back to index if no moduleId sent
+        actualIndex = cardIndex;
+      }
+      
+      if (actualIndex < 0 || actualIndex >= moduleCards.length) return; // Invalid
+      
+      const actualModuleId = moduleCards[actualIndex];
+      if (!TOWER_MODULES[actualModuleId]) return;
       
       // Mark player as picked
       modulePlayersPicked.add(p.id);
       
       // Add to player's inventory
-      p.inventory.push(moduleId);
+      p.inventory.push(actualModuleId);
       
       // Remove from available cards
-      moduleCards.splice(cardIndex, 1);
+      moduleCards.splice(actualIndex, 1);
+      
+      // CRITICAL: Update cached array for state broadcasts
+      cachedModuleCards = moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }));
       
       // Announce pick and send updated card list
       broadcast({ 
         t: "moduleCardPicked", 
         playerId: p.id, 
         playerName: p.name, 
-        moduleId, 
-        cardIndex,
-        remainingCards: moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }))
+        moduleId: actualModuleId, 
+        cardIndex: actualIndex,
+        remainingCards: cachedModuleCards
       });
       
       // Move to next picker
@@ -3703,7 +3722,7 @@ wss.on("connection", (ws) => {
           t: "modulePickTurn", 
           playerId: modulePickOrder[currentModulePicker], 
           timeLeft: MODULE_PICK_TIME,
-          remainingCards: moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }))
+          remainingCards: cachedModuleCards
         });
       }
     }
