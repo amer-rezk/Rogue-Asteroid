@@ -512,16 +512,48 @@
 
   function updateClientEffects(dt) {
 	
-	// Simulate local bullets (Bandwidth Fix)
+	// Simulate local bullets (Bandwidth Fix + Wall/Ricochet Logic)
+    const GROUND_Y = 560; // Matches server ground level
+    
     for (let i = clientBullets.length - 1; i >= 0; i--) {
       const b = clientBullets[i];
       b.x += b.vx * dt;
       b.y += b.vy * dt;
-      // Cleanup stray bullets that went off screen
-      if (b.y < -100 || b.y > 700 || b.x < -100 || b.x > 2000) {
+
+      // Calculate lane boundaries for this bullet's owner
+      // Default to 360 if world isn't loaded yet
+      const segW = (world && world.segmentWidth) ? world.segmentWidth : 360;
+      const x0 = b.slot * segW;
+      const x1 = (b.slot + 1) * segW;
+      
+      let hitWall = false;
+
+      // Left Wall
+      if (b.x < x0) {
+        if (b.ricochet > 0) { b.x = x0; b.vx = -b.vx; b.ricochet--; } 
+        else { hitWall = true; }
+      }
+      // Right Wall
+      else if (b.x > x1) {
+        if (b.ricochet > 0) { b.x = x1; b.vx = -b.vx; b.ricochet--; }
+        else { hitWall = true; }
+      }
+      // Ceiling (approximate limit)
+      else if (b.y < -50) {
+        if (b.ricochet > 0) { b.y = -50; b.vy = -b.vy; b.ricochet--; }
+        else { hitWall = true; }
+      }
+      // Floor
+      else if (b.y > GROUND_Y) {
+        if (b.ricochet > 0) { b.y = GROUND_Y; b.vy = -b.vy; b.ricochet--; }
+        else { hitWall = true; }
+      }
+
+      // If it hit a wall and had no ricochets left, destroy it locally
+      if (hitWall) {
         clientBullets.splice(i, 1);
       }
-    }	
+    }
 	 
     // Pre-calculate common values
     const damping = 1 - (1 - 0.95) * dt * 60; 
@@ -633,11 +665,12 @@
             id: ev.id,
             x: ev.x, y: ev.y,
             vx: ev.vx, vy: ev.vy,
-            r: 3, // Default radius
+            r: 3, 
             isCrit: ev.isCrit,
             bulletColor: ev.bulletColor, 
             slot: ev.slot,
-            lifespan: 1.0 // Visual only
+            ricochet: ev.ricochet || 0, // <--- Capture ricochet count
+            lifespan: 1.0
           });
           break;
 

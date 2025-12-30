@@ -1244,7 +1244,8 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     vy: bullet.vy,
     slot: bullet.ownerSlot,
     isCrit: bullet.isCrit,
-    bulletColor: bullet.bulletColor
+    bulletColor: bullet.bulletColor,
+    ricochet: bullet.ricochet // <--- ADDED THIS LINE
   });
 }
 
