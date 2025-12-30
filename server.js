@@ -1319,6 +1319,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     slot: bullet.ownerSlot,
     isCrit: bullet.isCrit,
     bulletColor: bullet.bulletColor,
+    bulletType: bullet.bulletType, // For visual rendering (gatling/sniper/missile/main)
     ricochet: bullet.ricochet,
     r: bullet.r
   });
@@ -2102,6 +2103,7 @@ function tick() {
               
               // SYNERGY: Shards inherit modules, ricochet, pierce, chain chance from parent
               // This enables powerful combos where shards continue the parent's effects
+              // VISUAL: Shards look like the tower type that spawned them (gatling/sniper/missile)
               const shard = {
                 id: uid(),
                 ownerId: b.ownerId,
@@ -2115,14 +2117,14 @@ function tick() {
                 isCrit: false,
                 explosive: Math.floor(b.explosive * 0.5), // Half explosive power
                 lifespan: 1.0,
-                isTowerBullet: true,
-                bulletType: "shard",
+                isTowerBullet: b.isTowerBullet,
+                bulletType: b.bulletType, // VISUAL: Inherit parent's bullet type (gatling/sniper/missile/main)
                 chainChance: b.chainChance, // Inherit chain lightning chance
                 ricochet: b.ricochet, // Inherit ricochet stacks - shards can chain too!
                 pierce: b.pierce, // Inherit pierce - shards can pierce too!
                 hitSet: new Set([m.id]), 
                 modules: shardModules, // SYNERGY: Inherit modules for combo effects!
-                bulletColor: "#00ffff",
+                bulletColor: b.bulletColor, // VISUAL: Inherit custom color (e.g. from Confetti Cannon)
               };
               bullets.push(shard);
 
@@ -2136,6 +2138,7 @@ function tick() {
                 slot: shard.ownerSlot,
                 isCrit: shard.isCrit,
                 bulletColor: shard.bulletColor,
+                bulletType: shard.bulletType, // VISUAL: Inherit tower type for rendering
                 r: shard.r
               });
             }
@@ -2265,6 +2268,7 @@ function tick() {
                 slot: newBullet.ownerSlot,
                 isCrit: newBullet.isCrit,
                 bulletColor: newBullet.bulletColor,
+                bulletType: newBullet.bulletType, // Inherit tower type for rendering
                 r: newBullet.r
               });
               

@@ -660,7 +660,8 @@
             vx: ev.vx, vy: ev.vy,
             r: ev.r || 3,
             isCrit: ev.isCrit,
-            bulletColor: ev.bulletColor, 
+            bulletColor: ev.bulletColor,
+            bulletType: ev.bulletType, // For visual rendering (gatling/sniper/missile/main)
             slot: ev.slot,
             ricochet: ev.ricochet || 0,
             lifespan: 1.0
