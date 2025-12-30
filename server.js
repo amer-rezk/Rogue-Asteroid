@@ -1012,16 +1012,16 @@ function startModuleCardPhase() {
   // Track which players have picked
   modulePlayersPicked = new Set();
   
-  // Determine pick order: boss killer first, then by wave damage
+  // Determine pick order: boss killer first, then by total kills
   const alivePlayers = lockedSlots
     .map(id => players.get(id))
     .filter(p => p && p.hp > 0);
   
-  // Sort by boss killer first, then wave damage
+  // Sort by boss killer first, then by kills (most kills picks earlier)
   alivePlayers.sort((a, b) => {
     if (a.id === bossKillerId) return -1;
     if (b.id === bossKillerId) return 1;
-    return (b.waveDamage || 0) - (a.waveDamage || 0);
+    return (b.kills || 0) - (a.kills || 0);
   });
   
   modulePickOrder = alivePlayers.map(p => p.id);
