@@ -711,20 +711,6 @@
             });
           }
           break;
-        
-        case "ricochetBounce":
-          // Ricochet chain effect (wave card)
-          if (!skipVisualEffects) {
-            createClientParticle(ev.x, ev.y, "#00ffff", 5, 0.6);
-            // Draw tracer line to next target
-            pendingTracers.push({
-              x1: ev.x, y1: ev.y,
-              x2: ev.tx, y2: ev.ty,
-              color: "#00ffff",
-              life: 0.25
-            });
-          }
-          break;
           
         case "taxmanGold":
           // Taxman gold generation effect

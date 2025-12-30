@@ -2188,7 +2188,6 @@ function tick() {
               b.ricochet--;
               
               b.dead = false; // Keep bullet alive!
-              queueEvent("ricochetBounce", { x: m.x, y: m.y, tx: intercept.x, ty: intercept.y });
             } else {
               // No target found - bullet vanishes (don't keep bouncing)
               b.ricochet = 0;
