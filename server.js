@@ -1331,22 +1331,32 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
   };
   bullets.push(bullet);
   
-  // Emit spawn event for immediate client prediction
-  eventQueue.push({
-    t: "bulletSpawn",
-    id: bullet.id,
-    x: bullet.x,
-    y: bullet.y,
-    vx: bullet.vx,
-    vy: bullet.vy,
-    slot: bullet.ownerSlot,
-    isCrit: bullet.isCrit,
-    bulletColor: bullet.bulletColor,
-    bulletType: bullet.bulletType, // For visual rendering (gatling/sniper/missile/main)
-    ricochet: bullet.ricochet,
-    r: bullet.r,
-    lifespan: bullet.lifespan // DESYNC FIX: Send lifespan so client can expire bullets correctly
-  });
+  // PERFORMANCE: Throttle bullet spawn events under heavy load
+  // Too many events can overwhelm the network and client JSON parsing
+  // Use global counter (reset each tick) instead of filter for efficiency
+  const maxBulletEvents = players.size >= 3 ? 40 : 60;
+  
+  if (bulletSpawnEventCount < maxBulletEvents) {
+    bulletSpawnEventCount++;
+    // Emit spawn event for immediate client prediction
+    eventQueue.push({
+      t: "bulletSpawn",
+      id: bullet.id,
+      x: bullet.x,
+      y: bullet.y,
+      vx: bullet.vx,
+      vy: bullet.vy,
+      slot: bullet.ownerSlot,
+      isCrit: bullet.isCrit,
+      bulletColor: bullet.bulletColor,
+      bulletType: bullet.bulletType, // For visual rendering (gatling/sniper/missile/main)
+      ricochet: bullet.ricochet,
+      r: bullet.r,
+      lifespan: bullet.lifespan // DESYNC FIX: Send lifespan so client can expire bullets correctly
+    });
+  }
+  // If throttled, bullet still exists on server - client just won't see it immediately
+  // Next state update will sync positions anyway
 }
 
 // PREDICTIVE AIMING: Fire bullets at intercept points, each bullet can target different asteroid
@@ -1527,6 +1537,7 @@ function clampAimAngle(turretX, turretY, targetX, targetY) {
 
 // PERFORMANCE: Track event load for throttling visual effects
 let visualEventCount = 0;
+let bulletSpawnEventCount = 0; // Track bullet spawn events per tick
 // Cap visual events - more aggressive with more players
 function getMaxVisualEvents() {
   const playerCount = players.size;
@@ -1566,6 +1577,7 @@ function tick() {
   try {
     tickCount++;
     visualEventCount = 0; // PERFORMANCE: Reset visual event throttle counter
+    bulletSpawnEventCount = 0; // PERFORMANCE: Reset bullet spawn event counter
     
     // Handle pause countdown
     if (pauseCountdown > 0) {

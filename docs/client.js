@@ -778,6 +778,11 @@
           
         case "bulletSpawn":
           // Create local bullet from server event
+          // PERFORMANCE: Cap client bullets to prevent overwhelming rendering
+          if (clientBullets.length >= 400) {
+            // Drop oldest bullets if we're at cap
+            clientBullets.shift();
+          }
           // DESYNC FIX: Use 3.0 second lifespan to match server BULLET_LIFESPAN
           clientBullets.push({
             id: ev.id,
@@ -2347,6 +2352,10 @@
       const dt = Math.min((now - lastFrameTime) / 1000, 0.05); // Cap at 50ms to prevent huge jumps
       lastFrameTime = now;
       
+      // PERFORMANCE: Track FPS and reduce effects when struggling
+      // If dt > 33ms (below 30 FPS), we're struggling - skip some effects
+      const isLowFPS = dt > 0.033;
+      
       time += dt;
       screenShake *= 0.92;
       
@@ -2634,6 +2643,9 @@
       }
 
       // Tesla Coil Lightning Effects
+      // PERFORMANCE: Skip outer glow in low quality or low FPS
+      const drawLightningGlow = graphicsQuality > 0 && !isLowFPS;
+      
       for (const lightning of clientLightning) {
         const alpha = lightning.life / lightning.maxLife;
         const playerColor = PLAYER_COLORS[lightning.slot]?.main || "#0ff";
@@ -2647,34 +2659,36 @@
         for (const segment of lightning.segments) {
           if (segment.length < 2) continue;
           
-          // Outer glow
-          ctx.strokeStyle = hexToRgba(glowColor, alpha * 0.3);
-          ctx.lineWidth = 12 * sx;
-          ctx.shadowColor = glowColor;
-          ctx.shadowBlur = 20;
-          ctx.beginPath();
-          ctx.moveTo(segment[0].x * sx, segment[0].y * sy);
-          for (let i = 1; i < segment.length; i++) {
-            ctx.lineTo(segment[i].x * sx, segment[i].y * sy);
+          // Outer glow (skip in low quality/FPS)
+          if (drawLightningGlow) {
+            ctx.strokeStyle = hexToRgba(glowColor, alpha * 0.3);
+            ctx.lineWidth = 12 * sx;
+            ctx.shadowColor = glowColor;
+            ctx.shadowBlur = 20;
+            ctx.beginPath();
+            ctx.moveTo(segment[0].x * sx, segment[0].y * sy);
+            for (let i = 1; i < segment.length; i++) {
+              ctx.lineTo(segment[i].x * sx, segment[i].y * sy);
+            }
+            ctx.stroke();
+            
+            // Mid glow
+            ctx.strokeStyle = hexToRgba(coreColor, alpha * 0.6);
+            ctx.lineWidth = 6 * sx;
+            ctx.shadowBlur = 10;
+            ctx.beginPath();
+            ctx.moveTo(segment[0].x * sx, segment[0].y * sy);
+            for (let i = 1; i < segment.length; i++) {
+              ctx.lineTo(segment[i].x * sx, segment[i].y * sy);
+            }
+            ctx.stroke();
           }
-          ctx.stroke();
           
-          // Mid glow
-          ctx.strokeStyle = hexToRgba(coreColor, alpha * 0.6);
-          ctx.lineWidth = 6 * sx;
-          ctx.shadowBlur = 10;
-          ctx.beginPath();
-          ctx.moveTo(segment[0].x * sx, segment[0].y * sy);
-          for (let i = 1; i < segment.length; i++) {
-            ctx.lineTo(segment[i].x * sx, segment[i].y * sy);
-          }
-          ctx.stroke();
-          
-          // Bright core
+          // Bright core (always drawn)
           ctx.strokeStyle = hexToRgba("#fff", alpha);
-          ctx.lineWidth = 2 * sx;
+          ctx.lineWidth = drawLightningGlow ? 2 * sx : 3 * sx;
           ctx.shadowColor = "#fff";
-          ctx.shadowBlur = 5;
+          ctx.shadowBlur = drawLightningGlow ? 5 : 0;
           ctx.beginPath();
           ctx.moveTo(segment[0].x * sx, segment[0].y * sy);
           for (let i = 1; i < segment.length; i++) {
@@ -2687,21 +2701,27 @@
       }
       
       // Module Effect Tracers (Pinball, Viral spread)
+      // PERFORMANCE: Skip shadow and dashes when FPS is low
       for (const tracer of pendingTracers) {
         const alpha = tracer.life / 0.5; // Assuming max life of 0.5
-        ctx.save();
         ctx.strokeStyle = hexToRgba(tracer.color, alpha * 0.8);
         ctx.lineWidth = 3 * sx;
-        ctx.shadowColor = tracer.color;
-        ctx.shadowBlur = 10;
-        ctx.setLineDash([5, 5]);
+        
+        if (!isLowFPS) {
+          ctx.save();
+          ctx.shadowColor = tracer.color;
+          ctx.shadowBlur = 10;
+          ctx.setLineDash([5, 5]);
+        }
         
         ctx.beginPath();
         ctx.moveTo(tracer.x1 * sx, tracer.y1 * sy);
         ctx.lineTo(tracer.x2 * sx, tracer.y2 * sy);
         ctx.stroke();
         
-        ctx.restore();
+        if (!isLowFPS) {
+          ctx.restore();
+        }
       }
 
       // Asteroids/Missiles
