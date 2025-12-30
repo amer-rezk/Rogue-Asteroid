@@ -364,6 +364,8 @@
   
   // Reusable objects to reduce GC pressure
   const tempIdSet = new Set();
+  const prevMissilesMap = new Map(); // Reused for interpolation
+  const prevBulletsMap = new Map();  // Reused for interpolation
   const rgbaCache = new Map(); // Cache for hexToRgba results
 
   // ===== Utilities =====
@@ -524,6 +526,11 @@
     // OPTIMIZED: Use forward iteration with swap-and-pop instead of splice
     const GROUND_Y = 560; // Matches server ground level
     
+    // DESYNC FIX: Client-side collision prediction
+    // Check if bullets would hit missiles and remove them early
+    // This prevents "ghost bullets" that visually pass through enemies
+    const missiles = lastSnap?.missiles || [];
+    
     let bulletWriteIdx = 0;
     for (let i = 0; i < clientBullets.length; i++) {
       const b = clientBullets[i];
@@ -546,6 +553,27 @@
       // Bullets die at boundaries (no wall bouncing - ricochet chains between enemies now)
       if (b.x < x0 || b.x > x1 || b.y < -50 || b.y > GROUND_Y) {
         continue; // Don't keep this bullet
+      }
+      
+      // CLIENT-SIDE COLLISION PREDICTION: Remove bullets that hit enemies
+      // This reduces visual desync by ~50ms (1-2 server ticks)
+      let hitEnemy = false;
+      for (let mi = 0; mi < missiles.length; mi++) {
+        const m = missiles[mi];
+        // Only check missiles in same slot
+        if (m.targetSlot !== undefined && m.targetSlot !== b.slot) continue;
+        
+        const dx = m.x - b.x;
+        const dy = m.y - b.y;
+        const rr = (m.r || 15) + (b.r || 3);
+        if (dx * dx + dy * dy <= rr * rr) {
+          hitEnemy = true;
+          break;
+        }
+      }
+      
+      if (hitEnemy) {
+        continue; // Don't keep - server will confirm death
       }
       
       // Keep this bullet
@@ -717,6 +745,18 @@
           
         case "pinballBounce":
           // Pinball Wizard bounce effect
+          // DESYNC FIX: Sync bullet position and velocity from server
+          if (ev.id) {
+            for (let i = 0; i < clientBullets.length; i++) {
+              if (clientBullets[i].id === ev.id) {
+                clientBullets[i].x = ev.x;
+                clientBullets[i].y = ev.y;
+                clientBullets[i].vx = ev.vx;
+                clientBullets[i].vy = ev.vy;
+                break;
+              }
+            }
+          }
           if (!skipVisualEffects) {
             createClientParticle(ev.x, ev.y, "#ff6600", 6, 0.8);
             // Draw tracer line to next target
@@ -1146,13 +1186,23 @@
         }
 
         // PREPARE FOR INTERPOLATION
-        // Map previous positions to preserve visual continuity
-        const prevMissiles = new Map();
-        const prevBullets = new Map();
+        // OPTIMIZED: Reuse Maps instead of creating new ones every frame
+        prevMissilesMap.clear();
+        prevBulletsMap.clear();
 
         if (lastSnap) {
-          if (lastSnap.missiles) lastSnap.missiles.forEach(m => prevMissiles.set(m.id, m));
-          if (lastSnap.bullets) lastSnap.bullets.forEach(b => prevBullets.set(b.id, b));
+          if (lastSnap.missiles) {
+            for (let i = 0; i < lastSnap.missiles.length; i++) {
+              const m = lastSnap.missiles[i];
+              prevMissilesMap.set(m.id, m);
+            }
+          }
+          if (lastSnap.bullets) {
+            for (let i = 0; i < lastSnap.bullets.length; i++) {
+              const b = lastSnap.bullets[i];
+              prevBulletsMap.set(b.id, b);
+            }
+          }
         }
 
         // Process Missiles: Set Targets, Keep Current Visual Position
@@ -1170,7 +1220,7 @@
             m.targetX = m.x;
             m.targetY = m.y;
             
-            const prev = prevMissiles.get(m.id);
+            const prev = prevMissilesMap.get(m.id);
             if (prev) {
               // Start this frame at the old visual position to prevent jumping
               m.x = prev.x; 
@@ -1190,7 +1240,7 @@
             b.targetX = b.x;
             b.targetY = b.y;
             
-            const prev = prevBullets.get(b.id);
+            const prev = prevBulletsMap.get(b.id);
             if (prev) {
               b.x = prev.x;
               b.y = prev.y;

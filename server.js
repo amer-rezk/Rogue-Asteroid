@@ -24,8 +24,8 @@ const DT = 1 / TICK_RATE;
 const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 2 ticks
 
 // === ENTITY CAPS (SERVER-SIDE LAG PREVENTION) ===
-const MAX_MISSILES = 100;      // Hard cap on asteroids/enemies
-const MAX_BULLETS = 60;        // Hard cap on player bullets
+const MAX_MISSILES = 150;      // Hard cap on asteroids/enemies (increased for late game)
+const MAX_BULLETS = 80;        // Hard cap on player bullets (increased for multishot builds)
 
 const WORLD_H = 600;
 const GROUND_Y = 560;
@@ -1502,15 +1502,23 @@ function clampAimAngle(turretX, turretY, targetX, targetY) {
   };
 }
 
-// OPTIMIZED: Create explosion - now also queues event for client
+// PERFORMANCE: Track event load for throttling visual effects
+let visualEventCount = 0;
+const MAX_VISUAL_EVENTS_PER_TICK = 30; // Cap visual events to prevent lag spikes
+
+// OPTIMIZED: Create explosion - throttled under heavy load
 function createExplosion(x, y, radius, color) {
-  // Queue event for client-side rendering
+  // PERFORMANCE: Skip small explosions under heavy load
+  if (visualEventCount >= MAX_VISUAL_EVENTS_PER_TICK && radius < 30) return;
+  visualEventCount++;
   queueEvent("explosion", { x, y, radius, color });
 }
 
-// OPTIMIZED: Add damage number - queues event for client
+// OPTIMIZED: Add damage number - throttled under heavy load
 function addDamageNumber(x, y, amount, isCrit) {
-  // Queue event for client-side rendering
+  // PERFORMANCE: Always show crits, throttle normal damage numbers
+  if (!isCrit && visualEventCount >= MAX_VISUAL_EVENTS_PER_TICK) return;
+  visualEventCount++;
   queueEvent("damage", { x, y, amount, isCrit });
 }
 
@@ -1525,6 +1533,7 @@ function tick() {
 
   try {
     tickCount++;
+    visualEventCount = 0; // PERFORMANCE: Reset visual event throttle counter
     
     // Handle pause countdown
     if (pauseCountdown > 0) {
@@ -2340,7 +2349,13 @@ function tick() {
                 b.x = m.x + (dx / dist) * (m.r + 5); // Move bullet outside current enemy
                 b.y = m.y + (dy / dist) * (m.r + 5);
                 b.dead = false; // Keep bullet alive!
-                queueEvent("pinballBounce", { x: m.x, y: m.y, tx: nearestTarget.x, ty: nearestTarget.y });
+                // DESYNC FIX: Send bullet ID and new position/velocity so client can sync
+                queueEvent("pinballBounce", { 
+                  id: b.id, // Bullet ID so client can update the right bullet
+                  x: b.x, y: b.y, // New position
+                  vx: b.vx, vy: b.vy, // New velocity
+                  tx: nearestTarget.x, ty: nearestTarget.y // Target for visual tracer
+                });
               }
             }
           }
@@ -2935,6 +2950,7 @@ function broadcastGameState() {
     obj.vx = Math.round(m.vx * 10) / 10;
     obj.vy = Math.round(m.vy * 10) / 10;
     obj.inFTL = m.inFTL;
+    obj.targetSlot = m.targetSlot; // For client-side collision prediction
     // Optional fields - set or delete
     if (m.attackType) obj.attackType = m.attackType; else delete obj.attackType;
     if (m.isPhased) obj.isPhased = true; else delete obj.isPhased;
