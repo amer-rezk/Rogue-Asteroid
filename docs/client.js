@@ -1382,14 +1382,8 @@
       }
     }
     
-    // Debug: Log state when clicking in upgrade card area
-    if (phase === "playing" && upgradeOptions.length > 0 && !upgradePicked) {
-      console.log('Click debug - hoveredUpgrade:', hoveredUpgrade, 'mouseX:', mouseX, 'mouseY:', mouseY);
-    }
-    
     if (phase === "playing" && hoveredUpgrade >= 0 && !upgradePicked && upgradeOptions.length > 0) {
       const opt = upgradeOptions[hoveredUpgrade];
-      console.log('Picking upgrade:', opt?.key);
       if (opt) send({ t: "pickUpgrade", key: opt.key });
       mouseDown = false;
       return;
