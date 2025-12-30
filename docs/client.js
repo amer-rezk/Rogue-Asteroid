@@ -3032,125 +3032,130 @@
                 ctx.fill();
                 ctx.stroke();
 
-                if (!isDead) setShadow(ctx, tColor, 8 + level * 2);
-
-                // Rotating turret part
-                ctx.save();
-                ctx.translate(tx, ty - platformH);
-                ctx.rotate(towerAngle + Math.PI / 2);
-
-                if (typeInfo.name === "Gatling") {
-                  const bodyW = 14 * sx * scale;
-                  const bodyH = 12 * sy * scale;
-                  ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
-                  ctx.strokeStyle = hexToRgba(tColor, towerAlpha);
-                  ctx.lineWidth = 1;
-                  ctx.beginPath();
-                  ctx.roundRect(-bodyW / 2, -bodyH, bodyW, bodyH, 3);
-                  ctx.fill();
-                  ctx.stroke();
-                  // Triple barrels
-                  for (let b = -1; b <= 1; b++) {
-                    ctx.fillStyle = hexToRgba(tColor, towerAlpha);
-                    ctx.fillRect(b * 3 * sx * scale - 1 * sx * scale, -bodyH - 10 * sy * scale, 2 * sx * scale, 12 * sy * scale);
-                  }
-                } else if (typeInfo.name === "Sniper") {
-                const bodyW = 10 * sx * scale;
-                const bodyH = 14 * sy * scale;
-                ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
-                ctx.strokeStyle = hexToRgba(tColor, towerAlpha);
-                ctx.lineWidth = 1;
-                ctx.beginPath();
-                ctx.roundRect(-bodyW / 2, -bodyH, bodyW, bodyH, 2);
-                ctx.fill();
-                ctx.stroke();
-                // Long barrel
-                ctx.fillStyle = hexToRgba(tColor, towerAlpha);
-                ctx.fillRect(-1.5 * sx * scale, -bodyH - 14 * sy * scale, 3 * sx * scale, 16 * sy * scale);
-                // Scope
-                ctx.fillStyle = hexToRgba("#00ffaa", towerAlpha);
-                ctx.beginPath();
-                ctx.arc(5 * sx * scale, -bodyH + 4 * sy * scale, 2 * sx * scale, 0, Math.PI * 2);
-                ctx.fill();
-              } else if (typeInfo.name === "Missile") {
-                const bodyW = 16 * sx * scale;
-                const bodyH = 12 * sy * scale;
-                ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
-                ctx.strokeStyle = hexToRgba(tColor, towerAlpha);
-                ctx.lineWidth = 1;
-                ctx.beginPath();
-                ctx.roundRect(-bodyW / 2, -bodyH, bodyW, bodyH, 3);
-                ctx.fill();
-                ctx.stroke();
-                // Missile tubes
-                ctx.fillStyle = "#222";
-                for (let m = -1; m <= 1; m += 2) {
-                  ctx.beginPath();
-                  ctx.arc(m * 4 * sx * scale, -bodyH / 2, 3 * sx * scale, 0, Math.PI * 2);
-                  ctx.fill();
-                }
-                // Missile tips
-                ctx.fillStyle = hexToRgba("#ff6600", towerAlpha);
-                for (let m = -1; m <= 1; m += 2) {
-                  ctx.beginPath();
-                  ctx.arc(m * 4 * sx * scale, -bodyH - 2 * sy * scale, 2 * sx * scale, 0, Math.PI * 2);
-                  ctx.fill();
-                }
-              }
-              
-              // Check for Copycat module - render mini main turret
-              const hasCopycat = t.modules && t.modules.includes && t.modules.includes("copycat");
-              if (hasCopycat) {
-                // Draw a mini version of the main turret using the same sprites
-                const hasBase = turretImages.base.complete && turretImages.base.naturalWidth > 0;
-                const hasBarrel = turretImages.barrel.complete && turretImages.barrel.naturalWidth > 0;
+                // Check for Copycat module - render mini main turret INSTEAD of normal tower
+                const hasCopycat = t.modules && t.modules.includes && t.modules.includes("copycat");
                 
-                if (hasBase && hasBarrel) {
-                  const miniScale = 0.35; // Smaller than main turret
-                  const baseAspect = turretImages.base.naturalWidth / turretImages.base.naturalHeight;
-                  const baseW = 43.75 * sx * miniScale;
-                  const baseH = baseW / baseAspect;
+                if (hasCopycat) {
+                  // Draw a mini version of the main turret using the same sprites
+                  const hasBase = turretImages.base.complete && turretImages.base.naturalWidth > 0;
+                  const hasBarrel = turretImages.barrel.complete && turretImages.barrel.naturalWidth > 0;
                   
-                  const barrelAspect = turretImages.barrel.naturalWidth / turretImages.barrel.naturalHeight;
-                  const barrelH = 35 * sy * miniScale;
-                  const barrelW = barrelH * barrelAspect;
-                  
-                  // Position mini turret above the platform
-                  const turretCenterX = tx;
-                  const turretCenterY = ty - platformH - baseH / 2;
-                  
-                  ctx.save();
-                  ctx.globalAlpha = towerAlpha;
-                  
-                  // Mirror glow effect (purple/blue tint to show it's a copy)
-                  if (!isDead) {
-                    ctx.shadowColor = "#aaaaff";
-                    ctx.shadowBlur = 10;
+                  if (hasBase && hasBarrel) {
+                    const miniScale = 0.5; // 50% of main turret size
+                    const baseAspect = turretImages.base.naturalWidth / turretImages.base.naturalHeight;
+                    const baseW = 43.75 * sx * miniScale;
+                    const baseH = baseW / baseAspect;
+                    
+                    const barrelAspect = turretImages.barrel.naturalWidth / turretImages.barrel.naturalHeight;
+                    const barrelH = 35 * sy * miniScale;
+                    const barrelW = barrelH * barrelAspect;
+                    
+                    // Position mini turret on the platform
+                    const turretCenterX = tx;
+                    const turretCenterY = ty - platformH - baseH / 2;
+                    
+                    ctx.save();
+                    ctx.globalAlpha = towerAlpha;
+                    
+                    // Glow effect matching player color
+                    if (!isDead) {
+                      setShadow(ctx, color.main, 12);
+                    }
+                    
+                    // Draw mini base on platform
+                    ctx.drawImage(turretImages.base, tx - baseW / 2, ty - platformH - baseH, baseW, baseH);
+                    
+                    clearShadow(ctx);
+                    
+                    // Draw mini rotating barrel
+                    ctx.save();
+                    ctx.translate(turretCenterX, turretCenterY);
+                    ctx.rotate(towerAngle + Math.PI / 2);
+                    ctx.drawImage(turretImages.barrel, -barrelW / 2, -barrelH * 0.75, barrelW, barrelH);
+                    ctx.restore();
+                    
+                    ctx.restore();
+                  } else {
+                    // Fallback if images not loaded - draw simple copy
+                    if (!isDead) setShadow(ctx, color.main, 10);
+                    ctx.save();
+                    ctx.translate(tx, ty - platformH);
+                    ctx.rotate(towerAngle + Math.PI / 2);
+                    ctx.fillStyle = hexToRgba(color.main, towerAlpha);
+                    ctx.fillRect(-3 * sx * scale, -20 * sy * scale, 6 * sx * scale, 20 * sy * scale);
+                    ctx.restore();
+                    clearShadow(ctx);
                   }
-                  
-                  // Draw mini base
-                  ctx.drawImage(turretImages.base, tx - baseW / 2, ty - platformH - baseH, baseW, baseH);
-                  
-                  ctx.shadowBlur = 0;
-                  
-                  // Draw mini rotating barrel
+                } else {
+                  // Normal tower rendering
+                  if (!isDead) setShadow(ctx, tColor, 8 + level * 2);
+
+                  // Rotating turret part
                   ctx.save();
-                  ctx.translate(turretCenterX, turretCenterY);
+                  ctx.translate(tx, ty - platformH);
                   ctx.rotate(towerAngle + Math.PI / 2);
-                  ctx.drawImage(turretImages.barrel, -barrelW / 2, -barrelH * 0.75, barrelW, barrelH);
+
+                  if (typeInfo.name === "Gatling") {
+                    const bodyW = 14 * sx * scale;
+                    const bodyH = 12 * sy * scale;
+                    ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
+                    ctx.strokeStyle = hexToRgba(tColor, towerAlpha);
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.roundRect(-bodyW / 2, -bodyH, bodyW, bodyH, 3);
+                    ctx.fill();
+                    ctx.stroke();
+                    // Triple barrels
+                    for (let b = -1; b <= 1; b++) {
+                      ctx.fillStyle = hexToRgba(tColor, towerAlpha);
+                      ctx.fillRect(b * 3 * sx * scale - 1 * sx * scale, -bodyH - 10 * sy * scale, 2 * sx * scale, 12 * sy * scale);
+                    }
+                  } else if (typeInfo.name === "Sniper") {
+                    const bodyW = 10 * sx * scale;
+                    const bodyH = 14 * sy * scale;
+                    ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
+                    ctx.strokeStyle = hexToRgba(tColor, towerAlpha);
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.roundRect(-bodyW / 2, -bodyH, bodyW, bodyH, 2);
+                    ctx.fill();
+                    ctx.stroke();
+                    // Long barrel
+                    ctx.fillStyle = hexToRgba(tColor, towerAlpha);
+                    ctx.fillRect(-1.5 * sx * scale, -bodyH - 14 * sy * scale, 3 * sx * scale, 16 * sy * scale);
+                    // Scope
+                    ctx.fillStyle = hexToRgba("#00ffaa", towerAlpha);
+                    ctx.beginPath();
+                    ctx.arc(5 * sx * scale, -bodyH + 4 * sy * scale, 2 * sx * scale, 0, Math.PI * 2);
+                    ctx.fill();
+                  } else if (typeInfo.name === "Missile") {
+                    const bodyW = 16 * sx * scale;
+                    const bodyH = 12 * sy * scale;
+                    ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
+                    ctx.strokeStyle = hexToRgba(tColor, towerAlpha);
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.roundRect(-bodyW / 2, -bodyH, bodyW, bodyH, 3);
+                    ctx.fill();
+                    ctx.stroke();
+                    // Missile tubes
+                    ctx.fillStyle = "#222";
+                    for (let m = -1; m <= 1; m += 2) {
+                      ctx.beginPath();
+                      ctx.arc(m * 4 * sx * scale, -bodyH / 2, 3 * sx * scale, 0, Math.PI * 2);
+                      ctx.fill();
+                    }
+                    // Missile tips
+                    ctx.fillStyle = hexToRgba("#ff6600", towerAlpha);
+                    for (let m = -1; m <= 1; m += 2) {
+                      ctx.beginPath();
+                      ctx.arc(m * 4 * sx * scale, -bodyH - 2 * sy * scale, 2 * sx * scale, 0, Math.PI * 2);
+                      ctx.fill();
+                    }
+                  }
                   ctx.restore();
-                  
-                  ctx.restore();
-                  
-                  // Draw mirror icon indicator
-                  ctx.font = `${8 * sx}px sans-serif`;
-                  ctx.textAlign = "center";
-                  ctx.fillStyle = "#aaaaff";
-                  ctx.fillText("🪞", tx, ty - platformH - baseH - 5 * sy);
+                  clearShadow(ctx);
                 }
-              }
-              ctx.restore();
-              clearShadow(ctx);
 
               // Level stars
               if (level > 1) {

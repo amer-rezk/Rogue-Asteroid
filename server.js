@@ -641,9 +641,9 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
   const r = sizeMap[type] || 12;
   const speedMult = type === "boss" ? 0.3 : (type === "miniboss" ? 0.5 : (attackType ? (ATTACK_TYPES[attackType]?.speed || 1) : 1)); // Mini-boss slightly faster than boss
   
-  let waveSpeedBonus = wave >= 5 ? 1 + (wave - 5) * 0.03125 : 1;  // +25% speed scaling (was 0.025)
+  let waveSpeedBonus = wave >= 5 ? 1 + (wave - 5) * 0.022 : 1;  // -30% speed scaling (was 0.03125)
   if (wave >= 20) {
-    waveSpeedBonus += (wave - 19) * 0.047;  // +25% speed scaling (was 0.0375)
+    waveSpeedBonus += (wave - 19) * 0.033;  // -30% speed scaling (was 0.047)
   }
   const baseVy = rand(25, 40) * speedMult;
   const vy = baseVy * waveSpeedBonus;
@@ -1673,42 +1673,34 @@ function tick() {
                 }
               }
               
-              // COPYCAT MODULE: Override to copy main turret at 50%
+              // COPYCAT MODULE: Becomes an exact 50% copy of main turret
               if (activeModules.includes("copycat")) {
-                // Use main turret's fire rate at 50% effectiveness
+                // Use main turret's base cooldown with 50% of fire rate bonus
                 const mainFireRate = p.upgrades?.fireRateMult ?? 1;
-                tower.cd = TOWER_STATS[tower.type].cooldown / levelBonus / (1 + (mainFireRate - 1) * 0.5);
+                const halfFireRate = 1 + (mainFireRate - 1) * 0.5;
+                tower.cd = BULLET_COOLDOWN / halfFireRate;
                 
-                // Fire with main turret's multishot at 50% (minimum 1)
-                const mainMultishot = Math.max(1, Math.floor((p.upgrades?.multishot ?? 1) * 0.5));
-                const bulletSpeed = BULLET_SPEED * (1 + ((p.upgrades?.bulletSpeedMult ?? 1) - 1) * 0.5);
-                
-                // Calculate spread for multishot
-                const spread = 0.08;
-                for (let shot = 0; shot < mainMultishot; shot++) {
-                  let angleOffset = 0;
-                  if (mainMultishot > 1) {
-                    angleOffset = spread * (shot - (mainMultishot - 1) / 2);
+                // Create a "half owner" with 50% of all main turret stats
+                const halfOwner = {
+                  id: p.id,
+                  slot: p.slot,
+                  gold: p.gold,
+                  upgrades: {
+                    multishot: Math.max(1, Math.floor((p.upgrades?.multishot ?? 1) * 0.5)),
+                    damageAdd: (p.upgrades?.damageAdd ?? 0) * 0.5,
+                    bulletSpeedMult: 1 + ((p.upgrades?.bulletSpeedMult ?? 1) - 1) * 0.5,
+                    critChance: (p.upgrades?.critChance ?? 0) * 0.5,
+                    explosive: Math.floor((p.upgrades?.explosive ?? 0) * 0.5),
+                    ricochet: Math.floor((p.upgrades?.ricochet ?? 0) * 0.5),
+                    pierce: Math.floor((p.upgrades?.pierce ?? 0) * 0.5),
+                    chainChance: (p.upgrades?.chainChance ?? 0) * 0.5,
+                    fireRateMult: halfFireRate,
+                    multishotDmgMult: p.upgrades?.multishotDmgMult ?? 1, // Keep full penalty
                   }
-                  
-                  const copycatProps = {
-                    bulletType: "main", // Same visual as main turret
-                    level: tower.level,
-                    damage: (BULLET_DAMAGE + (u.damageAdd ?? 0)) * 0.5, // 50% of main turret damage
-                    bulletSpeedMult: 1 + ((u.bulletSpeedMult ?? 1) - 1) * 0.5,
-                    critChance: (u.critChance ?? 0) * 0.5,
-                    explosive: Math.floor((u.explosive ?? 0) * 0.5),
-                    lifespanAdd: 0,
-                    ricochet: Math.floor((u.ricochet ?? 0) * 0.5),
-                    pierce: Math.floor((u.pierce ?? 0) * 0.5),
-                    chainChance: (u.chainChance ?? 0) * 0.5,
-                    inheritedUpgrades: true,
-                    modules: activeModules.filter(m => m !== "copycat"), // Don't recurse copycat
-                    ownerGold: p.gold,
-                    isCopycat: true, // Flag for client rendering
-                  };
-                  fireBullet(p, towerPos.x, towerPos.y, aim.x, aim.y, angleOffset, copycatProps);
-                }
+                };
+                
+                // Fire using the same logic as main turret
+                fireWithMultishot(halfOwner, towerPos.x, towerPos.y, aim.x, aim.y, false);
               } else {
                 // Normal tower firing
                 const towerProps = {
