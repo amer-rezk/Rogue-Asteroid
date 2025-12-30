@@ -101,13 +101,24 @@ const ATTACK_TYPES = {
 };
 
 // ===== Tower Modules (Boss Rewards) =====
+// SYNERGY DESIGN PHILOSOPHY:
+// Modules should work TOGETHER! When a bullet spawns child bullets (shards, ricochets),
+// those children should inherit the parent's modules so effects can chain and combo.
+// Example combos that should work:
+// - Fractal Prism + Viral Payload = shards can infect enemies
+// - Fractal Prism + Taxman = shards generate gold on hit
+// - Ricochet + Viral = bouncing bullets spread infection
+// - Pinball Wizard + Vampiric = each bounce heals you
+// IMPORTANT: When adding new modules or bullet-spawning effects, ALWAYS pass modules
+// to child bullets! The only exception is preventing infinite recursion (e.g. shards
+// should NOT inherit Fractal Prism or they'd spawn infinite shards).
 const TOWER_MODULES = {
   fractalPrism: {
     id: "fractalPrism",
     name: "Fractal Prism",
     icon: "💎",
     color: "#00ffff",
-    desc: "Bullets shatter into 3 smaller bullets on hit",
+    desc: "Bullets shatter into 4 smaller bullets on hit",
     effect: "shatter"
   },
   midasCapacitor: {
@@ -2057,12 +2068,23 @@ function tick() {
           b.hitSet.add(m.id);
           
           // ===== TOWER MODULE EFFECTS ON HIT =====
+          // SYNERGY SYSTEM: Modules should work together! When spawning child bullets
+          // (shards, ricochets, etc.), inherit the parent's modules so effects chain.
+          // Example: Fractal Prism + Viral Payload = shards can infect enemies
+          // Example: Fractal Prism + Taxman = shards generate gold on hit
+          // IMPORTANT: Always pass modules to child bullets to enable creative combos!
           const bulletModules = b.modules || [];
           const owner = players.get(b.ownerId);
           
           // Fractal Prism: Shatter into 4 smaller bullets (2 Left, 2 Right)
+          // SYNERGY: Shards inherit all modules EXCEPT fractalPrism itself (prevents infinite recursion)
+          // This allows combos like: Fractal + Viral (infectious shards), Fractal + Taxman (gold shards)
           if (bulletModules.includes("fractalPrism") && bullets.length < MAX_BULLETS) {
             const shardsToSpawn = Math.min(4, MAX_BULLETS - bullets.length);
+            
+            // Filter out fractalPrism to prevent shards spawning more shards (infinite loop)
+            // Keep all OTHER modules so shards can infect, generate gold, heal, etc.
+            const shardModules = bulletModules.filter(mod => mod !== "fractalPrism");
             
             // Define 4 specific angles: 2 Right (approx 0), 2 Left (approx PI)
             // 0.4 radians is about 23 degrees
@@ -2078,6 +2100,8 @@ function tick() {
               const shardVx = Math.cos(angle) * 100;
               const shardVy = Math.sin(angle) * 100;
               
+              // SYNERGY: Shards inherit modules, ricochet, pierce, chain chance from parent
+              // This enables powerful combos where shards continue the parent's effects
               const shard = {
                 id: uid(),
                 ownerId: b.ownerId,
@@ -2086,18 +2110,18 @@ function tick() {
                 y: m.y,
                 vx: shardVx,
                 vy: shardVy,
-                r: 2,
+                r: b.r * 0.6, // Smaller than parent but scales with caliber
                 dmg: b.dmg * 0.3,
                 isCrit: false,
-                explosive: 0,
+                explosive: Math.floor(b.explosive * 0.5), // Half explosive power
                 lifespan: 1.0,
                 isTowerBullet: true,
                 bulletType: "shard",
-                chainChance: 0,
-                ricochet: 0,
-                pierce: 0,
+                chainChance: b.chainChance, // Inherit chain lightning chance
+                ricochet: b.ricochet, // Inherit ricochet stacks - shards can chain too!
+                pierce: b.pierce, // Inherit pierce - shards can pierce too!
                 hitSet: new Set([m.id]), 
-                modules: [],
+                modules: shardModules, // SYNERGY: Inherit modules for combo effects!
                 bulletColor: "#00ffff",
               };
               bullets.push(shard);
@@ -2118,6 +2142,7 @@ function tick() {
           }
           
           // Quantum Displacer: 20% chance to teleport enemy to top
+          // SYNERGY: Inherited by shards/ricochets - each child bullet has 20% teleport chance!
           if (bulletModules.includes("quantumDisplacer") && Math.random() < 0.2 && m.hp > 0) {
             m.y = -m.r - 20;
             m.inFTL = true;
@@ -2125,6 +2150,7 @@ function tick() {
           }
           
           // Gravity Well: Create gravity pull effect
+          // SYNERGY: Shards can create multiple gravity wells, ricochets leave wells at each bounce!
           if (bulletModules.includes("gravityWell") && m.hp > 0) {
             gravityWells.push({
               x: m.x,
@@ -2139,6 +2165,7 @@ function tick() {
           }
           
           // Vampiric Nanobots: Accumulate damage for healing
+          // SYNERGY: All child bullets (shards, ricochets) contribute to healing pool!
           if (bulletModules.includes("vampiricNanobots") && owner) {
             owner.lifestealAccum = (owner.lifestealAccum || 0) + b.dmg * 2; // x2 because we halved damage
             if (owner.lifestealAccum >= 100) {
@@ -2150,6 +2177,7 @@ function tick() {
           }
           
           // Matter Compressor: Shrink enemy
+          // SYNERGY: Shards can shrink multiple enemies, ricochets shrink each target they hit!
           if (bulletModules.includes("matterCompressor") && m.hp > 0) {
             m.r *= 0.9; // Shrink 10%
             if (m.r < 5) {
@@ -2159,12 +2187,15 @@ function tick() {
           }
           
           // Chain Reaction: Add static charge
+          // SYNERGY: Shards add charge to multiple enemies, building up chain explosions faster!
           if (bulletModules.includes("chainReaction") && m.hp > 0) {
             m.staticCharge = (m.staticCharge || 0) + b.dmg;
             m.staticColor = "#ffff00";
           }
           
           // Ricochet (wave card): Spawn new bullet toward nearest enemy
+          // SYNERGY: Ricochet bullets inherit ALL modules and stats from parent bullet
+          // This enables combos like: Ricochet + Viral (chain infection), Ricochet + Fractal (bouncing shards)
           // -10% damage per bounce, vanishes if no target found
           // Triggers even if this asteroid dies from the hit
           if (b.ricochet > 0 && bullets.length < MAX_BULLETS) {
@@ -2198,7 +2229,8 @@ function tick() {
               const dy = intercept.y - m.y;
               const dist = Math.hypot(dx, dy);
               
-              // Spawn fresh bullet from enemy position
+              // SYNERGY: Spawn fresh bullet that inherits everything from parent
+              // Modules, pierce, chain chance, explosive - all carry forward!
               const newBullet = {
                 id: uid(),
                 ownerId: b.ownerId,
@@ -2207,18 +2239,18 @@ function tick() {
                 y: m.y + (dy / dist) * (m.r + 5),
                 vx: (dx / dist) * bulletSpeed,
                 vy: (dy / dist) * bulletSpeed,
-                r: b.r,
-                dmg: b.dmg * 0.9, // -10% damage
+                r: b.r, // Inherit size (caliber upgrade)
+                dmg: b.dmg * 0.9, // -10% damage per bounce
                 isCrit: b.isCrit,
-                explosive: b.explosive,
+                explosive: b.explosive, // Inherit explosive
                 lifespan: 3.0,
                 isTowerBullet: b.isTowerBullet,
                 bulletType: b.bulletType,
-                chainChance: b.chainChance,
-                ricochet: b.ricochet - 1,
-                pierce: b.pierce,
-                hitSet: new Set([m.id, ...(b.hitSet || [])]),
-                modules: b.modules || [],
+                chainChance: b.chainChance, // Inherit chain lightning
+                ricochet: b.ricochet - 1, // Decrement ricochet counter
+                pierce: b.pierce, // Inherit pierce
+                hitSet: new Set([m.id, ...(b.hitSet || [])]), // Track hit enemies
+                modules: b.modules || [], // SYNERGY: Inherit ALL modules!
                 bulletColor: b.bulletColor,
               };
               bullets.push(newBullet);
@@ -2244,7 +2276,9 @@ function tick() {
             }
           }
           
-          // Pinball Wizard (boss module): Additional enemy bouncing with hardcoded 4 bounces
+          // Pinball Wizard (boss module): Bounce between enemies up to 4 times
+          // SYNERGY: Pinball redirects the SAME bullet, so all modules stay active!
+          // Combos naturally: Pinball + Viral (infects each bounce), Pinball + Taxman (gold each hit)
           if (bulletModules.includes("pinballWizard") && m.hp > 0) {
             const maxBounces = 4;
             b.enemyBounces = (b.enemyBounces || 0) + 1;
@@ -2286,12 +2320,14 @@ function tick() {
           }
           
           // Taxman: Generate gold on hit (damage already reduced at bullet creation)
+          // SYNERGY: Works with any bullet source - shards, ricochets, pinballs all generate gold!
           if (bulletModules.includes("taxman") && owner) {
             owner.gold = (owner.gold || 0) + 1;
             queueEvent("taxmanGold", { slot: owner.slot, x: m.x, y: m.y });
           }
           
           // Viral Payload: Infect enemy with spreading DOT
+          // SYNERGY: Shards, ricochets, pinballs can all spread infection!
           if (bulletModules.includes("viralPayload") && m.hp > 0) {
             if (!m.infected) {
               m.infected = true;
