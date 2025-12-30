@@ -1252,11 +1252,11 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     finalDmg *= 0.1;
   }
   
-  // Apply bullet size upgrade (after module effects so it stacks with Confetti)
+  // Apply bullet size upgrade (mult type like bulletSpeedMult, starts at 1)
   if (!overrideProps && owner.upgrades?.bulletSize) {
-    bulletR *= (1 + owner.upgrades.bulletSize);
+    bulletR *= owner.upgrades.bulletSize;
   } else if (overrideProps?.inheritedUpgrades && overrideProps.bulletSize) {
-    bulletR *= (1 + overrideProps.bulletSize);
+    bulletR *= overrideProps.bulletSize;
   }
 
   let dx = targetX - originX;
@@ -1714,7 +1714,7 @@ function tick() {
                     bulletSpeedMult: 1 + ((p.upgrades?.bulletSpeedMult ?? 1) - 1) * 0.5,
                     critChance: (p.upgrades?.critChance ?? 0) * 0.5,
                     explosive: Math.floor((p.upgrades?.explosive ?? 0) * 0.5),
-                    bulletSize: (p.upgrades?.bulletSize ?? 0) * 0.5,
+                    bulletSize: 1 + ((p.upgrades?.bulletSize ?? 1) - 1) * 0.5,
                     ricochet: Math.floor((p.upgrades?.ricochet ?? 0) * 0.5),
                     pierce: Math.floor((p.upgrades?.pierce ?? 0) * 0.5),
                     chainChance: (p.upgrades?.chainChance ?? 0) * 0.5,
@@ -1734,7 +1734,7 @@ function tick() {
                   bulletSpeedMult: 1 + ((u.bulletSpeedMult ?? 1) - 1) * 0.5,
                   critChance: (u.critChance ?? 0) * 0.5,
                   explosive: (stats.explosive || 0) + Math.floor((u.explosive ?? 0) * 0.5),
-                  bulletSize: (u.bulletSize ?? 0) * 0.5,
+                  bulletSize: 1 + ((u.bulletSize ?? 1) - 1) * 0.5,
                   lifespanAdd: (u.lifespanAdd ?? 0) * 0.5,
                   ricochet: Math.floor((u.ricochet ?? 0) * 0.5),
                   pierce: (stats.bulletType === "sniper" ? 1 : 0) + Math.floor((u.pierce ?? 0) * 0.5),
@@ -2166,7 +2166,8 @@ function tick() {
           
           // Ricochet (wave card): Spawn new bullet toward nearest enemy
           // -10% damage per bounce, vanishes if no target found
-          if (b.ricochet > 0 && m.hp > 0 && bullets.length < MAX_BULLETS) {
+          // Triggers even if this asteroid dies from the hit
+          if (b.ricochet > 0 && bullets.length < MAX_BULLETS) {
             // Find nearest enemy (excluding ones we've already hit)
             const bounceRange = 250;
             const bounceRangeSq = bounceRange * bounceRange;
@@ -2953,7 +2954,7 @@ function broadcastGameState() {
     obj.upgrades.multishot = u.multishot || 1;
     obj.upgrades.critChance = u.critChance || 0;
     obj.upgrades.explosive = u.explosive || 0;
-    obj.upgrades.bulletSize = u.bulletSize || 0;
+    obj.upgrades.bulletSize = u.bulletSize || 1;
     obj.upgrades.pierce = u.pierce || 0;
 	obj.upgrades.slowfield = u.slowfield || 0;
     obj.upgrades.ricochet = u.ricochet || 0;
