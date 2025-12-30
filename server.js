@@ -2146,6 +2146,7 @@ function tick() {
           
           // Ricochet (wave card): Chain between enemies using prediction targeting
           // -10% damage per bounce, vanishes if no target found
+          let didRicochet = false;
           if (b.ricochet > 0 && m.hp > 0) {
             // Find nearest enemy (excluding ones we've already hit)
             const bounceRange = 200;
@@ -2187,7 +2188,7 @@ function tick() {
               b.dmg *= 0.9;
               b.ricochet--;
               
-              b.dead = false; // Keep bullet alive!
+              didRicochet = true; // Flag to skip pierce death
             } else {
               // No target found - bullet vanishes (don't keep bouncing)
               b.ricochet = 0;
@@ -2309,8 +2310,8 @@ function tick() {
                 slot: b.ownerSlot
               });
             }
-          } else {
-            // Normal bullet behavior
+          } else if (!didRicochet) {
+            // Normal bullet behavior (skip if ricochet redirected)
             if (b.pierce > 0) { b.pierce--; } else { b.dead = true; }
           }
           

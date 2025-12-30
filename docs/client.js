@@ -3947,6 +3947,66 @@
                   ctx.fillStyle = "#fff";
                   ctx.textAlign = "center";
                   ctx.fillText(mod.icon, slotX + slotSize / 2, slotY + slotSize / 2 + 4);
+                  
+                  // Tooltip for slotted module on hover
+                  if (isSlotHovered) {
+                    const tooltipW = 180;
+                    const tooltipH = 80;
+                    let tooltipX = slotX + slotSize + 10;
+                    let tooltipY = slotY - 20;
+                    
+                    // Keep tooltip on screen
+                    if (tooltipX + tooltipW > canvas.width - 10) {
+                      tooltipX = slotX - tooltipW - 10;
+                    }
+                    if (tooltipY + tooltipH > canvas.height - 10) {
+                      tooltipY = canvas.height - tooltipH - 10;
+                    }
+                    if (tooltipY < 10) tooltipY = 10;
+                    
+                    // Tooltip background
+                    ctx.fillStyle = "rgba(5,5,20,0.97)";
+                    ctx.strokeStyle = mod.color;
+                    ctx.lineWidth = 2;
+                    ctx.shadowColor = mod.color;
+                    ctx.shadowBlur = 12;
+                    ctx.beginPath();
+                    ctx.roundRect(tooltipX, tooltipY, tooltipW, tooltipH, 6);
+                    ctx.fill();
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+                    
+                    // Module name
+                    ctx.font = "bold 12px 'Courier New', monospace";
+                    ctx.fillStyle = mod.color;
+                    ctx.textAlign = "left";
+                    ctx.fillText(`${mod.icon} ${mod.name}`, tooltipX + 8, tooltipY + 18);
+                    
+                    // Description
+                    ctx.font = "10px 'Courier New', monospace";
+                    ctx.fillStyle = "#ddd";
+                    const desc = mod.desc || "No description.";
+                    const maxLineW = tooltipW - 16;
+                    const words = desc.split(" ");
+                    let line = "";
+                    let lineY = tooltipY + 36;
+                    const lineHeight = 14;
+                    for (const word of words) {
+                      const testLine = line + (line ? " " : "") + word;
+                      if (ctx.measureText(testLine).width > maxLineW) {
+                        ctx.fillText(line, tooltipX + 8, lineY);
+                        line = word;
+                        lineY += lineHeight;
+                        if (lineY > tooltipY + tooltipH - 8) break;
+                      } else {
+                        line = testLine;
+                      }
+                    }
+                    if (line && lineY <= tooltipY + tooltipH - 8) {
+                      ctx.fillText(line, tooltipX + 8, lineY);
+                    }
+                    ctx.textAlign = "center";
+                  }
                 } else {
                   // Empty slot - show + or selected module preview on hover
                   if (isSlotHovered && selectedMod) {
@@ -4326,6 +4386,66 @@
                   ctx.font = "bold 8px 'Courier New', monospace";
                   ctx.fillStyle = "#f00";
                   ctx.fillText("🔒" + lockWaves, slotX + slotSize / 2, slotY + slotSize - 2);
+                }
+                
+                // Tooltip for slotted module on hover
+                if (isSlotHovered) {
+                  const tooltipW = 200;
+                  const tooltipH = 90;
+                  let tooltipX = slotX + slotSize + 10;
+                  let tooltipY = slotY - 20;
+                  
+                  // Keep tooltip on screen
+                  if (tooltipX + tooltipW > canvas.width - 10) {
+                    tooltipX = slotX - tooltipW - 10;
+                  }
+                  if (tooltipY + tooltipH > canvas.height - 10) {
+                    tooltipY = canvas.height - tooltipH - 10;
+                  }
+                  if (tooltipY < 10) tooltipY = 10;
+                  
+                  // Tooltip background
+                  ctx.fillStyle = "rgba(5,5,20,0.97)";
+                  ctx.strokeStyle = mod.color;
+                  ctx.lineWidth = 2;
+                  ctx.shadowColor = mod.color;
+                  ctx.shadowBlur = 15;
+                  ctx.beginPath();
+                  ctx.roundRect(tooltipX, tooltipY, tooltipW, tooltipH, 8);
+                  ctx.fill();
+                  ctx.stroke();
+                  ctx.shadowBlur = 0;
+                  
+                  // Module name with icon
+                  ctx.font = "bold 14px 'Courier New', monospace";
+                  ctx.fillStyle = mod.color;
+                  ctx.textAlign = "left";
+                  ctx.fillText(`${mod.icon} ${mod.name}`, tooltipX + 10, tooltipY + 22);
+                  
+                  // Description text (word-wrapped)
+                  ctx.font = "12px 'Courier New', monospace";
+                  ctx.fillStyle = "#ddd";
+                  const desc = mod.desc || "No description.";
+                  const maxLineW = tooltipW - 20;
+                  const words = desc.split(" ");
+                  let line = "";
+                  let lineY = tooltipY + 45;
+                  const lineHeight = 16;
+                  for (const word of words) {
+                    const testLine = line + (line ? " " : "") + word;
+                    if (ctx.measureText(testLine).width > maxLineW) {
+                      ctx.fillText(line, tooltipX + 10, lineY);
+                      line = word;
+                      lineY += lineHeight;
+                      if (lineY > tooltipY + tooltipH - 10) break;
+                    } else {
+                      line = testLine;
+                    }
+                  }
+                  if (line && lineY <= tooltipY + tooltipH - 10) {
+                    ctx.fillText(line, tooltipX + 10, lineY);
+                  }
+                  ctx.textAlign = "center";
                 }
               } else {
                 // Empty slot
