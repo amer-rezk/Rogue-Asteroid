@@ -272,6 +272,11 @@
   let refundFeedback = null; // Feedback for attack refund
   let gameOverData = null;
   
+  // Latency tracking
+  let latency = 0;
+  let lastPingTime = 0;
+  let pingInterval = null;
+  
   // Module Card System
   let moduleCardPhase = false;
   let moduleCards = [];
@@ -712,10 +717,26 @@
 
       const name = nameInput.value.trim() || `Player`;
       if (name) ws.send(JSON.stringify({ t: "setName", name }));
+      
+      // Start ping interval for latency measurement
+      if (pingInterval) clearInterval(pingInterval);
+      pingInterval = setInterval(() => {
+        if (ws && ws.readyState === 1) {
+          lastPingTime = Date.now();
+          ws.send(JSON.stringify({ t: "ping", ts: lastPingTime }));
+        }
+      }, 2000); // Ping every 2 seconds
     };
 
     ws.onclose = () => {
       connected = false;
+      // Clear ping interval
+      if (pingInterval) {
+        clearInterval(pingInterval);
+        pingInterval = null;
+      }
+      latency = 0;
+      
       const currentStatus = statusText?.textContent || "";
       const wasRejected = currentStatus.includes("PROGRESS") || currentStatus.includes("FULL");
 
@@ -755,6 +776,13 @@
 
   function handleMessage(msg) {
     switch (msg.t) {
+      case "pong":
+        // Calculate round-trip latency
+        if (msg.ts) {
+          latency = Date.now() - msg.ts;
+        }
+        break;
+        
       case "welcome":
         myId = msg.id;
         mySlot = msg.slot;
@@ -1922,7 +1950,7 @@
       lastInputShooting = shooting;
     }
   }
-  setInterval(sendInput, 33); // 30Hz input rate (matches server broadcast)
+  setInterval(sendInput, 45); // ~22Hz input rate (matches server broadcast)
 
   // ===== Rendering =====
   function getScale() {
@@ -3102,6 +3130,16 @@
         }
         // Kills further right
         drawNeonText(`${myPlayer.kills} 💀`, 330, 25, "#f44", 14, "left");
+      }
+      
+      // Latency display (top right, before scoreboard)
+      if (latency > 0) {
+        ctx.font = "10px 'Courier New', monospace";
+        ctx.textAlign = "right";
+        const pingColor = latency < 50 ? "#0f0" : latency < 100 ? "#ff0" : latency < 200 ? "#f80" : "#f44";
+        ctx.fillStyle = pingColor;
+        ctx.fillText(`${latency}ms`, canvas.width - 20, 45);
+        ctx.textAlign = "left";
       }
 
       // Scoreboard

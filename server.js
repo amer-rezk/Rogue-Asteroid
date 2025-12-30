@@ -2,7 +2,7 @@
 // Competitive asteroid defense with attack purchasing
 // 
 // ARCHITECTURE:
-// - Server physics at 60Hz, broadcasts at 30Hz
+// - Server physics at 45Hz, broadcasts at ~22Hz (cloud-hosting friendly)
 // - Client renders with interpolation for smooth visuals
 // - This eliminates all desync - client always matches server
 // - Particles/damage numbers are client-side (visual only)
@@ -18,8 +18,8 @@ const { WebSocketServer } = require("ws");
 
 // ===== Game constants =====
 const MAX_PLAYERS = 4;
-const TICK_RATE = 60;          // Physics at 60Hz (smoother gameplay)
-const BROADCAST_RATE = 30;     // Network at 30Hz (doubled from 15Hz)
+const TICK_RATE = 45;          // Physics at 45Hz (balanced for cloud hosting)
+const BROADCAST_RATE = 22;     // Network at ~22Hz (smooth but not overwhelming)
 const DT = 1 / TICK_RATE;
 const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 2 ticks
 
@@ -2884,6 +2884,13 @@ wss.on("connection", (ws) => {
       }
       return;
     }
+    
+    // Ping/pong for latency measurement
+    if (msg.t === "ping") {
+      safeSend(ws, { t: "pong", ts: msg.ts });
+      return;
+    }
+    
     if (msg.t === "input" && phase === "playing") {
       p.targetX = Number(msg.x) || 0;
       p.targetY = Number(msg.y) || 0;
