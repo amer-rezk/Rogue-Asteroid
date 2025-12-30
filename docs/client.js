@@ -934,7 +934,7 @@
       case "upgrade":
         upgradeOptions = msg.options;
         upgradePicked = false;
-        buildMenuOpen = null;
+        // Don't close buildMenuOpen - let tower menu stay open
         if (msg.rerollCost !== undefined) currentRerollCost = msg.rerollCost;
         if (msg.queueSize !== undefined) upgradeQueueSize = msg.queueSize;
         if (msg.wave !== undefined) upgradeWaveNum = msg.wave;
@@ -1466,17 +1466,33 @@
       }
     }
 
-    // 2. Handle Tower Clicks (Drop Module)
-    if (selectedInventoryIndex !== -1 && lastSnap) {
+    // 2. Handle Tower Clicks (Drop Module) - when module is selected
+    if (selectedInventoryIndex !== -1 && lastSnap && !buildMenuOpen) {
       const myP = lastSnap.players.find(p => p.id === myId);
       if (myP) {
         const pos = turretPositions(myP.slot);
+        // Get scale to convert world to screen coords
+        const sw = canvas.width;
+        const sh = canvas.height;
+        const ww = world.width;
+        const wh = world.height;
+        const playerCount = lastSnap?.players?.length || 1;
+        const panelReserve = (playerCount > 1) ? 195 : 0;
+        const availableWidth = sw - panelReserve;
+        const scale = Math.min(availableWidth / ww, sh / wh);
+        const offsetX = (availableWidth - ww * scale) / 2;
+        const offsetY = (sh - wh * scale) / 2;
+        
         for (let tIdx = 0; tIdx < 4; tIdx++) {
            const tPos = pos.slots[tIdx];
-           const dx = mx - tPos.x;
-           const dy = my - tPos.y;
+           // Convert tower position to screen coordinates
+           const screenX = tPos.x * scale + offsetX;
+           const screenY = tPos.y * scale + offsetY;
+           const dx = mx - screenX;
+           const dy = my - screenY;
+           const hitRadius = 35 * scale; // Scale the hit radius too
            // Hit tower?
-           if (dx*dx + dy*dy < 30*30) {
+           if (dx*dx + dy*dy < hitRadius*hitRadius) {
              const tower = myP.towers[tIdx];
              if (tower) {
                // Find first empty slot
@@ -1506,11 +1522,15 @@
     // ===== END OF NEW INTERACTION CODE =====
 
     // (The original code continues below here...)
-  if (e.button === 0) { mouseDown = true; handleClick(); } });
+    if (e.button === 0) { mouseDown = true; handleClick(); }
+  });
   window.addEventListener("mouseup", (e) => { if (e.button === 0) mouseDown = false; });
   canvas.addEventListener("touchstart", (e) => { e.preventDefault(); mouseDown = true; if (e.touches[0]) { mouseX = e.touches[0].clientX; mouseY = e.touches[0].clientY; } handleClick(); });
   canvas.addEventListener("touchmove", (e) => { e.preventDefault(); if (e.touches[0]) { mouseX = e.touches[0].clientX; mouseY = e.touches[0].clientY; } });
   canvas.addEventListener("touchend", (e) => { e.preventDefault(); mouseDown = false; });
+  
+  // Prevent context menu on right-click (used for canceling module selection)
+  canvas.addEventListener("contextmenu", (e) => { e.preventDefault(); });
 
   // Keyboard handling for in-game chat
   let gameChatTyping = false;
@@ -3405,6 +3425,9 @@
       }
       
       // ===== INVENTORY PANEL (Module Cards) =====
+      // Clear inventory bounds at start
+      window.invBounds = [];
+      
       if (phase === "playing" && myPlayer && myPlayer.inventory && myPlayer.inventory.length > 0) {
         const MODULES = window.TOWER_MODULES || {};
         const inv = myPlayer.inventory;
@@ -3416,8 +3439,8 @@
         
         // Panel background
         ctx.fillStyle = "rgba(10,10,30,0.9)";
-        ctx.strokeStyle = "rgba(255,215,0,0.5)";
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = selectedInventoryIndex !== -1 ? "#00ff00" : "rgba(255,215,0,0.5)";
+        ctx.lineWidth = selectedInventoryIndex !== -1 ? 2 : 1;
         ctx.beginPath();
         ctx.roundRect(invPanelX, invPanelY, invPanelW, invPanelH, 8);
         ctx.fill();
@@ -3426,8 +3449,8 @@
         // Title
         ctx.font = "bold 10px 'Courier New', monospace";
         ctx.textAlign = "center";
-        ctx.fillStyle = "#ffd700";
-        ctx.fillText("🎴 INVENTORY", invPanelX + invPanelW / 2, invPanelY + 18);
+        ctx.fillStyle = selectedInventoryIndex !== -1 ? "#00ff00" : "#ffd700";
+        ctx.fillText(selectedInventoryIndex !== -1 ? "🎯 SELECT TOWER" : "🎴 INVENTORY", invPanelX + invPanelW / 2, invPanelY + 18);
         
         // Module cards in inventory
         const cardSize = 36;
@@ -3447,15 +3470,29 @@
           const cardY = startY + row * (cardSize + cardGap);
           
           const isHovered = mouseX >= cardX && mouseX <= cardX + cardSize && mouseY >= cardY && mouseY <= cardY + cardSize;
+          const isSelected = selectedInventoryIndex === i;
           
-          // Card background
-          ctx.fillStyle = isHovered ? hexToRgba(mod.color, 0.5) : hexToRgba(mod.color, 0.25);
-          ctx.strokeStyle = mod.color;
-          ctx.lineWidth = isHovered ? 2 : 1;
+          // Store bounds for click detection
+          window.invBounds[i] = { x: cardX, y: cardY, w: cardSize, h: cardSize };
+          
+          // Card background - highlight if selected
+          if (isSelected) {
+            ctx.fillStyle = hexToRgba("#00ff00", 0.6);
+            ctx.strokeStyle = "#00ff00";
+            ctx.lineWidth = 3;
+            ctx.shadowColor = "#00ff00";
+            ctx.shadowBlur = 10;
+          } else {
+            ctx.fillStyle = isHovered ? hexToRgba(mod.color, 0.5) : hexToRgba(mod.color, 0.25);
+            ctx.strokeStyle = mod.color;
+            ctx.lineWidth = isHovered ? 2 : 1;
+            ctx.shadowBlur = 0;
+          }
           ctx.beginPath();
           ctx.roundRect(cardX, cardY, cardSize, cardSize, 5);
           ctx.fill();
           ctx.stroke();
+          ctx.shadowBlur = 0;
           
           // Icon
           ctx.font = "20px sans-serif";
@@ -3463,8 +3500,8 @@
           ctx.fillStyle = "#fff";
           ctx.fillText(mod.icon, cardX + cardSize / 2, cardY + cardSize / 2 + 6);
           
-          // Store for click
-          if (isHovered) {
+          // Store for hover tooltip (but not for click - that uses invBounds now)
+          if (isHovered && !isSelected) {
             selectedInventoryModule = { index: i, moduleId };
             
             // Detailed tooltip panel
@@ -3537,7 +3574,7 @@
             ctx.font = "bold 10px 'Courier New', monospace";
             ctx.fillStyle = "#888";
             ctx.textAlign = "center";
-            ctx.fillText("Click tower slot to equip", tooltipX + tooltipW / 2, tooltipY + tooltipH - 8);
+            ctx.fillText("Click to select, then click tower", tooltipX + tooltipW / 2, tooltipY + tooltipH - 8);
           }
         }
         
@@ -3545,10 +3582,53 @@
         
         // Hint text
         ctx.font = "8px 'Courier New', monospace";
-        ctx.fillStyle = "#666";
+        ctx.fillStyle = selectedInventoryIndex !== -1 ? "#00ff00" : "#666";
         ctx.textAlign = "center";
-        ctx.fillText("Click tower to equip", invPanelX + invPanelW / 2, invPanelY + invPanelH - 6);
+        ctx.fillText(selectedInventoryIndex !== -1 ? "Right-click to cancel" : "Click module to select", invPanelX + invPanelW / 2, invPanelY + invPanelH - 6);
         ctx.textAlign = "left";
+      }
+      
+      // ===== TOWER SLOT HIGHLIGHTING (when module selected) =====
+      if (phase === "playing" && selectedInventoryIndex !== -1 && myPlayer && !buildMenuOpen) {
+        ctx.save();
+        const pos = turretPositions(myPlayer.slot);
+        const { sx, sy, offsetX, offsetY } = getScale();
+        
+        // Check all 4 tower slots
+        for (let tIdx = 0; tIdx < 4; tIdx++) {
+          const tower = myPlayer.towers[tIdx];
+          const tPos = pos.slots[tIdx];
+          
+          if (tower && tPos) {
+            // Check if tower has an empty slot
+            const firstEmptySlot = tower.modules.indexOf(null);
+            
+            if (firstEmptySlot !== -1) {
+              // Calculate screen position
+              const screenX = tPos.x * sx + offsetX;
+              const screenY = tPos.y * sy + offsetY;
+              
+              // PULSING HIGHLIGHT: Valid Drop Target
+              const pulse = Math.sin(Date.now() / 150) * 5;
+              ctx.strokeStyle = "#00ff00";
+              ctx.lineWidth = 3;
+              ctx.shadowColor = "#00ff00";
+              ctx.shadowBlur = 15;
+              
+              ctx.beginPath();
+              ctx.arc(screenX, screenY, 28 + pulse, 0, Math.PI * 2);
+              ctx.stroke();
+              
+              // Draw "CLICK" text above
+              ctx.font = "bold 11px sans-serif";
+              ctx.fillStyle = "#00ff00";
+              ctx.textAlign = "center";
+              ctx.fillText("CLICK", screenX, screenY - 38);
+              ctx.shadowBlur = 0;
+            }
+          }
+        }
+        ctx.restore();
       }
       
       // ===== STATS PANEL BUTTON & PANEL =====
@@ -4576,85 +4656,6 @@
           window.gameChatBounds = { x: chatX, y: chatY, w: chatW, h: chatH };
         }
       }
-	  
-	  // ===== MODULE INVENTORY & HIGHLIGHTING SYSTEM =====
-    const myP = lastSnap?.players.find(p => p.id === myId);
-    if (myP && myP.inventory) {
-      const invSize = 40;
-      const invPad = 10;
-      const totalInvW = myP.inventory.length * (invSize + invPad);
-      const invX = canvas.width / 2 - totalInvW / 2;
-      const invY = canvas.height - 80; // Bottom center
-
-      // 1. Draw Inventory Bar
-      for (let i = 0; i < myP.inventory.length; i++) {
-        const modId = myP.inventory[i];
-        const modDef = window.TOWER_MODULES[modId];
-        const ix = invX + i * (invSize + invPad);
-        const iy = invY;
-        
-        // Highlight selected card
-        const isSelected = selectedInventoryIndex === i;
-        
-        ctx.fillStyle = isSelected ? "#fff" : "#222";
-        ctx.fillRect(ix - 2, iy - 2, invSize + 4, invSize + 4);
-        
-        ctx.fillStyle = modDef ? modDef.color : "#555";
-        ctx.fillRect(ix, iy, invSize, invSize);
-        
-        ctx.font = "20px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillStyle = "#000";
-        ctx.fillText(modDef ? modDef.icon : "?", ix + invSize/2, iy + invSize/2 + 7);
-        
-        // Store bounds for click detection (we'll use this in mousedown)
-        if (!window.invBounds) window.invBounds = [];
-        window.invBounds[i] = { x: ix, y: iy, w: invSize, h: invSize };
-      }
-
-      // 2. Highlight Towers if Card Selected
-      if (selectedInventoryIndex !== -1) {
-        ctx.save();
-        const { x0 } = segmentBounds(myP.slot); // Helper function usage
-        const pos = turretPositions(myP.slot); // Helper function usage
-        
-        // Check all 4 towers
-        for (let tIdx = 0; tIdx < 4; tIdx++) {
-          const tower = myP.towers[tIdx];
-          const tPos = pos.slots[tIdx];
-          
-          if (tower && tPos) {
-            // Check if tower has an empty slot
-            const firstEmptySlot = tower.modules.indexOf(null);
-            
-            if (firstEmptySlot !== -1) {
-              // PULSING HIGHLIGHT: Valid Drop Target
-              const pulse = 10 + Math.sin(Date.now() / 150) * 5;
-              ctx.strokeStyle = "#00ff00"; // Green glow
-              ctx.lineWidth = 3;
-              ctx.shadowColor = "#00ff00";
-              ctx.shadowBlur = 15;
-              
-              ctx.beginPath();
-              ctx.arc(tPos.x, tPos.y, 25 + pulse/5, 0, Math.PI * 2);
-              ctx.stroke();
-              
-              // Draw "CLICK TO SLOT" text above
-              ctx.font = "bold 12px sans-serif";
-              ctx.fillStyle = "#00ff00";
-              ctx.fillText("SLOT HERE", tPos.x, tPos.y - 40);
-              ctx.shadowBlur = 0;
-            }
-          }
-        }
-        ctx.restore();
-        
-        // Draw "CANCEL" hint
-        ctx.fillStyle = "#fff";
-        ctx.font = "14px sans-serif";
-        ctx.fillText("Click tower to slot • Right-click to cancel", canvas.width/2, invY - 20);
-      }
-    }
     } catch (err) {
       console.error('Draw error:', err);
     }
