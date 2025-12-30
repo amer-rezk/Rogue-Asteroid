@@ -599,13 +599,13 @@ function generateAsteroidShape(baseRadius) {
 }
 
 function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId = null, bossAdVariant = null, noGold = false, isMiniBoss = false) {
-  const sizeMap = { small: 10, medium: 13, large: 17, boss: 75, miniboss: 19, minibossAd: 8 };
+  const sizeMap = { small: 10, medium: 13, large: 17, boss: 75, miniboss: 19, minibossAd: 8 }; // Mini-boss is 75% smaller than boss
   const r = sizeMap[type] || 12;
-  const speedMult = type === "boss" ? 0.3 : (type === "miniboss" ? 0.5 : (attackType ? (ATTACK_TYPES[attackType]?.speed || 1) : 1));
+  const speedMult = type === "boss" ? 0.3 : (type === "miniboss" ? 0.5 : (attackType ? (ATTACK_TYPES[attackType]?.speed || 1) : 1)); // Mini-boss slightly faster than boss
   
-  let waveSpeedBonus = wave >= 5 ? 1 + (wave - 5) * 0.03125 : 1;
+  let waveSpeedBonus = wave >= 5 ? 1 + (wave - 5) * 0.03125 : 1;  // +25% speed scaling (was 0.025)
   if (wave >= 20) {
-    waveSpeedBonus += (wave - 19) * 0.047;
+    waveSpeedBonus += (wave - 19) * 0.047;  // +25% speed scaling (was 0.0375)
   }
   const baseVy = rand(25, 40) * speedMult;
   const vy = baseVy * waveSpeedBonus;
@@ -613,31 +613,36 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
 
   const ftlThreshold = GROUND_Y * 0.1;
   const id = uid();
-  
-  // OPTIMIZATION: Removed server-side vertex/rotation calc
-  // We only define color here
+  const vertices = generateAsteroidShape(r);
+  const rotSpeed = rand(-3, 3);
   const color = attackType ? (ATTACK_TYPES[attackType]?.color || "#fa0") : (type === "miniboss" || type === "minibossAd" ? "#ff4400" : "#fa0");
   
+  // Determine if this is a boss or boss ad (for image rendering)
   const isBoss = type === "boss";
   const isBossAd = bossAdVariant !== null;
   const isMiniBossType = type === "miniboss" || isMiniBoss;
   const isMiniBossAd = type === "minibossAd";
 
-  // OPTIMIZATION: Sending much less data in the spawn event
-  queueEvent("spawn", { id, x, y, r, type, attackType, color, isBoss, isBossAd, bossAdVariant, isMiniBoss: isMiniBossType, isMiniBossAd });
+  // OPTIMIZED: Send spawn event with vertices/rotSpeed/velocity so client can cache and predict
+  queueEvent("spawn", { id, x, y, r, type, attackType, vertices, rotSpeed, color, vx, vy, isBoss, isBossAd, bossAdVariant, isMiniBoss: isMiniBossType, isMiniBossAd });
 
   return {
-    id, x, y, vx, vy, r, type,
+    id,
+    x, y, vx, vy, r, type,
     hp: hp,
     maxHp: hp,
-    lastSpawnHp: hp,
-    bossSpawnCount: 0,
+    lastSpawnHp: hp, // Track HP for boss spawns
+    bossSpawnCount: 0, // Track number of boss minion spawns (max 3)
+    rotSpeed: rotSpeed,
+    // vertices only sent once at spawn via event, not stored
     targetSlot: targetSlot,
     attackType: attackType,
     senderId: senderId,
     phaseTimer: attackType === "ghost" ? 0 : null,
     splits: attackType === "splitter" ? (ATTACK_TYPES.splitter?.splits || 4) : 0,
-    isBerserker: attackType === "berserker",
+    isBerserker: attackType === "berserker", // Berserker speeds up as HP drops
+    accelerates: false, // Removed juggernaut
+    // Carrier spawner properties
     isCarrier: attackType === "carrier",
     carrierSpawnTimer: attackType === "carrier" ? ATTACK_TYPES.carrier.spawnInterval : null,
     isBoss: isBoss,
@@ -645,7 +650,7 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
     bossAdVariant: bossAdVariant,
     isMiniBoss: isMiniBossType,
     isMiniBossAd: isMiniBossAd,
-    noGold: noGold,
+    noGold: noGold, // Only spawned minions from splitter/carrier give no gold
     inFTL: true,
     ftlThreshold: ftlThreshold,
     ftlTrail: [],
@@ -2483,21 +2488,26 @@ function broadcastGameState() {
   for (let i = 0; i < missileCount; i++) {
     const m = missiles[i];
     const obj = broadcastState.missiles[i];
-    
-    // OPTIMIZATION: Only send ID, Pos, HP. 
-    // Client handles rotation, visuals, and static stats (radius, type) via cache.
     obj.id = m.id;
     obj.x = Math.round(m.x * 10) / 10;
     obj.y = Math.round(m.y * 10) / 10;
+    obj.r = m.r;
     obj.hp = Math.round(m.hp * 10) / 10;
-    
-    // Only send these if they are TRUE/Present (bandwidth save)
-    if (m.inFTL) obj.inFTL = true; else delete obj.inFTL;
+    obj.maxHp = m.maxHp;
+    obj.type = m.type;
+    obj.vx = Math.round(m.vx * 10) / 10;
+    obj.vy = Math.round(m.vy * 10) / 10;
+    obj.inFTL = m.inFTL;
+    // Optional fields - set or delete
+    if (m.attackType) obj.attackType = m.attackType; else delete obj.attackType;
     if (m.isPhased) obj.isPhased = true; else delete obj.isPhased;
+    if (m.isBoss) obj.isBoss = true; else delete obj.isBoss;
+    if (m.isBossAd) { obj.isBossAd = true; obj.bossAdVariant = m.bossAdVariant; } 
+    else { delete obj.isBossAd; delete obj.bossAdVariant; }
+    if (m.isMiniBoss) obj.isMiniBoss = true; else delete obj.isMiniBoss;
+    if (m.isMiniBossAd) obj.isMiniBossAd = true; else delete obj.isMiniBossAd;
+    if (m.isBerserker) obj.isBerserker = true; else delete obj.isBerserker;
     if (m.staticCharge > 0) obj.staticCharge = m.staticCharge; else delete obj.staticCharge;
-    
-    // We do NOT send vx, vy, r, maxHp, type, etc. continuously anymore.
-    // The client knows these from the 'spawn' event.
   }
   // Truncate array to actual size (JSON.stringify respects .length)
   broadcastState.missiles.length = missileCount;

@@ -378,23 +378,6 @@
     return result;
   }
 
-	function generateAsteroidShape(id, radius) {
-	  // Use the ID to create a seed so the shape is consistent
-	  let seed = 0;
-	  for(let i=0; i<id.length; i++) seed += id.charCodeAt(i);
-	  
-	  const points = [];
-	  const numPoints = 10 + (seed % 5); // Deterministic point count
-	  
-	  for (let i = 0; i < numPoints; i++) {
-		const angle = (i / numPoints) * Math.PI * 2;
-		// Pseudo-random variance based on seed
-		const variance = 0.6 + (Math.sin(seed * i) * 0.5 + 0.5) * 0.4; 
-		points.push({ angle, dist: variance });
-	  }
-	  return points;
-	}
-
   function debounce(func, wait) {
     let timeout;
     return function(...args) {
@@ -561,6 +544,14 @@
         clientLightning.splice(i, 1);
       }
     }
+    
+    // Update cached asteroid rotations
+    for (const [id, data] of asteroidCache) {
+      data.rotation += data.rotSpeed * dt;
+    }
+    
+    // NO CLIENT PREDICTION: Server sends at 30Hz, we just render server positions
+    // This eliminates all desync - positions always match server exactly
   }
 
   function processServerEvents(events, skipVisualEffects = false) {
@@ -569,24 +560,19 @@
     for (const ev of events) {
       switch (ev.t) {
         case "spawn":
-          // OPTIMIZATION: Generate vertices locally to save bandwidth
-          const vertices = generateAsteroidShape(ev.id, ev.r);
-          
+          // Always process spawns - they cache visual data needed for rendering
           asteroidCache.set(ev.id, {
-            vertices: vertices,
-            rotSpeed: 0, // No rotation
-            rotation: 0, // Fixed rotation
+            vertices: ev.vertices,
+            rotSpeed: ev.rotSpeed,
+            rotation: Math.random() * Math.PI * 2,
             color: ev.color || "#fa0",
-            // Cache static stats (server won't send these every frame anymore)
-            r: ev.r,
-            type: ev.type,
-            maxHp: ev.hp || 10,
             isBoss: ev.isBoss || false,
             isBossAd: ev.isBossAd || false,
             bossAdVariant: ev.bossAdVariant || null,
             isMiniBoss: ev.isMiniBoss || false,
             isMiniBossAd: ev.isMiniBossAd || false
           });
+          // Just mark that we know about this missile (no position tracking)
           missileStates.set(ev.id, true);
           break;
           
@@ -1017,23 +1003,13 @@
           tempIdSet.clear();
           for (const m of msg.missiles) {
             tempIdSet.add(m.id);
-            
-            // HYDRATE: Server only sends x,y,hp. We grab the rest from cache.
             const cached = asteroidCache.get(m.id);
             if (cached) {
               m.vertices = cached.vertices;
-              m.rotation = 0; // Force 0 rotation
-              m.r = cached.r;
-              m.type = cached.type;
-              m.maxHp = cached.maxHp;
-              m.isBoss = cached.isBoss;
-              m.isBossAd = cached.isBossAd;
-              m.bossAdVariant = cached.bossAdVariant;
-              m.isMiniBoss = cached.isMiniBoss;
-              m.isMiniBossAd = cached.isMiniBossAd;
+              m.rotation = cached.rotation;
             }
           }
-          // Clean up cache for destroyed asteroids
+          // Clean up cache for destroyed asteroids (reuse tempIdSet)
           for (const id of asteroidCache.keys()) {
             if (!tempIdSet.has(id)) asteroidCache.delete(id);
           }
