@@ -1200,6 +1200,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     pierce = owner.upgrades?.pierce || 0;
     chainChance = owner.upgrades?.chainChance || 0;
     ownerGold = owner.gold || 0;
+    modules = owner.modules || []; // Support modules on owner (for Copycat)
   }
 
   let finalDmg = isCrit ? dmg * 3 : dmg;
@@ -1680,11 +1681,15 @@ function tick() {
                 const halfFireRate = 1 + (mainFireRate - 1) * 0.5;
                 tower.cd = BULLET_COOLDOWN / halfFireRate;
                 
+                // Get other modules (excluding copycat itself) to apply additively
+                const otherModules = activeModules.filter(m => m !== "copycat");
+                
                 // Create a "half owner" with 50% of all main turret stats
                 const halfOwner = {
                   id: p.id,
                   slot: p.slot,
                   gold: p.gold,
+                  modules: otherModules, // Pass other modules for additive effects
                   upgrades: {
                     multishot: Math.max(1, Math.floor((p.upgrades?.multishot ?? 1) * 0.5)),
                     damageAdd: (p.upgrades?.damageAdd ?? 0) * 0.5,
