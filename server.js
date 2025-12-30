@@ -61,8 +61,6 @@ const BULLET_SPEED = 175;
 const BULLET_COOLDOWN = 0.72;
 const BULLET_DAMAGE = 1.25;
 const BULLET_LIFESPAN = 3.0;
-const MAX_BULLETS = 200; // Limit to prevent lag at high waves
-const MAX_MISSILES = 150; // Limit missiles too
 
 const ASTEROID_R_MIN = 8;
 const ASTEROID_R_MAX = 16;
@@ -294,10 +292,8 @@ function addChatMessage(fromName, text) {
 }
 
 // ===== Utilities =====
-// OPTIMIZED: Simple counter is much faster than random+Date.now
-let _uidCounter = 0;
 function uid() {
-  return ++_uidCounter;
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(2);
 }
 function clamp(v, a, b) {
   return Math.max(a, Math.min(b, v));
@@ -338,21 +334,7 @@ function broadcastLobby() {
 const spectators = new Set();
 
 // OPTIMIZED: Queue an event for client-side visual effects
-// Limit queue size to prevent lag at high waves
-const MAX_EVENT_QUEUE = 50;
-let damageNumberThrottle = 0;
-
 function queueEvent(type, data) {
-  // Throttle damage numbers - only show every 3rd one at high entity counts
-  if (type === "damage") {
-    damageNumberThrottle++;
-    if (missiles.length > 30 && damageNumberThrottle % 3 !== 0) return;
-    if (missiles.length > 60 && damageNumberThrottle % 5 !== 0) return;
-  }
-  
-  // Limit queue size
-  if (eventQueue.length >= MAX_EVENT_QUEUE) return;
-  
   eventQueue.push({ t: type, ...data });
 }
 
@@ -1239,15 +1221,24 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     chainChance: chainChance,
     ricochet: ricochet,
     pierce: pierce,
-    hitSet: pierce > 0 ? new Set() : null, // Only allocate Set if needed for pierce
+    hitSet: new Set(), // O(1) hit tracking
     modules: modules, // Store modules for hit effects
     bulletColor: bulletColor, // Custom color for confetti
   };
-  // Limit bullets to prevent lag
-  if (bullets.length < MAX_BULLETS) {
-    bullets.push(bullet);
-  }
-  // REMOVED: bulletSpawn events - client gets bullets from state broadcast
+  bullets.push(bullet);
+  
+  // Emit spawn event for immediate client prediction
+  eventQueue.push({
+    t: "bulletSpawn",
+    id: bullet.id,
+    x: bullet.x,
+    y: bullet.y,
+    vx: bullet.vx,
+    vy: bullet.vy,
+    slot: bullet.ownerSlot,
+    isCrit: bullet.isCrit,
+    bulletColor: bullet.bulletColor
+  });
 }
 
 // PREDICTIVE AIMING: Fire bullets at intercept points, each bullet can target different asteroid
@@ -1321,7 +1312,6 @@ function findBestTarget(x0, x1, turretX, turretY, rangeMult = 1.0, ownerSlot = 0
 }
 
 // Find multiple targets for multishot, excluding already-targeted missiles
-// OPTIMIZED: Uses partial selection instead of full sort O(n) vs O(n log n)
 function findMultipleTargets(turretX, turretY, ownerSlot, count, excludeIds = new Set()) {
   const targets = [];
   
@@ -1329,42 +1319,7 @@ function findMultipleTargets(turretX, turretY, ownerSlot, count, excludeIds = ne
   const slotMissiles = missilesBySlot[ownerSlot];
   if (!slotMissiles || slotMissiles.length === 0) return targets;
   
-  // For small counts, use simple selection (faster than sort for count << n)
-  if (count <= 4) {
-    // Find top N by iterating through once for each target needed
-    const used = new Set();
-    for (let pick = 0; pick < count; pick++) {
-      let bestScore = -Infinity;
-      let best = null;
-      
-      for (let i = 0; i < slotMissiles.length; i++) {
-        const m = slotMissiles[i];
-        if (m.dead || m.isPhased || m.y < 0) continue;
-        if (excludeIds.has(m.id) || used.has(m.id)) continue;
-        
-        const danger = m.y / GROUND_Y;
-        const dx = m.x - turretX;
-        const dy = m.y - turretY;
-        const distSq = dx * dx + dy * dy;
-        const score = danger * 1000 - distSq * 0.0001;
-        
-        if (score > bestScore) {
-          bestScore = score;
-          best = m;
-        }
-      }
-      
-      if (best) {
-        targets.push(best);
-        used.add(best.id);
-      } else {
-        break;
-      }
-    }
-    return targets;
-  }
-  
-  // For larger counts, fall back to sort
+  // Score all valid targets
   const scored = [];
   for (let i = 0; i < slotMissiles.length; i++) {
     const m = slotMissiles[i];
@@ -1375,13 +1330,16 @@ function findMultipleTargets(turretX, turretY, ownerSlot, count, excludeIds = ne
     const danger = m.y / GROUND_Y;
     const dx = m.x - turretX;
     const dy = m.y - turretY;
+    // Use squared distance (sqrt not needed for comparison)
     const distSq = dx * dx + dy * dy;
-    const score = danger * 1000 - distSq * 0.0001;
+    const score = danger * 1000 - distSq * 0.0001; // Adjusted weight for squared
     scored.push({ m, score });
   }
   
+  // Sort by score descending
   scored.sort((a, b) => b.score - a.score);
   
+  // Take top N targets
   for (let i = 0; i < Math.min(count, scored.length); i++) {
     targets.push(scored[i].m);
   }
@@ -1531,8 +1489,6 @@ function tick() {
       if (spawnTimer <= 0) {
         const spawnCount = Math.min(spawnQueue.length, Math.random() < 0.5 ? 1 : Math.random() < 0.8 ? 2 : 3);
         for (let i = 0; i < spawnCount && spawnQueue.length > 0; i++) {
-          // Limit total missiles to prevent lag
-          if (missiles.length >= MAX_MISSILES) break;
           const queued = spawnQueue.shift();
           missiles.push(createAsteroid(
             queued.x, queued.y, queued.type, queued.hp, queued.targetSlot, 
@@ -1665,24 +1621,6 @@ function tick() {
         slowfieldSlots.push({ x0, x1 });
       }
     }
-    
-    // Pre-compute active shields (avoid nested loop in missile update)
-    // Map from slot -> { player, centerX, centerY, radiusSq }
-    const activeShields = new Map();
-    for (const id of lockedSlots) {
-      const p = players.get(id);
-      if (p?.upgrades?.shieldActive > 0) {
-        const shieldCenterX = p.slot * SEGMENT_W + SEGMENT_W / 2;
-        const shieldRadius = SEGMENT_W * SHIELD_RADIUS_MULT;
-        activeShields.set(p.slot, {
-          player: p,
-          centerX: shieldCenterX,
-          centerY: GROUND_Y,
-          radiusSq: shieldRadius * shieldRadius,
-          radius: shieldRadius
-        });
-      }
-    }
 
     // Update missiles
     for (const m of missiles) {
@@ -1719,9 +1657,9 @@ function tick() {
       // Carrier: Spawns mini asteroids periodically
       if (m.isCarrier && m.carrierSpawnTimer !== null && !m.inFTL) {
         m.carrierSpawnTimer -= DT;
-        if (m.carrierSpawnTimer <= 0 && missiles.length < MAX_MISSILES) {
+        if (m.carrierSpawnTimer <= 0) {
           // Spawn mini asteroids
-          const spawnCount = Math.min(ATTACK_TYPES.carrier?.spawnCount || 2, MAX_MISSILES - missiles.length);
+          const spawnCount = ATTACK_TYPES.carrier?.spawnCount || 2;
           for (let i = 0; i < spawnCount; i++) {
             const offsetX = (Math.random() - 0.5) * 30;
             const miniHp = 0.25 + wave * 0.075; // Reduced by 50% base, 25% scaling
@@ -1749,20 +1687,29 @@ function tick() {
       
       bounceOffWalls(m);
       
-      // Shield sphere collision check (dome above ground) - use pre-computed shields
+      // Shield sphere collision check (dome above ground)
       if (!m.dead && m.targetSlot !== undefined) {
-        const shield = activeShields.get(m.targetSlot);
-        if (shield && shield.player.upgrades.shieldActive > 0) {
-          const dx = m.x - shield.centerX;
-          const dy = m.y - shield.centerY;
+        const targetSlot = m.targetSlot;
+        for (const id of lockedSlots) {
+          const p = players.get(id);
+          if (!p || p.slot !== targetSlot || !p.upgrades?.shieldActive || p.upgrades.shieldActive <= 0) continue;
+          
+          // Shield dome center is at bottom center of segment
+          const shieldCenterX = targetSlot * SEGMENT_W + SEGMENT_W / 2;
+          const shieldCenterY = GROUND_Y;
+          const shieldRadius = SEGMENT_W * SHIELD_RADIUS_MULT;
+          
+          // Check if asteroid touches shield dome (only top half - above ground)
+          const dx = m.x - shieldCenterX;
+          const dy = m.y - shieldCenterY;
           const distSq = dx * dx + dy * dy;
-          const touchRadius = shield.radius + m.r;
+          const touchRadius = shieldRadius + m.r;
           
           // Only trigger if within dome and asteroid is above ground level
           if (distSq <= touchRadius * touchRadius && m.y < GROUND_Y) {
             // Shield blocks the asteroid!
             m.dead = true;
-            shield.player.upgrades.shieldActive--;
+            p.upgrades.shieldActive--;
             
             // Create shield explosion effect (deals damage for 3 seconds)
             const explosionDamage = BULLET_DAMAGE * 2; // 200% of base damage
@@ -1774,14 +1721,15 @@ function tick() {
               damage: explosionDamage,
               duration: 3.0,
               life: 3.0,
-              slot: m.targetSlot,
-              color: PLAYER_COLORS[m.targetSlot]?.main || "#0ff",
+              slot: targetSlot,
+              color: PLAYER_COLORS[targetSlot]?.main || "#0ff",
               hitSet: new Set() // O(1) hit tracking
             });
             
             // Visual explosion
-            createExplosion(m.x, m.y, 40, PLAYER_COLORS[m.targetSlot]?.main || "#0ff");
-            queueEvent("shieldHit", { x: m.x, y: m.y, slot: m.targetSlot });
+            createExplosion(m.x, m.y, 40, PLAYER_COLORS[targetSlot]?.main || "#0ff");
+            queueEvent("shieldHit", { x: m.x, y: m.y, slot: targetSlot });
+            break;
           }
         }
       }
@@ -1922,8 +1870,7 @@ function tick() {
             const nextThreshold = 1 - ((m.bossSpawnCount + 1) * 0.25); // 0.75, 0.50, 0.25
             if (hpPercent <= nextThreshold) {
               m.bossSpawnCount++;
-              const spawnLimit = Math.min(5, MAX_MISSILES - missiles.length);
-              for(let k=0; k<spawnLimit; k++) {
+              for(let k=0; k<5; k++) {
                 const bossAdVariant = (k % 5) + 1; // Cycle through 1-5
                 missiles.push(createAsteroid(
                   m.x + rand(-50, 50), 
@@ -1947,8 +1894,7 @@ function tick() {
             const nextThreshold = 1 - ((m.bossSpawnCount + 1) * 0.25); // 0.75, 0.50, 0.25
             if (hpPercent <= nextThreshold) {
               m.bossSpawnCount++;
-              const spawnLimit = Math.min(3, MAX_MISSILES - missiles.length);
-              for(let k=0; k<spawnLimit; k++) {
+              for(let k=0; k<3; k++) {
                 // Smaller minions for mini-boss (minibossAd type)
                 const miniAdHp = Math.max(1, Math.ceil(wave * 0.3)); // Less HP than boss ads
                 const miniAd = createAsteroid(
@@ -1980,17 +1926,15 @@ function tick() {
             m.vx = m.vx * 1.02;
           }
 
-          if (b.pierce > 0 || b.ricochet > 0) {
-            if (!b.hitSet) b.hitSet = new Set();
-            b.hitSet.add(m.id);
-          }
+          if (!b.hitSet) b.hitSet = new Set();
+          b.hitSet.add(m.id);
           
           // ===== TOWER MODULE EFFECTS ON HIT =====
           const bulletModules = b.modules || [];
           const owner = players.get(b.ownerId);
           
           // Fractal Prism: Shatter into 3 smaller bullets behind target
-          if (bulletModules.includes("fractalPrism") && bullets.length < MAX_BULLETS - 3) {
+          if (bulletModules.includes("fractalPrism")) {
             for (let i = 0; i < 3; i++) {
               const angle = Math.PI + (i - 1) * 0.5; // Spread behind
               const shardVx = Math.cos(angle) * 100;
@@ -2013,7 +1957,7 @@ function tick() {
                 chainChance: 0,
                 ricochet: 0,
                 pierce: 0,
-                hitSet: null,
+                hitSet: new Set([m.id]), // Already hit source target
                 modules: [],
                 bulletColor: "#00ffff",
               });
@@ -2183,13 +2127,10 @@ function tick() {
             }
             
             // When mini-boss dies, spawn any remaining minion waves
-            if (m.isMiniBoss && m.bossSpawnCount < 3 && missiles.length < MAX_MISSILES) {
+            if (m.isMiniBoss && m.bossSpawnCount < 3) {
               const remainingSpawns = 3 - m.bossSpawnCount;
-              let spawned = 0;
-              const maxSpawn = MAX_MISSILES - missiles.length;
-              outerMini: for (let spawnWave = 0; spawnWave < remainingSpawns; spawnWave++) {
+              for (let spawnWave = 0; spawnWave < remainingSpawns; spawnWave++) {
                 for (let k = 0; k < 3; k++) {
-                  if (spawned >= maxSpawn) break outerMini;
                   const miniAdHp = Math.max(1, Math.ceil(wave * 0.3));
                   const miniAd = createAsteroid(
                     m.x + rand(-25, 25),
@@ -2205,14 +2146,13 @@ function tick() {
                   miniAd.isMiniBossAd = true;
                   miniAd.inFTL = false;
                   missiles.push(miniAd);
-                  spawned++;
                 }
               }
               createExplosion(m.x, m.y, 40, "#ff4400");
             }
             
             // When boss dies, spawn any remaining minion waves
-            if (m.type === "boss" && m.bossSpawnCount < 3 && missiles.length < MAX_MISSILES) {
+            if (m.type === "boss" && m.bossSpawnCount < 3) {
               // Track who killed the boss for module pick order
               if (owner && !bossKillerId) {
                 bossKillerId = owner.id;
@@ -2220,11 +2160,8 @@ function tick() {
               }
               
               const remainingSpawns = 3 - m.bossSpawnCount;
-              let spawned = 0;
-              const maxSpawn = MAX_MISSILES - missiles.length;
-              outerBoss: for (let spawnWave = 0; spawnWave < remainingSpawns; spawnWave++) {
+              for (let spawnWave = 0; spawnWave < remainingSpawns; spawnWave++) {
                 for (let k = 0; k < 5; k++) {
-                  if (spawned >= maxSpawn) break outerBoss;
                   const bossAdVariant = (k % 5) + 1;
                   const spawnedAd = createAsteroid(
                     m.x + rand(-50, 50),
@@ -2238,7 +2175,6 @@ function tick() {
                     false // Boss ads CAN give gold (1 each)
                   );
                   missiles.push(spawnedAd);
-                  spawned++;
                 }
               }
               createExplosion(m.x, m.y, 80, "#ff0000");
@@ -2250,11 +2186,10 @@ function tick() {
             }
             
             // Splitter: spawn children with noGold flag
-            if (m.splits > 0 && missiles.length < MAX_MISSILES) {
+            if (m.splits > 0) {
               const extremeMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
               const splitHp = Math.ceil((0.5 + wave * 0.3) * extremeMult); // Reduced by 50% base, 25% scaling
-              const spawnLimit = Math.min(m.splits, MAX_MISSILES - missiles.length);
-              for (let s = 0; s < spawnLimit; s++) {
+              for (let s = 0; s < m.splits; s++) {
                 const nx = m.x + rand(-30, 30);
                 const ny = m.y + rand(-20, 20);
                 const splitAsteroid = createAsteroid(nx, ny, "small", splitHp, m.targetSlot, null, m.senderId, null, true); // noGold=true
@@ -2480,11 +2415,9 @@ function tick() {
       waveClearedTime = 0;
     }
 
-    // SERVER AUTHORITATIVE: Broadcast with adaptive rate based on entity count
-    // OPTIMIZED: Reduce broadcast rate when many entities to prevent lag
-    const entityCount = missiles.length + bullets.length;
-    const broadcastInterval = entityCount > 100 ? 2 : BROADCAST_INTERVAL; // 15Hz when busy
-    if (tickCount % broadcastInterval === 0) {
+    // SERVER AUTHORITATIVE: Broadcast every tick (30Hz) - no client prediction
+    // OPTIMIZED: Reuse pre-allocated broadcastState to avoid GC pressure
+    if (tickCount % BROADCAST_INTERVAL === 0) {
       broadcastGameState();
     }
   } catch (err) {
@@ -2534,17 +2467,17 @@ function broadcastGameState() {
     obj.type = m.type;
     obj.vx = Math.round(m.vx * 10) / 10;
     obj.vy = Math.round(m.vy * 10) / 10;
-    obj.inFTL = m.inFTL || false;
-    // Use falsy values instead of delete to preserve object shape (V8 optimization)
-    obj.attackType = m.attackType || null;
-    obj.isPhased = m.isPhased || false;
-    obj.isBoss = m.isBoss || false;
-    obj.isBossAd = m.isBossAd || false;
-    obj.bossAdVariant = m.isBossAd ? m.bossAdVariant : 0;
-    obj.isMiniBoss = m.isMiniBoss || false;
-    obj.isMiniBossAd = m.isMiniBossAd || false;
-    obj.isBerserker = m.isBerserker || false;
-    obj.staticCharge = m.staticCharge || 0;
+    obj.inFTL = m.inFTL;
+    // Optional fields - set or delete
+    if (m.attackType) obj.attackType = m.attackType; else delete obj.attackType;
+    if (m.isPhased) obj.isPhased = true; else delete obj.isPhased;
+    if (m.isBoss) obj.isBoss = true; else delete obj.isBoss;
+    if (m.isBossAd) { obj.isBossAd = true; obj.bossAdVariant = m.bossAdVariant; } 
+    else { delete obj.isBossAd; delete obj.bossAdVariant; }
+    if (m.isMiniBoss) obj.isMiniBoss = true; else delete obj.isMiniBoss;
+    if (m.isMiniBossAd) obj.isMiniBossAd = true; else delete obj.isMiniBossAd;
+    if (m.isBerserker) obj.isBerserker = true; else delete obj.isBerserker;
+    if (m.staticCharge > 0) obj.staticCharge = m.staticCharge; else delete obj.staticCharge;
   }
   // Truncate array to actual size (JSON.stringify respects .length)
   broadcastState.missiles.length = missileCount;
@@ -2565,11 +2498,10 @@ function broadcastGameState() {
     obj.vy = Math.round(b.vy * 10) / 10;
     obj.slot = b.ownerSlot;
     obj.lifespan = Math.round(b.lifespan * 10) / 10;
-    // Use falsy values instead of delete to preserve object shape
-    obj.isCrit = b.isCrit || false;
-    obj.isTower = b.isTowerBullet || false;
-    obj.bulletType = (b.bulletType && b.bulletType !== "gatling") ? b.bulletType : null;
-    obj.bulletColor = b.bulletColor || null;
+    if (b.isCrit) obj.isCrit = true; else delete obj.isCrit;
+    if (b.isTowerBullet) obj.isTower = true; else delete obj.isTower;
+    if (b.bulletType && b.bulletType !== "gatling") obj.bulletType = b.bulletType; else delete obj.bulletType;
+    if (b.bulletColor) obj.bulletColor = b.bulletColor; else delete obj.bulletColor;
   }
   broadcastState.bullets.length = bulletCount;
   
@@ -2673,8 +2605,8 @@ function broadcastGameState() {
   
   broadcastAll(broadcastState);
   
-  // Clear event queue after broadcast (in-place to avoid GC)
-  eventQueue.length = 0;
+  // Clear event queue after broadcast
+  eventQueue = [];
 }
 
 // ===== Networking =====
