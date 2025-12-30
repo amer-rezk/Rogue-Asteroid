@@ -4096,6 +4096,7 @@
             { label: "Base Damage", value: `+${(u.damageAdd || 0).toFixed(1)}`, color: "#ff6666" },
             { label: "Fire Rate", value: `${((u.fireRateMult || 1) * 100).toFixed(0)}%`, color: "#ffaa00" },
             { label: "Bullet Speed", value: `${((u.bulletSpeedMult || 1) * 100).toFixed(0)}%`, color: "#66ff66" },
+            { label: "Bullet Size", value: `+${((u.bulletSize || 0) * 100).toFixed(0)}%`, color: "#888888" },
             { label: "Crit Chance", value: `${((u.critChance || 0) * 100).toFixed(0)}%`, color: "#ff66ff" },
             { label: "Multishot", value: `${u.multishot || 1}x`, color: "#66ffff" },
             { label: "Pierce", value: `${u.pierce || 0}`, color: "#ffff66" },

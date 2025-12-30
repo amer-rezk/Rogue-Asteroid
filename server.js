@@ -518,6 +518,7 @@ const UPGRADE_DEFS = [
   { id: "multi", name: "Multishot", cat: "offense", icon: "⚔️", desc: "+{val} Bullets (-{penalty}% dmg)", stat: "multishot", base: 1, type: "multishot" },
   { id: "crit", name: "Crit Scope", cat: "offense", icon: "🎯", desc: "+{val}% Crit Chance", stat: "critChance", base: 0.05, type: "add_cap", cap: 1.0 },
   { id: "boom", name: "Explosive", cat: "offense", icon: "💣", desc: "Explosions size +{val}", stat: "explosive", base: 1, type: "add" },
+  { id: "caliber", name: "Caliber", cat: "offense", icon: "⚫", desc: "+{val}% Bullet Size", stat: "bulletSize", base: 0.025, type: "mult" },
   { id: "rico", name: "Ricochet", cat: "utility", icon: "🎱", desc: "Chains to {val} enemies (-10% dmg each)", stat: "ricochet", base: 1, type: "add" },
   { id: "pierce", name: "Railgun", cat: "utility", icon: "📌", desc: "Pierces {val} enemies", stat: "pierce", base: 1, type: "add" },
   { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "{val}% chance for Lightning", stat: "chainChance", base: 0.02, type: "add_cap", cap: 0.30 },
@@ -1250,6 +1251,13 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
   if (modules.includes("taxman")) {
     finalDmg *= 0.1;
   }
+  
+  // Apply bullet size upgrade (after module effects so it stacks with Confetti)
+  if (!overrideProps && owner.upgrades?.bulletSize) {
+    bulletR *= (1 + owner.upgrades.bulletSize);
+  } else if (overrideProps?.inheritedUpgrades && overrideProps.bulletSize) {
+    bulletR *= (1 + overrideProps.bulletSize);
+  }
 
   let dx = targetX - originX;
   let dy = targetY - originY;
@@ -1706,6 +1714,7 @@ function tick() {
                     bulletSpeedMult: 1 + ((p.upgrades?.bulletSpeedMult ?? 1) - 1) * 0.5,
                     critChance: (p.upgrades?.critChance ?? 0) * 0.5,
                     explosive: Math.floor((p.upgrades?.explosive ?? 0) * 0.5),
+                    bulletSize: (p.upgrades?.bulletSize ?? 0) * 0.5,
                     ricochet: Math.floor((p.upgrades?.ricochet ?? 0) * 0.5),
                     pierce: Math.floor((p.upgrades?.pierce ?? 0) * 0.5),
                     chainChance: (p.upgrades?.chainChance ?? 0) * 0.5,
@@ -1725,6 +1734,7 @@ function tick() {
                   bulletSpeedMult: 1 + ((u.bulletSpeedMult ?? 1) - 1) * 0.5,
                   critChance: (u.critChance ?? 0) * 0.5,
                   explosive: (stats.explosive || 0) + Math.floor((u.explosive ?? 0) * 0.5),
+                  bulletSize: (u.bulletSize ?? 0) * 0.5,
                   lifespanAdd: (u.lifespanAdd ?? 0) * 0.5,
                   ricochet: Math.floor((u.ricochet ?? 0) * 0.5),
                   pierce: (stats.bulletType === "sniper" ? 1 : 0) + Math.floor((u.pierce ?? 0) * 0.5),
@@ -2943,6 +2953,7 @@ function broadcastGameState() {
     obj.upgrades.multishot = u.multishot || 1;
     obj.upgrades.critChance = u.critChance || 0;
     obj.upgrades.explosive = u.explosive || 0;
+    obj.upgrades.bulletSize = u.bulletSize || 0;
     obj.upgrades.pierce = u.pierce || 0;
 	obj.upgrades.slowfield = u.slowfield || 0;
     obj.upgrades.ricochet = u.ricochet || 0;
