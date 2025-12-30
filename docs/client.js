@@ -665,11 +665,11 @@
             id: ev.id,
             x: ev.x, y: ev.y,
             vx: ev.vx, vy: ev.vy,
-            r: 3, 
+            r: ev.r || 3,
             isCrit: ev.isCrit,
             bulletColor: ev.bulletColor, 
             slot: ev.slot,
-            ricochet: ev.ricochet || 0, // <--- Capture ricochet count
+            ricochet: ev.ricochet || 0,
             lifespan: 1.0
           });
           break;

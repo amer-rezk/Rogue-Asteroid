@@ -1245,7 +1245,8 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     slot: bullet.ownerSlot,
     isCrit: bullet.isCrit,
     bulletColor: bullet.bulletColor,
-    ricochet: bullet.ricochet // <--- ADDED THIS LINE
+    ricochet: bullet.ricochet,
+    r: bullet.r
   });
 }
 
@@ -1960,7 +1961,8 @@ function tick() {
               const angle = Math.PI + (i - 1) * 0.5; // Spread behind
               const shardVx = Math.cos(angle) * 100;
               const shardVy = Math.sin(angle) * 100;
-              bullets.push({
+              
+              const shard = {
                 id: uid(),
                 ownerId: b.ownerId,
                 ownerSlot: b.ownerSlot,
@@ -1978,9 +1980,23 @@ function tick() {
                 chainChance: 0,
                 ricochet: 0,
                 pierce: 0,
-                hitSet: new Set([m.id]), // Already hit source target
+                hitSet: new Set([m.id]), 
                 modules: [],
                 bulletColor: "#00ffff",
+              };
+              bullets.push(shard);
+
+              // FIX: Notify client about these new shard bullets
+              queueEvent("bulletSpawn", {
+                id: shard.id,
+                x: shard.x,
+                y: shard.y,
+                vx: shard.vx,
+                vy: shard.vy,
+                slot: shard.ownerSlot,
+                isCrit: shard.isCrit,
+                bulletColor: shard.bulletColor,
+                r: shard.r
               });
             }
           }
@@ -2620,6 +2636,7 @@ function broadcastGameState() {
     obj.upgrades.critChance = u.critChance || 0;
     obj.upgrades.explosive = u.explosive || 0;
     obj.upgrades.pierce = u.pierce || 0;
+    obj.upgrades.ricochet = u.ricochet || 0;
     obj.upgrades.chainChance = u.chainChance || 0;
     obj.upgrades.goldMult = u.goldMult || 1;
   }
