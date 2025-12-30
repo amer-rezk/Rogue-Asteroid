@@ -2,8 +2,8 @@
 // Competitive asteroid defense with attack purchasing
 // 
 // ARCHITECTURE:
-// - Server broadcasts at 30Hz (same as physics rate)
-// - Client renders server positions directly - NO prediction
+// - Server physics at 60Hz, broadcasts at 30Hz
+// - Client renders with interpolation for smooth visuals
 // - This eliminates all desync - client always matches server
 // - Particles/damage numbers are client-side (visual only)
 // - Asteroid vertices/rotation cached client-side from spawn events
@@ -18,10 +18,10 @@ const { WebSocketServer } = require("ws");
 
 // ===== Game constants =====
 const MAX_PLAYERS = 4;
-const TICK_RATE = 30;          // Physics at 30Hz
-const BROADCAST_RATE = 15;     // Network at 15Hz (Client will interpolate)
+const TICK_RATE = 60;          // Physics at 60Hz (smoother gameplay)
+const BROADCAST_RATE = 30;     // Network at 30Hz (doubled from 15Hz)
 const DT = 1 / TICK_RATE;
-const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 1 tick (every frame)
+const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 2 ticks
 
 // === ENTITY CAPS (SERVER-SIDE LAG PREVENTION) ===
 const MAX_MISSILES = 100;      // Hard cap on asteroids/enemies
@@ -2501,11 +2501,11 @@ function tick() {
       waveClearedTime = 0;
     }
 
-    // SERVER AUTHORITATIVE: Broadcast every tick (30Hz) - no client prediction
+    // SERVER AUTHORITATIVE: Broadcast at 30Hz - with client smoothing
     // OPTIMIZED: Reuse pre-allocated broadcastState to avoid GC pressure
-    // ADAPTIVE: Throttle broadcasts when entity count is high
+    // ADAPTIVE: Throttle broadcasts when entity count is very high
     const entityCount = missiles.length + bullets.length;
-    const broadcastSkip = entityCount > 120 ? 2 : 1; // Drop to 15Hz when heavily loaded
+    const broadcastSkip = entityCount > 200 ? 2 : 1; // Only drop to 15Hz when very heavily loaded
     if (tickCount % (BROADCAST_INTERVAL * broadcastSkip) === 0) {
       broadcastGameState();
     }

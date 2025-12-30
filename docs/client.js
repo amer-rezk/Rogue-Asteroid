@@ -559,9 +559,10 @@
     // Pre-calculate common values
     const damping = 1 - (1 - 0.95) * dt * 60; 
     
-    // SMOOTHING FACTOR: Adjusts how fast objects snap to server position (0.1 = loose, 0.5 = tight)
+    // SMOOTHING FACTOR: Adjusts how fast objects snap to server position
     // Using time-based smoothing for consistency across frame rates
-    const smoothFactor = 1 - Math.pow(0.001, dt); 
+    // Higher value = snappier response, lower = smoother but more lag feel
+    const smoothFactor = 1 - Math.pow(0.05, dt); // Slightly slower blend for smoother motion 
 
     // Update particles
     for (let i = clientParticles.length - 1; i >= 0; i--) {
@@ -1921,7 +1922,7 @@
       lastInputShooting = shooting;
     }
   }
-  setInterval(sendInput, 50); // 20Hz input rate (down from 30Hz)
+  setInterval(sendInput, 33); // 30Hz input rate (matches server broadcast)
 
   // ===== Rendering =====
   function getScale() {
