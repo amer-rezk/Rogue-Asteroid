@@ -4345,14 +4345,6 @@
           window.gameChatBounds = { x: chatX, y: chatY, w: chatW, h: chatH };
         }
       }
-      
-      // Update cursor based on hover state
-      if (hoveredUpgrade >= 0 || hoveredReroll || hoveredBuyUpgrade || hoveredModuleCard >= 0 || 
-          hoveredAttack || hoveredBuildOption !== null || hoveredPauseButton || hoveredStatsBtn) {
-        canvas.style.cursor = 'pointer';
-      } else {
-        canvas.style.cursor = 'crosshair';
-      }
     } catch (err) {
       console.error('Draw error:', err);
     }
