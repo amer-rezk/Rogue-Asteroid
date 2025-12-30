@@ -354,6 +354,7 @@
   let clientBullets = [];        // Local bullet simulation
   let clientDamageNumbers = [];  // Damage numbers generated from events
   let clientLightning = [];      // Lightning effects from tesla coil
+  let pendingTracers = [];       // Tracer lines for module effects
   let asteroidCache = new Map(); // Cache: id -> {vertices, rotSpeed, rotation, color}
   let lastUpdateTime = Date.now();
   
@@ -453,7 +454,7 @@
     }
   }
 
-  function createClientDamageNumber(x, y, amount, isCrit) {
+  function createClientDamageNumber(x, y, amount, isCrit, customColor = null) {
     // Limit damage numbers for performance
     if (clientDamageNumbers.length >= qualitySettings.maxDamageNumbers) {
       // Remove oldest damage number
@@ -461,8 +462,9 @@
     }
     clientDamageNumbers.push({
       x, y,
-      amount: Math.round(amount * 10) / 10,
+      amount: typeof amount === 'string' ? amount : Math.round(amount * 10) / 10,
       isCrit,
+      customColor,
       life: 1.0,
       vy: -60
     });
@@ -595,6 +597,13 @@
       if (l.life <= 0) clientLightning.splice(i, 1);
     }
     
+    // Update tracer effects
+    for (let i = pendingTracers.length - 1; i >= 0; i--) {
+      const t = pendingTracers[i];
+      t.life -= dt;
+      if (t.life <= 0) pendingTracers.splice(i, 1);
+    }
+    
     // Update cached asteroid rotations
     for (const [id, data] of asteroidCache) {
       data.rotation += data.rotSpeed * dt;
@@ -686,6 +695,47 @@
           if (ev.ids) {
             const deadSet = new Set(ev.ids);
             clientBullets = clientBullets.filter(b => !deadSet.has(b.id));
+          }
+          break;
+          
+        case "pinballBounce":
+          // Pinball Wizard bounce effect
+          if (!skipVisualEffects) {
+            createClientParticle(ev.x, ev.y, "#ff6600", 6, 0.8);
+            // Draw tracer line to next target
+            pendingTracers.push({
+              x1: ev.x, y1: ev.y,
+              x2: ev.tx, y2: ev.ty,
+              color: "#ff6600",
+              life: 0.3
+            });
+          }
+          break;
+          
+        case "taxmanGold":
+          // Taxman gold generation effect
+          if (!skipVisualEffects) {
+            createClientDamageNumber(ev.x, ev.y - 20, "+$1", false, "#00ff00");
+          }
+          break;
+          
+        case "infected":
+          // Viral Payload infection effect
+          if (!skipVisualEffects) {
+            createClientParticle(ev.x, ev.y, "#00ff00", 10, 1.2);
+          }
+          break;
+          
+        case "infectionSpread":
+          // Infection spreading between asteroids
+          if (!skipVisualEffects) {
+            pendingTracers.push({
+              x1: ev.x1, y1: ev.y1,
+              x2: ev.x2, y2: ev.y2,
+              color: "#00ff00",
+              life: 0.5
+            });
+            createClientParticle(ev.x2, ev.y2, "#00ff00", 8, 1.0);
           }
           break;
       }
@@ -865,6 +915,7 @@
         clientParticles = [];
         clientDamageNumbers = [];
         clientLightning = [];
+        pendingTracers = [];
         asteroidCache.clear();
         missileStates.clear();
         bulletStates.clear();
@@ -947,6 +998,7 @@
         clientParticles = [];
         clientDamageNumbers = [];
         clientLightning = [];
+        pendingTracers = [];
         asteroidCache.clear();
         // Clear prediction states
         missileStates.clear();
@@ -2133,6 +2185,7 @@
       clientParticles = [];
       clientDamageNumbers = [];
       clientLightning = [];
+      pendingTracers = [];
       lastFrameTime = performance.now(); // Reset to avoid huge dt jump
     }
   });
@@ -2487,6 +2540,24 @@
         
         ctx.restore();
       }
+      
+      // Module Effect Tracers (Pinball, Viral spread)
+      for (const tracer of pendingTracers) {
+        const alpha = tracer.life / 0.5; // Assuming max life of 0.5
+        ctx.save();
+        ctx.strokeStyle = hexToRgba(tracer.color, alpha * 0.8);
+        ctx.lineWidth = 3 * sx;
+        ctx.shadowColor = tracer.color;
+        ctx.shadowBlur = 10;
+        ctx.setLineDash([5, 5]);
+        
+        ctx.beginPath();
+        ctx.moveTo(tracer.x1 * sx, tracer.y1 * sy);
+        ctx.lineTo(tracer.x2 * sx, tracer.y2 * sy);
+        ctx.stroke();
+        
+        ctx.restore();
+      }
 
       // Asteroids/Missiles
       for (const m of lastSnap.missiles) {
@@ -2682,6 +2753,13 @@
             glowSize = 8 + berserkerRage * 20;
           }
           
+          // Viral Payload: Infected asteroids turn green
+          if (m.infected) {
+            const pulse = Math.sin(Date.now() * 0.01) * 0.3 + 0.7;
+            renderColor = `rgb(0, ${Math.floor(255 * pulse)}, 0)`;
+            glowSize = 12 + pulse * 8;
+          }
+          
           ctx.fillStyle = hexToRgba(renderColor, phaseAlpha);
           ctx.strokeStyle = renderColor;
           ctx.lineWidth = 1.5;
@@ -2730,6 +2808,34 @@
             ctx.lineTo(x + Math.cos(angle + 0.2) * outerR, y + Math.sin(angle + 0.2) * outerR);
             ctx.stroke();
           }
+          ctx.restore();
+        }
+        
+        // Viral infection visual (Viral Payload module)
+        if (m.infected) {
+          ctx.save();
+          ctx.shadowColor = "#00ff00";
+          ctx.shadowBlur = 15;
+          
+          // Toxic bubbles around the asteroid
+          const bubbleCount = 5;
+          for (let i = 0; i < bubbleCount; i++) {
+            const angle = (Date.now() * 0.003 + i * Math.PI * 2 / bubbleCount) % (Math.PI * 2);
+            const bubbleR = r * (1.1 + Math.sin(Date.now() * 0.01 + i) * 0.2);
+            const bubbleSize = 3 + Math.sin(Date.now() * 0.008 + i * 2) * 2;
+            
+            ctx.fillStyle = hexToRgba("#00ff00", 0.6);
+            ctx.beginPath();
+            ctx.arc(x + Math.cos(angle) * bubbleR, y + Math.sin(angle) * bubbleR, bubbleSize, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          
+          // Virus icon indicator
+          ctx.font = `${8 * sx}px sans-serif`;
+          ctx.textAlign = "center";
+          ctx.fillStyle = "#00ff00";
+          ctx.fillText("🦠", x, y - r - 5 * sy);
+          
           ctx.restore();
         }
 
@@ -2783,10 +2889,20 @@
         for (const d of lastSnap.damageNumbers) {
           ctx.font = `bold ${d.isCrit ? 16 : 12}px 'Courier New', monospace`;
           ctx.textAlign = "center";
-          ctx.fillStyle = d.isCrit ? `rgba(255,255,0,${d.life})` : `rgba(255,255,255,${d.life})`;
-          // Round to max 2 decimal places, remove trailing zeros
-          const rounded = Math.round(d.amount * 100) / 100;
-          const displayText = Number.isInteger(rounded) ? rounded.toString() : rounded.toFixed(2).replace(/\.?0+$/, '');
+          // Use custom color if provided, otherwise default crit/normal colors
+          if (d.customColor) {
+            ctx.fillStyle = hexToRgba(d.customColor, d.life);
+          } else {
+            ctx.fillStyle = d.isCrit ? `rgba(255,255,0,${d.life})` : `rgba(255,255,255,${d.life})`;
+          }
+          // Handle string amounts (like "+$1" for Taxman) or numeric amounts
+          let displayText;
+          if (typeof d.amount === 'string') {
+            displayText = d.amount;
+          } else {
+            const rounded = Math.round(d.amount * 100) / 100;
+            displayText = Number.isInteger(rounded) ? rounded.toString() : rounded.toFixed(2).replace(/\.?0+$/, '');
+          }
           ctx.fillText(displayText, d.x * sx, d.y * sy);
         }
       }
@@ -2979,6 +3095,58 @@
                   ctx.beginPath();
                   ctx.arc(m * 4 * sx * scale, -bodyH - 2 * sy * scale, 2 * sx * scale, 0, Math.PI * 2);
                   ctx.fill();
+                }
+              }
+              
+              // Check for Copycat module - render mini main turret
+              const hasCopycat = t.modules && t.modules.includes && t.modules.includes("copycat");
+              if (hasCopycat) {
+                // Draw a mini version of the main turret using the same sprites
+                const hasBase = turretImages.base.complete && turretImages.base.naturalWidth > 0;
+                const hasBarrel = turretImages.barrel.complete && turretImages.barrel.naturalWidth > 0;
+                
+                if (hasBase && hasBarrel) {
+                  const miniScale = 0.35; // Smaller than main turret
+                  const baseAspect = turretImages.base.naturalWidth / turretImages.base.naturalHeight;
+                  const baseW = 43.75 * sx * miniScale;
+                  const baseH = baseW / baseAspect;
+                  
+                  const barrelAspect = turretImages.barrel.naturalWidth / turretImages.barrel.naturalHeight;
+                  const barrelH = 35 * sy * miniScale;
+                  const barrelW = barrelH * barrelAspect;
+                  
+                  // Position mini turret above the platform
+                  const turretCenterX = tx;
+                  const turretCenterY = ty - platformH - baseH / 2;
+                  
+                  ctx.save();
+                  ctx.globalAlpha = towerAlpha;
+                  
+                  // Mirror glow effect (purple/blue tint to show it's a copy)
+                  if (!isDead) {
+                    ctx.shadowColor = "#aaaaff";
+                    ctx.shadowBlur = 10;
+                  }
+                  
+                  // Draw mini base
+                  ctx.drawImage(turretImages.base, tx - baseW / 2, ty - platformH - baseH, baseW, baseH);
+                  
+                  ctx.shadowBlur = 0;
+                  
+                  // Draw mini rotating barrel
+                  ctx.save();
+                  ctx.translate(turretCenterX, turretCenterY);
+                  ctx.rotate(towerAngle + Math.PI / 2);
+                  ctx.drawImage(turretImages.barrel, -barrelW / 2, -barrelH * 0.75, barrelW, barrelH);
+                  ctx.restore();
+                  
+                  ctx.restore();
+                  
+                  // Draw mirror icon indicator
+                  ctx.font = `${8 * sx}px sans-serif`;
+                  ctx.textAlign = "center";
+                  ctx.fillStyle = "#aaaaff";
+                  ctx.fillText("🪞", tx, ty - platformH - baseH - 5 * sy);
                 }
               }
               ctx.restore();

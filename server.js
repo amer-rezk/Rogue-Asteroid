@@ -181,6 +181,38 @@ const TOWER_MODULES = {
     color: "#ff88ff",
     desc: "Each bullet has random stats (size, speed, damage)",
     effect: "random"
+  },
+  pinballWizard: {
+    id: "pinballWizard",
+    name: "Pinball Wizard",
+    icon: "🎱",
+    color: "#ff6600",
+    desc: "Bullets bounce off enemies to hit nearby targets",
+    effect: "enemyRicochet"
+  },
+  taxman: {
+    id: "taxman",
+    name: "The Taxman",
+    icon: "🏦",
+    color: "#00aa00",
+    desc: "-90% damage, but +1 gold per hit. Farm enemies!",
+    effect: "goldFarm"
+  },
+  viralPayload: {
+    id: "viralPayload",
+    name: "Viral Payload",
+    icon: "🦠",
+    color: "#00ff00",
+    desc: "Infects enemies with spreading DOT virus",
+    effect: "infect"
+  },
+  copycat: {
+    id: "copycat",
+    name: "Copycat",
+    icon: "🪞",
+    color: "#aaaaff",
+    desc: "Mirrors main turret at 50% effectiveness",
+    effect: "mirror"
   }
 };
 
@@ -1202,6 +1234,11 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
   if (modules.includes("vampiricNanobots")) {
     finalDmg *= 0.5;
   }
+  
+  // Taxman: -90% damage (gold is added on hit)
+  if (modules.includes("taxman")) {
+    finalDmg *= 0.1;
+  }
 
   let dx = targetX - originX;
   let dy = targetY - originY;
@@ -1636,22 +1673,61 @@ function tick() {
                 }
               }
               
-              const towerProps = {
-                ...stats,
-                level: tower.level,
-                damage: stats.damage + (u.damageAdd ?? 0) * 0.5,
-                bulletSpeedMult: 1 + ((u.bulletSpeedMult ?? 1) - 1) * 0.5,
-                critChance: (u.critChance ?? 0) * 0.5,
-                explosive: (stats.explosive || 0) + Math.floor((u.explosive ?? 0) * 0.5),
-                lifespanAdd: (u.lifespanAdd ?? 0) * 0.5,
-                ricochet: Math.floor((u.ricochet ?? 0) * 0.5),
-                pierce: (stats.bulletType === "sniper" ? 1 : 0) + Math.floor((u.pierce ?? 0) * 0.5),
-                chainChance: (u.chainChance ?? 0) * 0.5,
-                inheritedUpgrades: true,
-                modules: activeModules, // Tower modules
-                ownerGold: p.gold, // For Midas Capacitor
-              };
-              fireBullet(p, towerPos.x, towerPos.y, aim.x, aim.y, 0, towerProps);
+              // COPYCAT MODULE: Override to copy main turret at 50%
+              if (activeModules.includes("copycat")) {
+                // Use main turret's fire rate at 50% effectiveness
+                const mainFireRate = p.upgrades?.fireRateMult ?? 1;
+                tower.cd = TOWER_STATS[tower.type].cooldown / levelBonus / (1 + (mainFireRate - 1) * 0.5);
+                
+                // Fire with main turret's multishot at 50% (minimum 1)
+                const mainMultishot = Math.max(1, Math.floor((p.upgrades?.multishot ?? 1) * 0.5));
+                const bulletSpeed = BULLET_SPEED * (1 + ((p.upgrades?.bulletSpeedMult ?? 1) - 1) * 0.5);
+                
+                // Calculate spread for multishot
+                const spread = 0.08;
+                for (let shot = 0; shot < mainMultishot; shot++) {
+                  let angleOffset = 0;
+                  if (mainMultishot > 1) {
+                    angleOffset = spread * (shot - (mainMultishot - 1) / 2);
+                  }
+                  
+                  const copycatProps = {
+                    bulletType: "main", // Same visual as main turret
+                    level: tower.level,
+                    damage: (BULLET_DAMAGE + (u.damageAdd ?? 0)) * 0.5, // 50% of main turret damage
+                    bulletSpeedMult: 1 + ((u.bulletSpeedMult ?? 1) - 1) * 0.5,
+                    critChance: (u.critChance ?? 0) * 0.5,
+                    explosive: Math.floor((u.explosive ?? 0) * 0.5),
+                    lifespanAdd: 0,
+                    ricochet: Math.floor((u.ricochet ?? 0) * 0.5),
+                    pierce: Math.floor((u.pierce ?? 0) * 0.5),
+                    chainChance: (u.chainChance ?? 0) * 0.5,
+                    inheritedUpgrades: true,
+                    modules: activeModules.filter(m => m !== "copycat"), // Don't recurse copycat
+                    ownerGold: p.gold,
+                    isCopycat: true, // Flag for client rendering
+                  };
+                  fireBullet(p, towerPos.x, towerPos.y, aim.x, aim.y, angleOffset, copycatProps);
+                }
+              } else {
+                // Normal tower firing
+                const towerProps = {
+                  ...stats,
+                  level: tower.level,
+                  damage: stats.damage + (u.damageAdd ?? 0) * 0.5,
+                  bulletSpeedMult: 1 + ((u.bulletSpeedMult ?? 1) - 1) * 0.5,
+                  critChance: (u.critChance ?? 0) * 0.5,
+                  explosive: (stats.explosive || 0) + Math.floor((u.explosive ?? 0) * 0.5),
+                  lifespanAdd: (u.lifespanAdd ?? 0) * 0.5,
+                  ricochet: Math.floor((u.ricochet ?? 0) * 0.5),
+                  pierce: (stats.bulletType === "sniper" ? 1 : 0) + Math.floor((u.pierce ?? 0) * 0.5),
+                  chainChance: (u.chainChance ?? 0) * 0.5,
+                  inheritedUpgrades: true,
+                  modules: activeModules, // Tower modules
+                  ownerGold: p.gold, // For Midas Capacitor
+                };
+                fireBullet(p, towerPos.x, towerPos.y, aim.x, aim.y, 0, towerProps);
+              }
             }
           } else {
             tower.angle = -Math.PI / 2;
@@ -2081,6 +2157,66 @@ function tick() {
             m.staticColor = "#ffff00";
           }
           
+          // Pinball Wizard: Bounce off enemy to hit another nearby enemy
+          if (bulletModules.includes("pinballWizard") && m.hp > 0) {
+            const maxBounces = 4;
+            b.enemyBounces = (b.enemyBounces || 0) + 1;
+            
+            if (b.enemyBounces < maxBounces) {
+              // Find nearest enemy within range (excluding ones we've already hit)
+              const bounceRange = 120;
+              const bounceRangeSq = bounceRange * bounceRange;
+              let nearestTarget = null;
+              let nearestDistSq = Infinity;
+              
+              const slotMissilesBounce = missilesBySlot[b.ownerSlot];
+              for (let bi = 0; bi < slotMissilesBounce.length; bi++) {
+                const m2 = slotMissilesBounce[bi];
+                if (m2.dead || m2 === m || (b.hitSet && b.hitSet.has(m2.id))) continue;
+                const dx = m2.x - m.x;
+                const dy = m2.y - m.y;
+                const dSq = dx * dx + dy * dy;
+                if (dSq < bounceRangeSq && dSq < nearestDistSq) {
+                  nearestDistSq = dSq;
+                  nearestTarget = m2;
+                }
+              }
+              
+              if (nearestTarget) {
+                // Redirect bullet towards new target
+                const dx = nearestTarget.x - m.x;
+                const dy = nearestTarget.y - m.y;
+                const dist = Math.sqrt(nearestDistSq);
+                const speed = Math.hypot(b.vx, b.vy);
+                b.vx = (dx / dist) * speed;
+                b.vy = (dy / dist) * speed;
+                b.x = m.x + (dx / dist) * (m.r + 5); // Move bullet outside current enemy
+                b.y = m.y + (dy / dist) * (m.r + 5);
+                b.dead = false; // Keep bullet alive!
+                b.pierce = Math.max(b.pierce, 0); // Don't consume pierce
+                queueEvent("pinballBounce", { x: m.x, y: m.y, tx: nearestTarget.x, ty: nearestTarget.y });
+              }
+            }
+          }
+          
+          // Taxman: Generate gold on hit (damage already reduced at bullet creation)
+          if (bulletModules.includes("taxman") && owner) {
+            owner.gold = (owner.gold || 0) + 1;
+            queueEvent("taxmanGold", { slot: owner.slot, x: m.x, y: m.y });
+          }
+          
+          // Viral Payload: Infect enemy with spreading DOT
+          if (bulletModules.includes("viralPayload") && m.hp > 0) {
+            if (!m.infected) {
+              m.infected = true;
+              m.infectionOwner = b.ownerId;
+              m.infectionSlot = b.ownerSlot;
+              m.infectionDamage = b.dmg * 0.5; // DOT = 50% of bullet damage per second
+              m.infectionLife = 5.0; // Infection lasts 5 seconds
+              queueEvent("infected", { id: m.id, x: m.x, y: m.y });
+            }
+          }
+          
           // Tesla Coil: chance to consume bullet and create chain lightning
           const triggeredLightning = b.chainChance > 0 && Math.random() < b.chainChance;
           
@@ -2458,6 +2594,69 @@ function tick() {
         }
       }
     }
+    
+    // Viral Payload - process infection DOT and spreading
+    for (let slot = 0; slot < 4; slot++) {
+      const slotMissiles = missilesBySlot[slot];
+      if (!slotMissiles || slotMissiles.length === 0) continue;
+      
+      for (let i = 0; i < slotMissiles.length; i++) {
+        const m1 = slotMissiles[i];
+        if (m1.dead || !m1.infected) continue;
+        
+        // Apply DOT damage
+        m1.infectionLife -= DT;
+        const dotDamage = m1.infectionDamage * DT;
+        m1.hp -= dotDamage;
+        
+        // Track damage for owner
+        const infectionOwner = players.get(m1.infectionOwner);
+        if (infectionOwner) {
+          infectionOwner.damageDealt = (infectionOwner.damageDealt || 0) + dotDamage;
+          infectionOwner.waveDamage = (infectionOwner.waveDamage || 0) + dotDamage;
+        }
+        
+        // Infection expired
+        if (m1.infectionLife <= 0) {
+          m1.infected = false;
+        }
+        
+        // Check if killed by infection
+        if (m1.hp <= 0) {
+          m1.dead = true;
+          createExplosion(m1.x, m1.y, 20, "#00ff00");
+          if (infectionOwner) {
+            infectionOwner.score = (infectionOwner.score || 0) + 50;
+            infectionOwner.kills = (infectionOwner.kills || 0) + 1;
+          }
+          continue;
+        }
+        
+        // Check for collision-based spreading
+        for (let j = 0; j < slotMissiles.length; j++) {
+          if (i === j) continue;
+          const m2 = slotMissiles[j];
+          if (m2.dead || m2.infected) continue;
+          
+          const dx = m2.x - m1.x;
+          const dy = m2.y - m1.y;
+          const combinedR = m1.r + m2.r + 5;
+          
+          if (dx * dx + dy * dy < combinedR * combinedR) {
+            // Spread infection!
+            m2.infected = true;
+            m2.infectionOwner = m1.infectionOwner;
+            m2.infectionSlot = m1.infectionSlot;
+            m2.infectionDamage = m1.infectionDamage * 0.8; // Slightly weaker each spread
+            m2.infectionLife = 4.0; // Fresh infection timer
+            queueEvent("infectionSpread", { 
+              x1: m1.x, y1: m1.y, 
+              x2: m2.x, y2: m2.y 
+            });
+          }
+        }
+      }
+    }
 
     // OPTIMIZED: O(1) removal using swap-and-pop instead of O(n) splice
     // This prevents O(n²) behavior when many missiles die at once
@@ -2567,6 +2766,7 @@ function broadcastGameState() {
     if (m.isMiniBossAd) obj.isMiniBossAd = true; else delete obj.isMiniBossAd;
     if (m.isBerserker) obj.isBerserker = true; else delete obj.isBerserker;
     if (m.staticCharge > 0) obj.staticCharge = m.staticCharge; else delete obj.staticCharge;
+    if (m.infected) obj.infected = true; else delete obj.infected;
   }
   // Truncate array to actual size (JSON.stringify respects .length)
   broadcastState.missiles.length = missileCount;
