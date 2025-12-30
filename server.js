@@ -518,7 +518,7 @@ const UPGRADE_DEFS = [
   { id: "multi", name: "Multishot", cat: "offense", icon: "⚔️", desc: "+{val} Bullets (-{penalty}% dmg)", stat: "multishot", base: 1, type: "multishot" },
   { id: "crit", name: "Crit Scope", cat: "offense", icon: "🎯", desc: "+{val}% Crit Chance", stat: "critChance", base: 0.05, type: "add_cap", cap: 1.0 },
   { id: "boom", name: "Explosive", cat: "offense", icon: "💣", desc: "Explosions size +{val}", stat: "explosive", base: 1, type: "add" },
-  { id: "caliber", name: "Caliber", cat: "offense", icon: "⚫", desc: "+{val}% Bullet Size", stat: "bulletSize", base: 0.025, type: "mult" },
+  { id: "caliber", name: "Caliber", cat: "offense", icon: "⚫", desc: "+{val}% Bullet Size", stat: "bulletSize", base: 0.0375, type: "mult" },
   { id: "rico", name: "Ricochet", cat: "utility", icon: "🎱", desc: "Chains to {val} enemies (-10% dmg each)", stat: "ricochet", base: 1, type: "add" },
   { id: "pierce", name: "Railgun", cat: "utility", icon: "📌", desc: "Pierces {val} enemies", stat: "pierce", base: 1, type: "add" },
   { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "{val}% chance for Lightning", stat: "chainChance", base: 0.02, type: "add_cap", cap: 0.30 },
