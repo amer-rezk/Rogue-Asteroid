@@ -3882,6 +3882,17 @@
         ctx.font = "bold 10px 'Courier New', monospace";
         ctx.fillText(`${currentRerollCost}g`, rerollBtnX + rerollBtnW / 2, rerollBtnY + 42);
         
+        // Buy button definitions (positioned to the right of reroll button)
+        const canAffordBuy = myGold >= buyUpgradeCost;
+        const buyBtnW = 70;
+        const buyBtnH = 50;
+        const buyBtnX = rerollBtnX + rerollBtnW + 10;
+        const buyBtnY = rerollBtnY;
+        
+        const isBuyHovered = mouseX >= buyBtnX && mouseX <= buyBtnX + buyBtnW && 
+                             mouseY >= buyBtnY && mouseY <= buyBtnY + buyBtnH;
+        hoveredBuyUpgrade = isBuyHovered;
+        
         // Buy button background
         ctx.fillStyle = isBuyHovered && canAffordBuy ? "rgba(100,255,150,0.4)" : 
                         canAffordBuy ? "rgba(60,200,120,0.25)" : "rgba(40,40,60,0.4)";
