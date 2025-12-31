@@ -145,7 +145,7 @@ const TOWER_MODULES = {
     name: "Quantum Displacer",
     icon: "⏳", 
     color: "#ff44ff",
-    desc: "20% chance to teleport enemy back to top",
+    desc: "10% chance to teleport enemy back to top (5% for bosses)",
     effect: "teleport"
   },
   russianRoulette: {
@@ -2212,12 +2212,15 @@ function tick() {
             }
           }
           
-          // Quantum Displacer: 20% chance to teleport enemy to top
-          // SYNERGY: Inherited by shards/ricochets - each child bullet has 20% teleport chance!
-          if (bulletModules.includes("quantumDisplacer") && Math.random() < 0.2 && m.hp > 0) {
-            m.y = -m.r - 20;
-            m.inFTL = true;
-            queueEvent("teleport", { x: m.x, y: m.y });
+          // Quantum Displacer: 10% chance to teleport enemy to top (5% for bosses)
+          // SYNERGY: Inherited by shards/ricochets - each child bullet has teleport chance!
+          if (bulletModules.includes("quantumDisplacer") && m.hp > 0) {
+            const teleportChance = (m.type === "boss" || m.isBoss) ? 0.05 : 0.10;
+            if (Math.random() < teleportChance) {
+              m.y = -m.r - 20;
+              m.inFTL = true;
+              queueEvent("teleport", { x: m.x, y: m.y });
+            }
           }
           
           // Gravity Well: Create gravity pull effect
