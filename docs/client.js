@@ -601,25 +601,39 @@
         continue; // Don't keep this bullet
       }
       
-      // CLIENT-SIDE COLLISION PREDICTION: Remove bullets that hit enemies
+      // CLIENT-SIDE COLLISION PREDICTION: Handle bullet-enemy hits with pierce
       // OPTIMIZED: Only check missiles in the SAME SLOT (not all missiles)
-      let hitEnemy = false;
+      let shouldRemove = false;
       const slotMissiles = missilesBySlot[b.slot];
       if (slotMissiles) {
         for (let mi = 0; mi < slotMissiles.length; mi++) {
           const m = slotMissiles[mi];
+          // Skip enemies we've already hit
+          if (b.hitSet && b.hitSet.has(m.id)) continue;
+          
           const dx = m.x - b.x;
           const dy = m.y - b.y;
           const rr = (m.r || 15) + (b.r || 3);
           if (dx * dx + dy * dy <= rr * rr) {
-            hitEnemy = true;
-            break;
+            // Hit! Add to hitSet
+            if (!b.hitSet) b.hitSet = new Set();
+            b.hitSet.add(m.id);
+            
+            // Check pierce - if we have pierce stacks, continue through
+            if (b.pierce > 0) {
+              b.pierce--;
+              // Don't remove, bullet continues
+            } else {
+              // No pierce left, bullet dies
+              shouldRemove = true;
+              break;
+            }
           }
         }
       }
       
-      if (hitEnemy) {
-        continue; // Don't keep - server will confirm death
+      if (shouldRemove) {
+        continue; // Don't keep - bullet died on hit
       }
       
       // Keep this bullet
@@ -794,6 +808,8 @@
             bulletType: ev.bulletType, // For visual rendering (gatling/sniper/missile/main)
             slot: ev.slot,
             ricochet: ev.ricochet || 0,
+            pierce: ev.pierce || 0, // For client-side pierce prediction
+            hitSet: new Set(), // Track which enemies this bullet has hit
             lifespan: ev.lifespan || 3.0 // Match server BULLET_LIFESPAN
           });
           break;

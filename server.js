@@ -1356,6 +1356,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
       bulletColor: bullet.bulletColor,
       bulletType: bullet.bulletType, // For visual rendering (gatling/sniper/missile/main)
       ricochet: bullet.ricochet,
+      pierce: bullet.pierce, // For client-side pierce prediction
       r: bullet.r,
       lifespan: bullet.lifespan // DESYNC FIX: Send lifespan so client can expire bullets correctly
     });
@@ -2206,6 +2207,7 @@ function tick() {
                 isCrit: shard.isCrit,
                 bulletColor: shard.bulletColor,
                 bulletType: shard.bulletType, // VISUAL: Inherit tower type for rendering
+                pierce: shard.pierce, // For client-side pierce prediction
                 r: shard.r,
                 lifespan: shard.lifespan // DESYNC FIX: Send lifespan for client expiration
               });
@@ -2349,6 +2351,7 @@ function tick() {
                 isCrit: newBullet.isCrit,
                 bulletColor: newBullet.bulletColor,
                 bulletType: newBullet.bulletType, // Inherit tower type for rendering
+                pierce: newBullet.pierce, // For client-side pierce prediction
                 r: newBullet.r,
                 lifespan: newBullet.lifespan // DESYNC FIX: Send lifespan for client expiration
               });
