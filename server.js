@@ -18,6 +18,10 @@ import { geckos } from "@geckos.io/server";
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
+// ES Module equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 // ===== Game constants =====
 const MAX_PLAYERS = 4;
 const TICK_RATE = 45;          // Physics at 45Hz (balanced for cloud hosting)
