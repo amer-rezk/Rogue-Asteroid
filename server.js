@@ -2045,7 +2045,11 @@ function tick() {
     }
 
     // Bullet update (no homing - predictive aiming handles targeting)
-    for (const b of bullets) {
+    for (let bi = 0; bi < bullets.length; bi++) {
+      const b = bullets[bi];
+      // Clear skipThisTick flag - bullets created last tick can now be processed
+      b.skipThisTick = false;
+      
       b.x += b.vx * DT;
       b.y += b.vy * DT;
 
@@ -2062,8 +2066,12 @@ function tick() {
 
     // Bullet-missile collision (now O(bullets × missiles_per_slot) instead of O(bullets × all_missiles))
     // PERFORMANCE: Added quick bounding box rejection before expensive distance calc
-    for (const b of bullets) {
+    // NOTE: Use fixed bulletCount to avoid processing newly spawned ricochets in same tick
+    const bulletCount = bullets.length;
+    for (let bulletIdx = 0; bulletIdx < bulletCount; bulletIdx++) {
+      const b = bullets[bulletIdx];
       if (b.dead) continue;
+      if (b.skipThisTick) continue; // Skip newly created ricochet bullets until next tick
       const slot = b.ownerSlot;
       const slotMissiles = missilesBySlot[slot];
       if (!slotMissiles) continue;
@@ -2208,6 +2216,7 @@ function tick() {
                 hitSet: new Set([m.id]), 
                 modules: shardModules, // SYNERGY: Inherit modules for combo effects!
                 bulletColor: b.bulletColor, // VISUAL: Inherit custom color (e.g. from Confetti Cannon)
+                skipThisTick: true, // Don't process until next tick
               };
               bullets.push(shard);
 
@@ -2319,64 +2328,127 @@ function tick() {
             if (nearestTarget) {
               // Calculate intercept point using prediction
               const bulletSpeed = Math.hypot(b.vx, b.vy);
-              const speedMult = slotSpeedMultipliers[b.ownerSlot] || 1;
-              const intercept = calculateInterceptPoint(m.x, m.y, bulletSpeed, nearestTarget, speedMult);
               
-              // Calculate direction to intercept point
-              const dx = intercept.x - m.x;
-              const dy = intercept.y - m.y;
-              const dist = Math.hypot(dx, dy);
-              
-              // SYNERGY: Spawn fresh bullet that inherits everything from parent
-              // Modules, pierce, chain chance, explosive - all carry forward!
-              const newBullet = {
-                id: uid(),
-                ownerId: b.ownerId,
-                ownerSlot: b.ownerSlot,
-                x: m.x + (dx / dist) * (m.r + 5),
-                y: m.y + (dy / dist) * (m.r + 5),
-                vx: (dx / dist) * bulletSpeed,
-                vy: (dy / dist) * bulletSpeed,
-                r: b.r, // Inherit size (caliber upgrade)
-                dmg: b.dmg * 0.9, // -10% damage per bounce
-                isCrit: b.isCrit,
-                explosive: b.explosive, // Inherit explosive
-                lifespan: 3.0,
-                isTowerBullet: b.isTowerBullet,
-                bulletType: b.bulletType,
-                chainChance: b.chainChance, // Inherit chain lightning
-                ricochet: b.ricochet - 1, // Decrement ricochet counter
-                pierce: b.pierce, // Inherit pierce (used after ricochet depleted)
-                hitSet: (() => { // OPTIMIZED: Avoid spread operator allocation
-                  const newSet = new Set(b.hitSet);
-                  newSet.add(m.id);
-                  return newSet;
-                })(),
-                modules: b.modules || [], // SYNERGY: Inherit ALL modules!
-                bulletColor: b.bulletColor,
-              };
-              bullets.push(newBullet);
-              
-              // Notify client about new bullet
-              queueEvent("bulletSpawn", {
-                id: newBullet.id,
-                x: newBullet.x,
-                y: newBullet.y,
-                vx: newBullet.vx,
-                vy: newBullet.vy,
-                slot: newBullet.ownerSlot,
-                isCrit: newBullet.isCrit,
-                bulletColor: newBullet.bulletColor,
-                bulletType: newBullet.bulletType, // Inherit tower type for rendering
-                ricochet: newBullet.ricochet, // For client-side ricochet/pierce order
-                pierce: newBullet.pierce, // For client-side pierce prediction
-                r: newBullet.r,
-                lifespan: newBullet.lifespan // DESYNC FIX: Send lifespan for client expiration
-              });
-              
-              // Original bullet dies after spawning ricochet - DO NOT let pierce override this
-              b.dead = true;
-              b.ricochetTriggered = true; // Flag to prevent pierce from overriding
+              // Safety check: bullet must have valid speed
+              if (bulletSpeed < 1) {
+                // Fall through to pierce logic
+              } else {
+                const speedMult = slotSpeedMultipliers[b.ownerSlot] || 1;
+                const intercept = calculateInterceptPoint(m.x, m.y, bulletSpeed, nearestTarget, speedMult);
+                
+                // Calculate direction to intercept point
+                const dx = intercept.x - m.x;
+                const dy = intercept.y - m.y;
+                const dist = Math.hypot(dx, dy);
+                
+                // Safety check: must have valid direction
+                if (dist < 0.1) {
+                  // Target is at same position, just shoot toward target directly
+                  const tdx = nearestTarget.x - m.x;
+                  const tdy = nearestTarget.y - m.y;
+                  const tdist = Math.hypot(tdx, tdy);
+                  if (tdist > 0.1) {
+                    // SYNERGY: Spawn fresh bullet that inherits everything from parent
+                    const newBullet = {
+                      id: uid(),
+                      ownerId: b.ownerId,
+                      ownerSlot: b.ownerSlot,
+                      x: m.x + (tdx / tdist) * (m.r + 5),
+                      y: m.y + (tdy / tdist) * (m.r + 5),
+                      vx: (tdx / tdist) * bulletSpeed,
+                      vy: (tdy / tdist) * bulletSpeed,
+                      r: b.r,
+                      dmg: b.dmg * 0.9,
+                      isCrit: b.isCrit,
+                      explosive: b.explosive,
+                      lifespan: 3.0,
+                      isTowerBullet: b.isTowerBullet,
+                      bulletType: b.bulletType,
+                      chainChance: b.chainChance,
+                      ricochet: b.ricochet - 1,
+                      pierce: b.pierce,
+                      hitSet: (() => {
+                        const newSet = new Set(b.hitSet);
+                        newSet.add(m.id);
+                        return newSet;
+                      })(),
+                      modules: b.modules || [],
+                      bulletColor: b.bulletColor,
+                      skipThisTick: true,
+                    };
+                    // Safety check for NaN
+                    if (!isNaN(newBullet.x) && !isNaN(newBullet.vx)) {
+                      bullets.push(newBullet);
+                      queueEvent("bulletSpawn", {
+                        id: newBullet.id, x: newBullet.x, y: newBullet.y,
+                        vx: newBullet.vx, vy: newBullet.vy, slot: newBullet.ownerSlot,
+                        isCrit: newBullet.isCrit, bulletColor: newBullet.bulletColor,
+                        bulletType: newBullet.bulletType, ricochet: newBullet.ricochet,
+                        pierce: newBullet.pierce, r: newBullet.r, lifespan: newBullet.lifespan
+                      });
+                      b.dead = true;
+                      b.ricochetTriggered = true;
+                    }
+                  }
+                } else {
+                  // SYNERGY: Spawn fresh bullet that inherits everything from parent
+                  // Modules, pierce, chain chance, explosive - all carry forward!
+                  const newBullet = {
+                    id: uid(),
+                    ownerId: b.ownerId,
+                    ownerSlot: b.ownerSlot,
+                    x: m.x + (dx / dist) * (m.r + 5),
+                    y: m.y + (dy / dist) * (m.r + 5),
+                    vx: (dx / dist) * bulletSpeed,
+                    vy: (dy / dist) * bulletSpeed,
+                    r: b.r, // Inherit size (caliber upgrade)
+                    dmg: b.dmg * 0.9, // -10% damage per bounce
+                    isCrit: b.isCrit,
+                    explosive: b.explosive, // Inherit explosive
+                    lifespan: 3.0,
+                    isTowerBullet: b.isTowerBullet,
+                    bulletType: b.bulletType,
+                    chainChance: b.chainChance, // Inherit chain lightning
+                    ricochet: b.ricochet - 1, // Decrement ricochet counter
+                    pierce: b.pierce, // Inherit pierce (used after ricochet depleted)
+                    hitSet: (() => { // OPTIMIZED: Avoid spread operator allocation
+                      const newSet = new Set(b.hitSet);
+                      newSet.add(m.id);
+                      return newSet;
+                    })(),
+                    modules: b.modules || [], // SYNERGY: Inherit ALL modules!
+                    bulletColor: b.bulletColor,
+                    skipThisTick: true, // Don't process this bullet until next tick
+                  };
+                  
+                  // Safety check: only add bullet if it has valid position/velocity
+                  if (!isNaN(newBullet.x) && !isNaN(newBullet.y) && !isNaN(newBullet.vx) && !isNaN(newBullet.vy)) {
+                    bullets.push(newBullet);
+                    
+                    // Notify client about new bullet
+                    queueEvent("bulletSpawn", {
+                      id: newBullet.id,
+                      x: newBullet.x,
+                      y: newBullet.y,
+                      vx: newBullet.vx,
+                      vy: newBullet.vy,
+                      slot: newBullet.ownerSlot,
+                      isCrit: newBullet.isCrit,
+                      bulletColor: newBullet.bulletColor,
+                      bulletType: newBullet.bulletType, // Inherit tower type for rendering
+                      ricochet: newBullet.ricochet, // For client-side ricochet/pierce order
+                      pierce: newBullet.pierce, // For client-side pierce prediction
+                      r: newBullet.r,
+                      lifespan: newBullet.lifespan // DESYNC FIX: Send lifespan for client expiration
+                    });
+                    
+                    // Original bullet dies after spawning ricochet - DO NOT let pierce override this
+                    b.dead = true;
+                    b.ricochetTriggered = true; // Flag to prevent pierce from overriding
+                  }
+                  // If NaN, fall through to pierce logic
+                }
+              }
             }
             // If no target found, DON'T set ricochetTriggered - fall through to pierce logic
             // This allows pierce to work when there's nothing to bounce to
