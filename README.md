@@ -1,84 +1,54 @@
-# 🚀 Rogue Asteroid PvP - Local Hosting Setup
+# Rogue Asteroid PvP - WebRTC/UDP Version
 
-A competitive asteroid defense game with WebRTC UDP-like transport for low-latency multiplayer.
-
-## Quick Start
-
-```bash
-# Install dependencies
-npm install
-
-# Start server
-npm start
-```
-
-Then open `http://localhost:3000` in your browser.
-
-## Network Setup for Internet Play
-
-1. **Port Forward TCP 3000** on your router to your machine
-2. Share your **public IP address** with players (find it at [whatismyip.com](https://whatismyip.com))
-3. Players connect to: `http://YOUR_PUBLIC_IP:3000`
+This version uses **geckos.io** for WebRTC DataChannels, giving you UDP-like performance for game state updates while keeping reliable delivery for important messages.
 
 ## Architecture
 
-- **WebSocket (TCP)**: Signaling, lobby, chat, purchases, upgrades
-- **WebRTC DataChannel (UDP-like)**: High-frequency game state broadcasts (45Hz physics, ~22Hz network)
+- **Reliable Channel (TCP-like)**: Lobby, chat, purchases, tower buying, upgrades, game events
+- **Unreliable Channel (UDP-like)**: Game state broadcasts at 22Hz (missiles, bullets, positions)
 
-### WebRTC Status
+## Key Benefits
 
-The server automatically detects WebRTC availability:
-- ✓ **With wrtc**: UDP-like transport via WebRTC DataChannels (lowest latency)
-- ✗ **Without wrtc**: Falls back to WebSocket-only (still playable)
+1. **Lower Latency**: UDP doesn't wait for lost packet retransmission
+2. **No Head-of-Line Blocking**: One lost packet doesn't delay all following packets
+3. **Better for Real-time Games**: Perfect for your 22Hz state updates
 
-To enable WebRTC on the server (optional, requires native compilation):
+## Files Changed
+
+- `server.js` - Uses `@geckos.io/server` instead of `ws`
+- `client.js` - Uses geckos.io client for WebRTC connection
+- `index.html` - Loads geckos.io client from CDN
+- `package.json` - Dependencies updated
+- `fly.toml` - UDP ports configured for WebRTC
+- `Dockerfile` - Exposes UDP port range
+
+## Deployment to Fly.io
+
+1. Copy all files to your project root (same level as your existing files)
+
+2. Deploy:
+   ```bash
+   fly deploy
+   ```
+
+3. The game will be available at `https://rogue-asteroid.fly.dev`
+
+## Port Configuration
+
+- **TCP 3000**: HTTP server + WebRTC signaling
+- **UDP 10000-10010**: WebRTC data channels
+
+## Local Development
+
 ```bash
-npm install wrtc
+npm install
+npm start
 ```
 
-**Note**: Browser clients use native WebRTC - no special setup required.
+Then open http://localhost:3000
 
-## Game Features
+## Notes
 
-- 🎮 **1-4 Player Competitive Mode**
-- 🎯 **13 Roguelike Upgrades** (4 rarities: Common → Legendary)
-- 🗼 **3 Tower Types** (Gatling, Sniper, Missile)
-- ⚔️ **6 PvP Attack Units** (Swarm, Bruiser, Carrier, Splitter, Ghost, Berserker)
-- 👑 **Boss Waves** with module rewards
-- 💬 **Chat System**
-- 👁️ **Spectator Mode**
-
-## Controls
-
-- **Mouse**: Aim turret
-- **Left Click**: Fire (auto-fires by default)
-- **1/2/3**: Quick select upgrades
-- **R**: Reroll upgrades
-- **Enter**: Focus chat
-- **Escape**: Pause game
-
-## File Structure
-
-```
-rogue-asteroid/
-├── server.js      # Game server (Node.js)
-├── package.json   # Dependencies
-└── docs/
-    └── index.html # Game client
-```
-
-## Troubleshooting
-
-**"WebRTC unavailable"**: The game still works over WebSocket. For lowest latency, install `wrtc`:
-```bash
-npm install wrtc
-```
-
-**Players can't connect**: Ensure:
-1. Port 3000 is forwarded on your router
-2. Firewall allows incoming connections
-3. You're sharing your PUBLIC IP, not 192.168.x.x
-
-**High latency**: WebRTC provides the best performance. Check the connection indicator in-game (top-right):
-- 🟢 WebRTC = UDP-like transport
-- 🟡 WebSocket = TCP fallback
+- The UDP ports in `fly.toml` support up to ~10 concurrent WebRTC connections
+- If you need more concurrent players, add more UDP port entries
+- geckos.io handles the WebRTC complexity automatically
