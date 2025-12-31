@@ -20,7 +20,7 @@
         <div class="section">
           <label>SERVER</label>
           <div class="input-row">
-            <input type="text" id="serverUrl" value="wss://mute-lungfish-no-name-orgs-aef98851.koyeb.app/ws" placeholder="wss://server-address/ws">
+            <input type="text" id="serverUrl" value="https://rogue-asteroid-0z-syq.fly.dev" placeholder="https://server-address">
             <button id="connectBtn" class="btn">CONNECT</button>
           </div>
           <div id="status" class="status">NOT CONNECTED</div>
@@ -80,6 +80,8 @@
     <canvas id="game"></canvas>
   </div>
 
+  <!-- Geckos.io Client Library for WebRTC/UDP -->
+  <script src="https://cdn.jsdelivr.net/npm/@geckos.io/client@2/dist/geckos.io-client.min.js"></script>
   <script src="client.js"></script>
 </body>
 </html>
