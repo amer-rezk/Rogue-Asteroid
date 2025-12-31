@@ -1,54 +1,75 @@
-# Rogue Asteroid PvP - WebRTC/UDP Version
+# ☄️ Rogue Asteroid PvP
 
-This version uses **geckos.io** for WebRTC DataChannels, giving you UDP-like performance for game state updates while keeping reliable delivery for important messages.
+A competitive multiplayer tower defense game where players defend against waves of asteroids while sending attacks at each other. Last player standing wins!
 
-## Architecture
-
-- **Reliable Channel (TCP-like)**: Lobby, chat, purchases, tower buying, upgrades, game events
-- **Unreliable Channel (UDP-like)**: Game state broadcasts at 22Hz (missiles, bullets, positions)
-
-## Key Benefits
-
-1. **Lower Latency**: UDP doesn't wait for lost packet retransmission
-2. **No Head-of-Line Blocking**: One lost packet doesn't delay all following packets
-3. **Better for Real-time Games**: Perfect for your 22Hz state updates
-
-## Files Changed
-
-- `server.js` - Uses `@geckos.io/server` instead of `ws`
-- `client.js` - Uses geckos.io client for WebRTC connection
-- `index.html` - Loads geckos.io client from CDN
-- `package.json` - Dependencies updated
-- `fly.toml` - UDP ports configured for WebRTC
-- `Dockerfile` - Exposes UDP port range
-
-## Deployment to Fly.io
-
-1. Copy all files to your project root (same level as your existing files)
-
-2. Deploy:
-   ```bash
-   fly deploy
-   ```
-
-3. The game will be available at `https://rogue-asteroid.fly.dev`
-
-## Port Configuration
-
-- **TCP 3000**: HTTP server + WebRTC signaling
-- **UDP 10000-10010**: WebRTC data channels
-
-## Local Development
+## Quick Start
 
 ```bash
 npm install
-npm start
+node server.js
 ```
 
-Then open http://localhost:3000
+Then open `http://localhost:3000` in your browser.
 
-## Notes
+## Gameplay
 
-- The UDP ports in `fly.toml` support up to ~10 concurrent WebRTC connections
-- If you need more concurrent players, add more UDP port entries
-- geckos.io handles the WebRTC complexity automatically
+- **Defend** your base from asteroid waves
+- **Earn gold** by destroying asteroids
+- **Buy towers** for extra firepower
+- **Send attacks** at opponents to overwhelm them
+- **Choose upgrades** between waves (roguelike card system)
+
+## Controls
+
+| Action | Control |
+|--------|---------|
+| Aim | Mouse movement |
+| Manual fire | Click |
+| Auto-aim | Enabled by default |
+| Buy towers/attacks | Click UI buttons |
+
+## Towers
+
+| Tower | Cost | Description |
+|-------|------|-------------|
+| Gatling | 50g | Fast fire rate, low damage |
+| Sniper | 120g | Slow, high damage, piercing |
+| Missile | 250g | Homing rockets, AOE damage |
+
+## Attack Units
+
+| Attack | Cost | Effect |
+|--------|------|--------|
+| 🐝 Swarm | 25g | 3 fast weak asteroids |
+| 🪨 Bruiser | 35g | 1 very tanky asteroid |
+| 👻 Ghost | 40g | 2 phasing asteroids (hard to hit) |
+| 💎 Splitter | 50g | Splits into 15 on death |
+| 👑 Carrier | 60g | Spawns minions as it descends |
+
+## Boss Waves
+
+Every 10 waves, a boss asteroid appears. Damaging it spawns smaller minions.
+
+### Custom Boss Images
+
+Place PNG images in `docs/images/`:
+- `Boss.png` - Main boss
+- `boss-ad-1.png` to `boss-ad-5.png` - Boss minions
+
+## Multiplayer
+
+- Up to 4 players
+- Host can force-start the game
+- Spectator mode for late joiners
+- Chat available in lobby and in-game
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `PORT` | Server port (default: 3000) |
+| `LEADERBOARD_PASSWORD` | Password to clear leaderboard |
+
+---
+
+*Survive the asteroid storm. Destroy your enemies.*

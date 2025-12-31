@@ -1,11 +1,7 @@
 (() => {
   // ===== Configuration =====
-  // Fly.io server with WebRTC/UDP support via geckos.io
-  const DEFAULT_SERVER = "https://rogue-asteroid.fly.dev";
-  
-  // ===== GECKOS.IO CONFIGURATION =====
-  // Will be loaded from CDN and connection handled in connect()
-  let geckosClient = null;
+  // Updated to new Netlify address
+  const DEFAULT_SERVER = "wss://mute-lungfish-no-name-orgs-aef98851.koyeb.app/ws";
 
   // ===== PERFORMANCE SETTINGS =====
   // Quality levels: 0=Low (best performance), 1=Medium, 2=High (best visuals)
@@ -879,42 +875,17 @@
     if (statusText) statusText.textContent = "CONNECTING...";
     if (statusLED) statusLED.className = "led";
 
-    // Close existing connection if any
-    if (geckosClient) {
-      try { geckosClient.close(); } catch { }
-    }
+    if (ws) try { ws.close(); } catch { }
 
     // Use serverUrl input value if available, otherwise use default
     const serverUrlInput = document.getElementById("serverUrl");
-    let serverAddress = serverUrlInput?.value?.trim() || DEFAULT_SERVER;
-    
-    // Parse server address for geckos.io
-    // Convert wss:// URLs to https:// for geckos.io (it handles the upgrade)
-    serverAddress = serverAddress.replace(/^wss?:\/\//, 'https://').replace(/\/ws\/?$/, '');
-    
-    // Create geckos.io client
-    geckosClient = geckos({
-      url: serverAddress,
-      port: null  // Use default port from URL
-    });
-    
-    // Handle successful connection
-    geckosClient.onConnect((error) => {
-      if (error) {
-        console.error('Connection error:', error);
-        if (statusText) statusText.textContent = "ERROR";
-        if (statusLED) statusLED.className = "led red";
-        
-        // Retry connection
-        if (!forcedDisconnect) {
-          setTimeout(connect, 3000);
-        }
-        return;
-      }
-      
+    const serverAddress = serverUrlInput?.value?.trim() || DEFAULT_SERVER;
+    ws = new WebSocket(serverAddress);
+
+    ws.onopen = () => {
       connected = true;
       if (statusText) {
-        statusText.textContent = "ONLINE (UDP)";
+        statusText.textContent = "ONLINE";
         statusText.className = "status-text connected";
       }
       if (statusLED) statusLED.className = "led green";
@@ -922,21 +893,21 @@
       lobbyEl.style.display = "block";
 
       const name = nameInput.value.trim() || `Player`;
-      if (name) send({ t: "setName", name });
+      if (name) ws.send(JSON.stringify({ t: "setName", name }));
       
       // Start ping interval for latency measurement
       if (pingInterval) clearInterval(pingInterval);
       pingInterval = setInterval(() => {
-        if (geckosClient && connected) {
+        if (ws && ws.readyState === 1) {
           lastPingTime = Date.now();
-          send({ t: "ping", ts: lastPingTime });
+          ws.send(JSON.stringify({ t: "ping", ts: lastPingTime }));
         }
-      }, 2000);
-    });
-    
-    // Handle disconnect
-    geckosClient.onDisconnect(() => {
+      }, 2000); // Ping every 2 seconds
+    };
+
+    ws.onclose = () => {
       connected = false;
+      // Clear ping interval
       if (pingInterval) {
         clearInterval(pingInterval);
         pingInterval = null;
@@ -952,6 +923,8 @@
           statusText.className = "status-text";
         }
         if (statusLED) statusLED.className = "led red";
+      } else if (currentStatus.includes("PROGRESS")) {
+        if (statusText) statusText.textContent = "GAME IN PROGRESS - RETRYING...";
       }
 
       lobbyEl.style.display = "none";
@@ -961,36 +934,21 @@
       } else if (phase !== "menu") {
         showMenu();
       }
-    });
-    
-    // Handle reliable messages (lobby, chat, events)
-    geckosClient.on('reliable', (msg) => {
+    };
+
+    ws.onerror = () => {
+      if (statusText) statusText.textContent = "ERROR";
+      if (statusLED) statusLED.className = "led red";
+    };
+
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
       handleMessage(msg);
-    });
-    
-    // Handle unreliable (UDP) messages - game state at 22Hz
-    geckosClient.onRaw((rawMsg) => {
-      // Raw messages are ArrayBuffer or string, parse if needed
-      let msg;
-      if (typeof rawMsg === 'string') {
-        try { msg = JSON.parse(rawMsg); } catch { return; }
-      } else if (rawMsg instanceof ArrayBuffer) {
-        try { 
-          const text = new TextDecoder().decode(rawMsg);
-          msg = JSON.parse(text); 
-        } catch { return; }
-      } else {
-        msg = rawMsg;
-      }
-      handleMessage(msg);
-    });
+    };
   }
 
-  // Send reliable message (lobby, chat, purchases, game events)
   function send(obj) {
-    if (geckosClient && connected) {
-      geckosClient.emit('reliable', obj);
-    }
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
   }
 
   function handleMessage(msg) {
@@ -1247,8 +1205,11 @@
           moduleCards = moduleCards.filter((c, i) => i !== msg.cardIndex);
         }
         if (msg.playerId === myId) {
-          // We picked - show confirmation
+          // We picked - show confirmation and clear our turn
           moduleFeedback = { moduleId: msg.moduleId, time: Date.now() };
+          // Clear current picker until server tells us who's next
+          // This prevents double-picks if events arrive out of order
+          currentModulePicker = null;
         }
         break;
 
@@ -1972,7 +1933,11 @@
 
     // Handle module card selection (BEFORE buildMenuOpen check!)
     if (phase === "playing" && moduleCardPhase && hoveredModuleCard >= 0 && currentModulePicker === myId) {
-      send({ t: "pickModuleCard", cardIndex: hoveredModuleCard });
+      const selectedCard = moduleCards[hoveredModuleCard];
+      if (selectedCard) {
+        // Send both index and moduleId for server verification
+        send({ t: "pickModuleCard", cardIndex: hoveredModuleCard, moduleId: selectedCard.id });
+      }
       mouseDown = false;
       return;
     }
@@ -2768,8 +2733,8 @@
 
       // Asteroids/Missiles
       // PERFORMANCE: Get render bounds once for culling
-      const renderWidth = scale.renderW;
-      const renderHeight = scale.renderH;
+      const renderWidth = world.width * sx;
+      const renderHeight = world.height * sy;
       
       for (const m of lastSnap.missiles) {
         const x = m.x * sx;
@@ -5356,6 +5321,8 @@
       }
     } catch (err) {
       console.error('Draw error:', err);
+      // SAFETY: Restore context to prevent transform accumulation on error
+      try { ctx.restore(); } catch (e) {}
     }
   }
 

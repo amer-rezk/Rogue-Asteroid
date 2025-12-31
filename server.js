@@ -14,12 +14,7 @@ const express = require("express");
 const http = require("http");
 const path = require("path");
 const fs = require("fs");
-const geckos = require("@geckos.io/server").default;
-
-// ===== GECKOS.IO / WEBRTC CONFIGURATION =====
-// WebRTC uses UDP for unreliable fast data (game state at 22Hz)
-// and a reliable channel for important messages (purchases, chat, etc.)
-const GECKOS_PORT_RANGE = { min: 10000, max: 10100 }; // UDP port range for WebRTC
+const { WebSocketServer } = require("ws");
 
 // ===== Game constants =====
 const MAX_PLAYERS = 4;
@@ -243,14 +238,7 @@ app.use(express.static(path.join(__dirname, "docs")));
 app.get("/health", (_, res) => res.json({ ok: true }));
 
 const server = http.createServer(app);
-
-// Initialize geckos.io with WebRTC/UDP support
-const io = geckos({
-  iceServers: [],  // Use default STUN servers
-  portRange: GECKOS_PORT_RANGE,
-  cors: { origin: '*', allowAuthorization: true }
-});
-io.addServer(server);
+const wss = new WebSocketServer({ server, path: "/ws" });
 
 const players = new Map();
 
@@ -368,58 +356,35 @@ function rand(a, b) {
   return a + Math.random() * (b - a);
 }
 
-// ===== GECKOS.IO MESSAGING =====
-// RELIABLE: For important messages (lobby, chat, purchases, game events)
-// Uses TCP-like ordered delivery
-function safeSend(channel, obj) {
-  if (channel && !channel.isClosed) {
-    channel.emit('reliable', obj);
+function safeSend(ws, obj) {
+  if (ws.readyState === 1) ws.send(JSON.stringify(obj));
+}
+function safeSendRaw(ws, str) {
+  // Skip if WebSocket buffer is backed up (backpressure)
+  // This prevents server from getting overwhelmed sending to slow clients
+  if (ws.readyState === 1 && ws.bufferedAmount < 65536) {
+    ws.send(str);
   }
 }
-
-// UNRELIABLE (UDP): For high-frequency game state
-// Faster, may drop packets, but that's okay for 22Hz updates
-function safeSendUnreliable(channel, obj) {
-  if (channel && !channel.isClosed) {
-    channel.raw.emit(obj);
-  }
-}
-
-// Broadcast to all players (reliable channel)
 function broadcast(obj) {
-  for (const p of players.values()) {
-    safeSend(p.channel, obj);
-  }
+  const str = JSON.stringify(obj);
+  for (const p of players.values()) safeSendRaw(p.ws, str);
 }
-
-// Broadcast to players AND spectators (reliable)
 function broadcastAll(obj) {
-  for (const p of players.values()) {
-    safeSend(p.channel, obj);
-  }
-  for (const channel of spectators) {
-    safeSend(channel, obj);
-  }
+  // Send to both players and spectators - stringify once
+  const str = JSON.stringify(obj);
+  for (const p of players.values()) safeSendRaw(p.ws, str);
+  for (const ws of spectators) safeSendRaw(ws, str);
 }
-
-// Broadcast lobby state
 function broadcastLobby() {
+  // Send lobby state to both players and spectators
   const snapshot = { t: "lobby", ...lobbySnapshot() };
-  broadcastAll(snapshot);
+  const str = JSON.stringify(snapshot);
+  for (const p of players.values()) safeSendRaw(p.ws, str);
+  for (const ws of spectators) safeSendRaw(ws, str);
 }
 
-// FAST STATE BROADCAST (unreliable/UDP)
-// This is the key optimization - game state at 22Hz uses UDP
-function broadcastStateUnreliable(obj) {
-  for (const p of players.values()) {
-    safeSendUnreliable(p.channel, obj);
-  }
-  for (const channel of spectators) {
-    safeSendUnreliable(channel, obj);
-  }
-}
-
-// Spectator tracking (now stores geckos channels, not WebSockets)
+// Spectator tracking
 const spectators = new Set();
 
 // OPTIMIZED: Queue an event for client-side visual effects
@@ -891,7 +856,7 @@ function spawnWave() {
         const attackDef = ATTACK_TYPES[attack.type];
         if (sender && attackDef) {
           sender.gold += attackDef.cost;
-          safeSend(sender.channel, { t: "attackRefund", gold: attackDef.cost, reason: "Target eliminated" });
+          safeSend(sender.ws, { t: "attackRefund", gold: attackDef.cost, reason: "Target eliminated" });
         }
       }
       continue;
@@ -976,8 +941,8 @@ function startGame(solo = false) {
   spawnWave();
   broadcast({ t: "started", world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, wave, solo: soloMode });
   // Also notify spectators that game started
-  for (const spec of spectators) {
-    safeSend(spec, { t: "started", world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, wave, solo: soloMode, isSpectator: true });
+  for (const ws of spectators) {
+    safeSend(ws, { t: "started", world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, wave, solo: soloMode, isSpectator: true });
   }
 }
 
@@ -1002,7 +967,7 @@ function queueUpgradesAndNextWave() {
     if (totalIncome > 0) {
       p.gold += totalIncome;
       // Send to client as 'interest' so the UI popup shows the total amount
-      safeSend(p.channel, { t: "interest", amount: totalIncome });
+      safeSend(p.ws, { t: "interest", amount: totalIncome });
     }
     
     // Decrement module lock waves on towers
@@ -1038,9 +1003,9 @@ function queueUpgradesAndNextWave() {
     
     if (queue.length === 1) {
       const rerollCost = getRerollCost(0);
-      safeSend(p.channel, { t: "upgrade", options, wave: wave, rerollCost, queueSize: queue.length });
+      safeSend(p.ws, { t: "upgrade", options, wave: wave, rerollCost, queueSize: queue.length });
     } else {
-      safeSend(p.channel, { t: "upgradeQueued", queueSize: queue.length });
+      safeSend(p.ws, { t: "upgradeQueued", queueSize: queue.length });
     }
   }
   
@@ -1129,7 +1094,7 @@ function sendNextPendingUpgrade(playerId) {
   
   const next = queue[0];
   const rerollCost = getRerollCost(next.rerollCount);
-  safeSend(p.channel, { t: "upgrade", options: next.options, wave: next.wave, rerollCost, queueSize: queue.length });
+  safeSend(p.ws, { t: "upgrade", options: next.options, wave: next.wave, rerollCost, queueSize: queue.length });
 }
 
 function resetToLobby() {
@@ -1147,8 +1112,8 @@ function resetToLobby() {
     wave = 0;
 
     // Notify spectators that game ended and they should reconnect to join lobby
-    for (const spec of spectators) {
-      safeSend(spec, { t: "spectateEnd", reason: "Game ended - reconnect to join lobby" });
+    for (const ws of spectators) {
+      safeSend(ws, { t: "spectateEnd", reason: "Game ended - reconnect to join lobby" });
     }
     spectators.clear();
 
@@ -1222,8 +1187,8 @@ function endGame(winnerId) {
 
   broadcast({ t: "gameOver", wave, scores, winnerId, solo: soloMode });
   // Also notify spectators
-  for (const spec of spectators) {
-    safeSend(spec, { t: "gameOver", wave, scores, winnerId, solo: soloMode, wasSpectating: true });
+  for (const ws of spectators) {
+    safeSend(ws, { t: "gameOver", wave, scores, winnerId, solo: soloMode, wasSpectating: true });
   }
 
   setTimeout(() => {
@@ -1655,6 +1620,9 @@ function tick() {
            // Remove from deck
            moduleCards.splice(cardIndex, 1);
            
+           // CRITICAL: Update cached array for state broadcasts
+           cachedModuleCards = moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }));
+           
            // Notify everyone (same as a normal pick, but forced)
            broadcast({ 
             t: "moduleCardPicked", 
@@ -1662,7 +1630,7 @@ function tick() {
             playerName: p.name, 
             moduleId, 
             cardIndex,
-            remainingCards: moduleCards.map(id => ({ id, ...TOWER_MODULES[id] })),
+            remainingCards: cachedModuleCards,
             isAutoPick: true
           });
         }
@@ -1678,7 +1646,7 @@ function tick() {
             t: "modulePickTurn", 
             playerId: modulePickOrder[currentModulePicker], 
             timeLeft: MODULE_PICK_TIME,
-            remainingCards: moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }))
+            remainingCards: cachedModuleCards
           });
         }
       }
@@ -2041,7 +2009,7 @@ function tick() {
                     if (sender && sender.hp > 0) {
                       const goldReward = Math.ceil(5 + wave * 0.5);
                       sender.gold += goldReward;
-                      safeSend(sender.channel, { t: "attackHit", gold: goldReward, target: p.name });
+                      safeSend(sender.ws, { t: "attackHit", gold: goldReward, target: p.name });
                     }
                   }
                   break;
@@ -3181,9 +3149,7 @@ function broadcastGameState() {
   }
   broadcastState.players.length = playerCount;
   
-  // USE UDP (unreliable channel) for game state - faster, lower latency
-  // Dropped packets are OK because state is sent every ~45ms
-  broadcastStateUnreliable(broadcastState);
+  broadcastAll(broadcastState);
   
   // PERFORMANCE: Clear event queue without allocation (reuse array)
   eventQueue.length = 0;
@@ -3196,11 +3162,26 @@ function assignSlot() {
   return -1;
 }
 
-// Geckos.io handles connection health automatically via WebRTC
-// No manual heartbeat needed like with raw WebSockets
+const interval = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) return ws.terminate();
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 30000);
 
-io.onConnection((channel) => {
+wss.on("close", () => { clearInterval(interval); });
+
+wss.on("connection", (ws) => {
   if (phase === "gameover") resetToLobby();
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+  
+  // PERFORMANCE: Disable Nagle's algorithm for lower latency
+  // Nagle buffers small packets (200ms) which kills real-time games
+  if (ws._socket) {
+    ws._socket.setNoDelay(true);
+  }
   
   // Check if they can join as a player
   const canJoinAsPlayer = phase === "lobby" && assignSlot() >= 0;
@@ -3208,19 +3189,22 @@ io.onConnection((channel) => {
   // If game in progress or full, offer spectator mode
   if (!canJoinAsPlayer) {
     const reason = phase !== "lobby" ? "Game in progress" : "Game full (max 4)";
-    safeSend(channel, { 
+    safeSend(ws, { 
       t: "spectateOffer", 
       reason,
       canSpectate: phase === "playing",
       spectatorCount: spectators.size
     });
     
-    // Set up spectator message handler (reliable channel)
-    channel.on('reliable', (msg) => {
+    // Set up spectator message handler
+    ws.on("message", (data) => {
+      let msg;
+      try { msg = JSON.parse(data.toString()); } catch { return; }
+      
       if (msg.t === "spectate" && phase === "playing") {
         // Add as spectator
-        spectators.add(channel);
-        safeSend(channel, { 
+        spectators.add(ws);
+        safeSend(ws, { 
           t: "spectateStart",
           world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
           wave,
@@ -3232,9 +3216,9 @@ io.onConnection((channel) => {
       }
     });
     
-    channel.onDisconnect(() => {
-      if (spectators.has(channel)) {
-        spectators.delete(channel);
+    ws.on("close", () => {
+      if (spectators.has(ws)) {
+        spectators.delete(ws);
         broadcast({ t: "spectatorUpdate", count: spectators.size });
       }
     });
@@ -3245,7 +3229,7 @@ io.onConnection((channel) => {
   const slot = assignSlot();
   const id = uid();
   const player = {
-    id, channel, slot,
+    id, ws, slot,
     name: `Player ${slot + 1}`,
     targetX: 0, targetY: 0,
     manualShooting: false,
@@ -3264,18 +3248,19 @@ io.onConnection((channel) => {
   if (!hostId) hostId = id;
 
   recomputeWorld();
-  safeSend(channel, { 
+  safeSend(ws, { 
     t: "welcome", id, slot, isHost: id === hostId, 
     world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, 
     phase,
     attackTypes: ATTACK_TYPES,
     towerModules: TOWER_MODULES
   });
-  safeSend(channel, { t: "chatHistory", messages: chatHistory });
+  safeSend(ws, { t: "chatHistory", messages: chatHistory });
   broadcast({ t: "lobby", ...lobbySnapshot() });
 
-  // Handle reliable messages (lobby, chat, purchases, game events)
-  channel.on('reliable', (msg) => {
+  ws.on("message", (data) => {
+    let msg;
+    try { msg = JSON.parse(data.toString()); } catch { return; }
     const p = players.get(id);
     if (!p) return;
 
@@ -3291,7 +3276,7 @@ io.onConnection((channel) => {
     }
     if (msg.t === "becomeSpectator" && phase === "lobby") {
       // Player wants to become a spectator, freeing their slot
-      const playerChannel = p.channel;
+      const playerWs = p.ws;
       players.delete(id);
       
       // Reassign slots for remaining players
@@ -3306,17 +3291,38 @@ io.onConnection((channel) => {
       recomputeWorld();
       
       // Add to spectators
-      spectators.add(playerChannel);
+      spectators.add(playerWs);
       
       // Notify the new spectator
-      safeSend(playerChannel, { 
+      safeSend(playerWs, { 
         t: "becameSpectator",
         spectatorCount: spectators.size
       });
       
-      // Note: With geckos.io, we don't need to set up new message handlers
-      // The spectator will receive broadcasts via unreliable channel
-      // For chat, spectators can still send reliable messages
+      // Set up spectator disconnect handler
+      playerWs.removeAllListeners("message");
+      playerWs.on("message", (data) => {
+        // Spectators in lobby can only chat
+        let msg;
+        try { msg = JSON.parse(data.toString()); } catch { return; }
+        if (msg.t === "chat" && msg.text) {
+          const chatMsg = {
+            id: uid(),
+            from: "👁 Spectator",
+            text: msg.text.toString().slice(0, 200),
+            timestamp: Date.now()
+          };
+          chatHistory.push(chatMsg);
+          if (chatHistory.length > 50) chatHistory.shift();
+          broadcast({ t: "chatMsg", ...chatMsg });
+          for (const ws of spectators) safeSend(ws, { t: "chatMsg", ...chatMsg });
+        }
+      });
+      
+      playerWs.on("close", () => {
+        spectators.delete(playerWs);
+        broadcastAll({ t: "spectatorUpdate", count: spectators.size });
+      });
       
       // Update lobby for everyone (including spectators)
       broadcastLobby();
@@ -3336,8 +3342,8 @@ io.onConnection((channel) => {
         if (readyPlayers.length >= 1) {
           const idlePlayers = Array.from(players.entries()).filter(([_, pl]) => !pl.ready);
           for (const [idleId, idlePlayer] of idlePlayers) {
-            safeSend(idlePlayer.channel, { t: "kicked", reason: "Game started without you (idle)" });
-            idlePlayer.channel.close();
+            safeSend(idlePlayer.ws, { t: "kicked", reason: "Game started without you (idle)" });
+            idlePlayer.ws.close();
             players.delete(idleId);
           }
           const remaining = Array.from(players.values()).sort((a, b) => a.slot - b.slot);
@@ -3360,7 +3366,7 @@ io.onConnection((channel) => {
     
     // Ping/pong for latency measurement
     if (msg.t === "ping") {
-      safeSend(channel, { t: "pong", ts: msg.ts });
+      safeSend(ws, { t: "pong", ts: msg.ts });
       return;
     }
     
@@ -3388,16 +3394,16 @@ io.onConnection((channel) => {
       if (!opt) return;
       
       applyUpgrade(p, opt);
-      safeSend(p.channel, { t: "picked", key: pickKey });
+      safeSend(p.ws, { t: "picked", key: pickKey });
       
       queue.shift();
       
       if (queue.length > 0) {
         const next = queue[0];
         const rerollCost = getRerollCost(next.rerollCount);
-        safeSend(p.channel, { t: "upgrade", options: next.options, wave: next.wave, rerollCost, queueSize: queue.length });
+        safeSend(p.ws, { t: "upgrade", options: next.options, wave: next.wave, rerollCost, queueSize: queue.length });
       } else {
-        safeSend(p.channel, { t: "upgradeQueueEmpty" });
+        safeSend(p.ws, { t: "upgradeQueueEmpty" });
       }
       return;
     }
@@ -3410,7 +3416,7 @@ io.onConnection((channel) => {
       const rerollCost = getRerollCost(current.rerollCount);
       
       if (p.gold < rerollCost) {
-        safeSend(p.channel, { t: "rerollFailed", reason: "Not enough gold" });
+        safeSend(p.ws, { t: "rerollFailed", reason: "Not enough gold" });
         return;
       }
       
@@ -3422,7 +3428,7 @@ io.onConnection((channel) => {
       
       const nextRerollCost = getRerollCost(current.rerollCount);
       
-      safeSend(p.channel, { 
+      safeSend(p.ws, { 
         t: "upgrade", 
         options: newOptions, 
         wave: current.wave,
@@ -3441,7 +3447,7 @@ io.onConnection((channel) => {
       
       const cost = msg.cost || 30;
       if (p.gold < cost) {
-        safeSend(p.channel, { t: "buyUpgradeFailed", reason: "Not enough gold" });
+        safeSend(p.ws, { t: "buyUpgradeFailed", reason: "Not enough gold" });
         return;
       }
       
@@ -3459,7 +3465,7 @@ io.onConnection((channel) => {
       queue.unshift(newEntry);
       
       const nextRerollCost = getRerollCost(0);
-      safeSend(p.channel, { 
+      safeSend(p.ws, { 
         t: "upgrade", 
         options: newEventOptions, 
         wave: wave,
@@ -3519,7 +3525,7 @@ io.onConnection((channel) => {
       });
       
       if (validTargets.length === 0) {
-        safeSend(channel, { t: "attackFailed", reason: "No valid targets" });
+        safeSend(ws, { t: "attackFailed", reason: "No valid targets" });
         return;
       }
       
@@ -3552,12 +3558,12 @@ io.onConnection((channel) => {
         }
         attackQueue.get(targetSlot).push({ type: attackType, senderId: id });
         
-        if (i === 0 && targetPlayer.channel) {
-          safeSend(targetPlayer.channel, { t: "incomingAttack", attackType, from: p.name, count: toBuy });
+        if (i === 0 && targetPlayer.ws) {
+          safeSend(targetPlayer.ws, { t: "incomingAttack", attackType, from: p.name, count: toBuy });
         }
       }
       
-      safeSend(channel, { t: "attackQueued", attackType, count: toBuy, totalCost });
+      safeSend(ws, { t: "attackQueued", attackType, count: toBuy, totalCost });
       return;
     }
 
@@ -3634,7 +3640,7 @@ io.onConnection((channel) => {
       tower.modules[moduleSlot] = moduleId;
       tower.moduleLockWaves[moduleSlot] = 3; // Locked for 3 waves
       
-      safeSend(channel, { t: "moduleSlotted", towerIndex, moduleSlot, moduleId });
+      safeSend(ws, { t: "moduleSlotted", towerIndex, moduleSlot, moduleId });
     }
 
     // Remove a module from tower (only if not locked)
@@ -3647,7 +3653,7 @@ io.onConnection((channel) => {
       if (!tower) return;
       if (!tower.modules[moduleSlot]) return; // No module to remove
       if (tower.moduleLockWaves[moduleSlot] > 0) {
-        safeSend(channel, { t: "moduleError", error: `Module locked for ${tower.moduleLockWaves[moduleSlot]} more waves` });
+        safeSend(ws, { t: "moduleError", error: `Module locked for ${tower.moduleLockWaves[moduleSlot]} more waves` });
         return;
       }
       
@@ -3655,36 +3661,52 @@ io.onConnection((channel) => {
       p.inventory.push(tower.modules[moduleSlot]);
       tower.modules[moduleSlot] = null;
       
-      safeSend(channel, { t: "moduleUnslotted", towerIndex, moduleSlot });
+      safeSend(ws, { t: "moduleUnslotted", towerIndex, moduleSlot });
     }
 
     // Pick a module card during boss reward phase
     if (msg.t === "pickModuleCard" && moduleCardPhase) {
-      const { cardIndex } = msg;
-      if (cardIndex < 0 || cardIndex >= moduleCards.length) return;
+      const { cardIndex, moduleId } = msg;
+      
+      // Verify it's this player's turn
       if (modulePickOrder[currentModulePicker] !== p.id) return; // Not your turn
       if (modulePlayersPicked.has(p.id)) return; // Already picked
       
-      const moduleId = moduleCards[cardIndex];
-      if (!TOWER_MODULES[moduleId]) return;
+      // Find the card - prefer moduleId lookup for accuracy, fall back to index
+      let actualIndex = -1;
+      if (moduleId) {
+        // Client sent module ID - find it in the array (handles sync issues)
+        actualIndex = moduleCards.indexOf(moduleId);
+      } else if (cardIndex >= 0 && cardIndex < moduleCards.length) {
+        // Fall back to index if no moduleId sent
+        actualIndex = cardIndex;
+      }
+      
+      if (actualIndex < 0 || actualIndex >= moduleCards.length) return; // Invalid
+      
+      const actualModuleId = moduleCards[actualIndex];
+      if (!TOWER_MODULES[actualModuleId]) return;
       
       // Mark player as picked
       modulePlayersPicked.add(p.id);
       
       // Add to player's inventory
-      p.inventory.push(moduleId);
+      p.inventory.push(actualModuleId);
       
       // Remove from available cards
-      moduleCards.splice(cardIndex, 1);
+      moduleCards.splice(actualIndex, 1);
+      
+      // CRITICAL: Update cached array for state broadcasts
+      cachedModuleCards = moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }));
       
       // Announce pick and send updated card list
       broadcast({ 
         t: "moduleCardPicked", 
         playerId: p.id, 
         playerName: p.name, 
-        moduleId, 
-        cardIndex,
-        remainingCards: moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }))
+        moduleId: actualModuleId, 
+        cardIndex: actualIndex,
+        remainingCards: cachedModuleCards
       });
       
       // Move to next picker
@@ -3700,14 +3722,13 @@ io.onConnection((channel) => {
           t: "modulePickTurn", 
           playerId: modulePickOrder[currentModulePicker], 
           timeLeft: MODULE_PICK_TIME,
-          remainingCards: moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }))
+          remainingCards: cachedModuleCards
         });
       }
     }
   });
 
-  // Handle player disconnect
-  channel.onDisconnect(() => {
+  ws.on("close", () => {
     players.delete(id);
     if (hostId === id) hostId = players.size ? Array.from(players.keys())[0] : null;
 
@@ -3739,8 +3760,4 @@ io.onConnection((channel) => {
 setInterval(tick, 1000 / TICK_RATE);
 
 const PORT = process.env.PORT || 3000;
-const HOST = '0.0.0.0';
-server.listen(PORT, HOST, () => { 
-  console.log(`Rogue Asteroid PvP (WebRTC/UDP): http://${HOST}:${PORT}`);
-  console.log(`UDP ports for WebRTC: ${GECKOS_PORT_RANGE.min}-${GECKOS_PORT_RANGE.max}`);
-});
+server.listen(PORT, () => { console.log(`Rogue Asteroid PvP (OPTIMIZED v2 - 15Hz): http://localhost:${PORT}`); });
