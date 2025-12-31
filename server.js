@@ -783,11 +783,14 @@ function spawnWave() {
   const waveHpScale = baseWaveHp * extremeScaleMult;
 
   const playerCount = lockedSlots.length;
-  const baseTotal = WAVE_BASE_COUNT + Math.floor(wave * WAVE_COUNT_SCALE);
+  const basePerPlayer = WAVE_BASE_COUNT + Math.floor(wave * WAVE_COUNT_SCALE);
   const countMult = wave >= 20 ? 1 + (wave - 19) * 0.05 : 1;  // Halved from 0.1
-  const scaledTotal = Math.floor(baseTotal * countMult);
-  const totalCount = (soloMode || playerCount === 1) ? scaledTotal : Math.floor(scaledTotal * 0.5);
-  const asteroidsPerPlayer = Math.max(1, Math.floor(totalCount / playerCount));
+  
+  // FIX: In multiplayer, each player gets their own scaled wave (not divided further)
+  // Solo gets full amount, multiplayer gets 70% to account for PvP attacks
+  const soloScaled = Math.floor(basePerPlayer * countMult);
+  const multiScaled = Math.max(WAVE_BASE_COUNT, Math.floor(basePerPlayer * countMult * 0.7));
+  const asteroidsPerPlayer = (soloMode || playerCount === 1) ? soloScaled : multiScaled;
   
   for (let playerIdx = 0; playerIdx < playerCount; playerIdx++) {
     const targetSlot = playerIdx;
@@ -1028,17 +1031,13 @@ function startModuleCardPhase() {
   // Track which players have picked
   modulePlayersPicked = new Set();
   
-  // Determine pick order: boss killer first, then by total kills
+  // Determine pick order: sorted purely by kills (most kills picks first)
   const alivePlayers = lockedSlots
     .map(id => players.get(id))
     .filter(p => p && p.hp > 0);
   
-  // Sort by boss killer first, then by kills (most kills picks earlier)
-  alivePlayers.sort((a, b) => {
-    if (a.id === bossKillerId) return -1;
-    if (b.id === bossKillerId) return 1;
-    return (b.kills || 0) - (a.kills || 0);
-  });
+  // Sort by kills descending (most kills picks first)
+  alivePlayers.sort((a, b) => (b.kills || 0) - (a.kills || 0));
   
   modulePickOrder = alivePlayers.map(p => p.id);
   currentModulePicker = 0;
@@ -2497,7 +2496,13 @@ function tick() {
             }
           } else {
             // Normal bullet behavior
-            if (b.pierce > 0) { b.pierce--; } else { b.dead = true; }
+            // Pierce allows bullet to pass through enemies
+            if (b.pierce > 0) { 
+              b.pierce--; 
+              b.dead = false; // Explicitly keep alive - overrides ricochet if both are present
+            } else { 
+              b.dead = true; 
+            }
           }
           
           addDamageNumber(m.x, m.y - m.r, b.dmg, b.isCrit);

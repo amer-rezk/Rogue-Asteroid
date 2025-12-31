@@ -1098,6 +1098,28 @@
           wave = 0;
           buildMenuOpen = null;
           hoveredAttack = null;
+          // Reset module card state
+          moduleCardPhase = false;
+          moduleCards = [];
+          modulePickOrder = [];
+          currentModulePicker = null;
+          modulePickTimeLeft = 0;
+          moduleFeedback = null;
+          bossKillerFeedback = null;
+          selectedInventoryModule = null;
+          selectedInventoryIndex = -1;
+          // Reset upgrade purchase state
+          upgradeQueueSize = 0;
+          currentRerollCost = 10;
+          hoveredBuyUpgrade = false;
+          // Reset attack state
+          incomingAttacks = [];
+          recentAttackSent = null;
+          attackQuantityMode = 1;
+          // Reset pause state
+          gamePaused = false;
+          pauseCountdown = 0;
+          pausedBy = null;
           showMenu();
         }
         phase = "lobby";
