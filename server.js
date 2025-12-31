@@ -783,14 +783,20 @@ function spawnWave() {
   const waveHpScale = baseWaveHp * extremeScaleMult;
 
   const playerCount = lockedSlots.length;
-  const basePerPlayer = WAVE_BASE_COUNT + Math.floor(wave * WAVE_COUNT_SCALE);
-  const countMult = wave >= 20 ? 1 + (wave - 19) * 0.05 : 1;  // Halved from 0.1
   
-  // FIX: In multiplayer, each player gets their own scaled wave (not divided further)
-  // Solo gets full amount, multiplayer gets 70% to account for PvP attacks
-  const soloScaled = Math.floor(basePerPlayer * countMult);
-  const multiScaled = Math.max(WAVE_BASE_COUNT, Math.floor(basePerPlayer * countMult * 0.7));
-  const asteroidsPerPlayer = (soloMode || playerCount === 1) ? soloScaled : multiScaled;
+  // Wave scaling:
+  // Waves 1-5: spawn same number as wave (1, 2, 3, 4, 5)
+  // Waves 6+: spawn 5 + 1 extra every 3 waves (5, 5, 6, 6, 6, 7, 7, 7, 8...)
+  let baseAsteroids;
+  if (wave <= 5) {
+    baseAsteroids = wave;
+  } else {
+    baseAsteroids = 5 + Math.floor((wave - 5) / 3);
+  }
+  
+  // Late game scaling (wave 20+)
+  const countMult = wave >= 20 ? 1 + (wave - 19) * 0.05 : 1;
+  const asteroidsPerPlayer = Math.floor(baseAsteroids * countMult);
   
   for (let playerIdx = 0; playerIdx < playerCount; playerIdx++) {
     const targetSlot = playerIdx;
