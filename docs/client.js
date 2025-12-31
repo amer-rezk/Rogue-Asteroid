@@ -384,7 +384,6 @@
 
   // Visual
   let stars = [];
-  let screenShake = 0;
   let time = 0;
 
   // CLIENT-SIDE RENDERING (offloaded from server)
@@ -528,9 +527,6 @@
       life: 0.4,
       maxLife: 0.4
     });
-    
-    // Screen shake for lightning
-    screenShake = Math.max(screenShake, 4);
   }
 
   function generateLightningBolt(x1, y1, x2, y2) {
@@ -1264,7 +1260,7 @@
 
       case "bossKilled":
         // Show boss killer announcement
-        bossKillerFeedback = { name: msg.killerName, isMe: msg.killerId === myId, time: Date.now() };
+        bossKillerFeedback = { name: msg.killerName, isMe: msg.killerId === myId, position: msg.killPosition || 1, time: Date.now() };
         break;
 
       case "moduleSlotted":
@@ -1412,13 +1408,11 @@
 
       case "attackQueued":
         // Visual feedback that attack was queued
-        screenShake = 3;
         recentAttackSent = { type: msg.attackType, target: msg.targetName, time: Date.now() };
         break;
 
       case "incomingAttack":
         incomingAttacks.push({ type: msg.attackType, from: msg.from, time: Date.now() });
-        screenShake = 5;
         break;
 
       case "gameOver":
@@ -2407,8 +2401,6 @@
       const isLowFPS = dt > 0.033;
       
       time += dt;
-      screenShake *= 0.92;
-      
       // Update client-side visual effects (particles, damage numbers, asteroid rotations)
       updateClientEffects(dt);
 
@@ -2495,7 +2487,6 @@
 
       const { sx, sy, offsetX, offsetY } = getScale();
       ctx.save();
-      if (screenShake > 0.5) ctx.translate((Math.random() - 0.5) * screenShake, (Math.random() - 0.5) * screenShake);
       ctx.translate(offsetX, offsetY);
 
       // Grid
@@ -4939,9 +4930,9 @@
         } else {
           const picker = modulePickOrder.find(p => p.id === currentModulePicker);
           const pickerName = picker?.name || "...";
-          const pickerKills = picker?.kills !== undefined ? ` (${picker.kills} kills)` : "";
+          const pickPos = picker?.pickPosition ? ` (#${picker.pickPosition})` : "";
           ctx.fillStyle = "#aaa";
-          ctx.fillText(`${pickerName}${pickerKills}'s turn`, panelX + panelW / 2, panelY + 45);
+          ctx.fillText(`${pickerName}${pickPos}'s turn`, panelX + panelW / 2, panelY + 45);
           ctx.font = "10px 'Courier New', monospace";
           ctx.fillText(`(${Math.ceil(modulePickTimeLeft)}s)`, panelX + panelW / 2, panelY + 58);
         }
@@ -5124,7 +5115,8 @@
         ctx.shadowColor = bossKillerFeedback.isMe ? "#ffd700" : "#ff4444";
         ctx.shadowBlur = 20;
         ctx.fillStyle = bossKillerFeedback.isMe ? "#ffd700" : "#ff8888";
-        const text = bossKillerFeedback.isMe ? "🏆 YOU KILLED THE BOSS! 🏆" : `💀 ${bossKillerFeedback.name} KILLED THE BOSS!`;
+        const posText = bossKillerFeedback.position === 1 ? "1st" : bossKillerFeedback.position === 2 ? "2nd" : bossKillerFeedback.position === 3 ? "3rd" : `${bossKillerFeedback.position}th`;
+        const text = bossKillerFeedback.isMe ? `🏆 YOU KILLED THE BOSS ${posText}! 🏆` : `💀 ${bossKillerFeedback.name} KILLED BOSS (${posText})`;
         ctx.fillText(text, canvas.width / 2, 50);
         ctx.shadowBlur = 0;
         ctx.restore();

@@ -273,7 +273,7 @@ let modulePlayersPicked = new Set(); // Track who has picked
 let currentModulePicker = 0;
 let modulePickTimer = 0;
 const MODULE_PICK_TIME = 10; // 10 seconds per pick
-let bossKillerId = null; // Track who killed the boss
+let bossKillOrder = []; // Track order in which players killed their boss
 
 // PERFORMANCE: Cached arrays for broadcast (avoid allocations every tick)
 let cachedModuleCards = []; // Cached { id, ...TOWER_MODULES[id] } objects
@@ -1037,27 +1037,37 @@ function startModuleCardPhase() {
   // Track which players have picked
   modulePlayersPicked = new Set();
   
-  // Determine pick order: sorted by kills (most kills picks first)
-  // Secondary sort by slot for stability when kills are equal
-  const alivePlayers = lockedSlots
+  // Determine pick order: based on who killed their boss first
+  // Players who killed their boss are ordered by kill time (first kill = first pick)
+  // Any alive players who didn't kill their boss go at the end (by slot order)
+  const alivePlayerIds = new Set(
+    lockedSlots
+      .map(id => players.get(id))
+      .filter(p => p && p.hp > 0)
+      .map(p => p.id)
+  );
+  
+  // Start with boss kill order (filtered to only alive players)
+  const orderedIds = bossKillOrder.filter(id => alivePlayerIds.has(id));
+  
+  // Add any alive players who didn't kill their boss (sorted by slot)
+  const remainingPlayers = lockedSlots
     .map(id => players.get(id))
-    .filter(p => p && p.hp > 0);
+    .filter(p => p && p.hp > 0 && !bossKillOrder.includes(p.id))
+    .sort((a, b) => (a.slot || 0) - (b.slot || 0));
   
-  // Sort by kills descending, then by slot ascending for stability
-  alivePlayers.sort((a, b) => {
-    const killDiff = (b.kills || 0) - (a.kills || 0);
-    if (killDiff !== 0) return killDiff;
-    return (a.slot || 0) - (b.slot || 0); // Stable secondary sort
-  });
+  for (const p of remainingPlayers) {
+    orderedIds.push(p.id);
+  }
   
-  modulePickOrder = alivePlayers.map(p => p.id);
+  modulePickOrder = orderedIds;
   currentModulePicker = 0;
   modulePickTimer = MODULE_PICK_TIME;
   
   // PERFORMANCE: Cache pick order objects for broadcast
-  cachedPickOrder = modulePickOrder.map(id => {
+  cachedPickOrder = modulePickOrder.map((id, index) => {
     const p = players.get(id);
-    return { id, name: p?.name || "Unknown", kills: p?.kills || 0, isBossKiller: id === bossKillerId };
+    return { id, name: p?.name || "Unknown", pickPosition: index + 1 };
   });
   
   // Broadcast module card phase start (use cached arrays)
@@ -1076,7 +1086,7 @@ function endModuleCardPhase() {
   moduleCards = [];
   modulePickOrder = [];
   modulePlayersPicked = new Set();
-  bossKillerId = null;
+  bossKillOrder = []; // Reset for next boss wave
   
   // PERFORMANCE: Clear cached arrays
   cachedModuleCards = [];
@@ -2604,10 +2614,10 @@ function tick() {
             
             // When boss dies, spawn any remaining minion waves
             if (m.type === "boss" && m.bossSpawnCount < 3) {
-              // Track who killed the boss for module pick order
-              if (owner && !bossKillerId) {
-                bossKillerId = owner.id;
-                broadcast({ t: "bossKilled", killerId: owner.id, killerName: owner.name });
+              // Track who killed the boss for module pick order (first kill = first pick)
+              if (owner && !bossKillOrder.includes(owner.id)) {
+                bossKillOrder.push(owner.id);
+                broadcast({ t: "bossKilled", killerId: owner.id, killerName: owner.name, killPosition: bossKillOrder.length });
               }
               
               const remainingSpawns = 3 - m.bossSpawnCount;
@@ -2632,9 +2642,9 @@ function tick() {
               createExplosion(m.x, m.y, 80, "#ff0000");
             }
             // Also track boss killer if no remaining spawns
-            else if (m.type === "boss" && owner && !bossKillerId) {
-              bossKillerId = owner.id;
-              broadcast({ t: "bossKilled", killerId: owner.id, killerName: owner.name });
+            else if (m.type === "boss" && owner && !bossKillOrder.includes(owner.id)) {
+              bossKillOrder.push(owner.id);
+              broadcast({ t: "bossKilled", killerId: owner.id, killerName: owner.name, killPosition: bossKillOrder.length });
             }
             
             // Splitter: spawn children with noGold flag
