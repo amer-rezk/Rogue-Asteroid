@@ -395,12 +395,6 @@ function broadcastAll(obj) {
      channel.emit('message', obj);
   }
 }
-function broadcastAll(obj) {
-  // Send to both players and spectators - stringify once
-  const str = JSON.stringify(obj);
-  for (const p of players.values()) safeSendRaw(p.ws, str);
-  for (const ws of spectators) safeSendRaw(ws, str);
-}
 function broadcastLobby() {
   // Send lobby state to both players and spectators
   const snapshot = { t: "lobby", ...lobbySnapshot() };
