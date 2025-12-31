@@ -10,17 +10,11 @@
 // - PREDICTIVE AIMING: No homing - bullets aim at intercept point
 // - Multishot bullets can target different asteroids
 
-import express from "express";
-import http from "http";
-import path from "path";
-import fs from "fs";
-import { geckos } from "@geckos.io/server";
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
-
-// ES Module equivalent of __dirname
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const express = require("express");
+const http = require("http");
+const path = require("path");
+const fs = require("fs");
+const { WebSocketServer } = require("ws");
 
 // ===== Game constants =====
 const MAX_PLAYERS = 4;
@@ -241,46 +235,10 @@ const MODULE_IDS = Object.keys(TOWER_MODULES);
 // ===== Server state =====
 const app = express();
 app.use(express.static(path.join(__dirname, "docs")));
-
-// Serve geckos.io client from node_modules (avoids CDN issues)
-app.get("/geckos-client.js", (req, res) => {
-  // Try different possible paths for the geckos client
-  const possiblePaths = [
-    path.join(__dirname, "node_modules", "@geckos.io", "client", "dist", "geckos.io-client.min.js"),
-    path.join(__dirname, "node_modules", "@geckos.io", "client", "dist", "geckos.io-client.2.2.3.min.js"),
-    path.join(__dirname, "node_modules", "@geckos.io", "client", "bundle", "geckos.io-client.min.js")
-  ];
-  
-  for (const filePath of possiblePaths) {
-    if (fs.existsSync(filePath)) {
-      res.setHeader('Content-Type', 'application/javascript');
-      return res.sendFile(filePath);
-    }
-  }
-  
-  // If not found, log and return error
-  console.error("Could not find geckos.io client. Checked paths:", possiblePaths);
-  res.status(404).send("// Geckos client not found");
-});
-
 app.get("/health", (_, res) => res.json({ ok: true }));
 
 const server = http.createServer(app);
-
-// Setup Geckos (UDP) instead of WebSockets
-// For INTERNET hosting, we need STUN servers to help with NAT traversal
-const io = geckos({
-  cors: { allowAuthorization: true, origin: "*" },
-  // STUN servers help peers find each other through NAT/firewalls
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' }
-  ]
-});
-io.addServer(server);
+const wss = new WebSocketServer({ server, path: "/ws" });
 
 const players = new Map();
 
@@ -398,39 +356,32 @@ function rand(a, b) {
   return a + Math.random() * (b - a);
 }
 
-// NEW: Geckos uses 'channel' instead of 'ws'
-function safeSend(channel, obj) {
-  // Geckos handles serialization automatically, no need for JSON.stringify
-  if (channel) channel.emit('message', obj); 
+function safeSend(ws, obj) {
+  if (ws.readyState === 1) ws.send(JSON.stringify(obj));
 }
-
-// We don't need safeSendRaw for Geckos, it handles backpressure differently.
-// We will just use safeSend.
-
+function safeSendRaw(ws, str) {
+  // Skip if WebSocket buffer is backed up (backpressure)
+  // This prevents server from getting overwhelmed sending to slow clients
+  if (ws.readyState === 1 && ws.bufferedAmount < 65536) {
+    ws.send(str);
+  }
+}
 function broadcast(obj) {
-  // Broadcast to all players
-  for (const p of players.values()) {
-    if(p.channel) p.channel.emit('message', obj);
-  }
+  const str = JSON.stringify(obj);
+  for (const p of players.values()) safeSendRaw(p.ws, str);
 }
-
 function broadcastAll(obj) {
-  // Send to both players and spectators
-  broadcast(obj);
-  for (const channel of spectators) {
-     channel.emit('message', obj);
-  }
+  // Send to both players and spectators - stringify once
+  const str = JSON.stringify(obj);
+  for (const p of players.values()) safeSendRaw(p.ws, str);
+  for (const ws of spectators) safeSendRaw(ws, str);
 }
 function broadcastLobby() {
   // Send lobby state to both players and spectators
   const snapshot = { t: "lobby", ...lobbySnapshot() };
-  
-  for (const p of players.values()) {
-    if (p.channel) p.channel.emit('message', snapshot);
-  }
-  for (const channel of spectators) {
-    channel.emit('message', snapshot);
-  }
+  const str = JSON.stringify(snapshot);
+  for (const p of players.values()) safeSendRaw(p.ws, str);
+  for (const ws of spectators) safeSendRaw(ws, str);
 }
 
 // Spectator tracking
@@ -1669,9 +1620,6 @@ function tick() {
            // Remove from deck
            moduleCards.splice(cardIndex, 1);
            
-           // CRITICAL: Update cached array for state broadcasts
-           cachedModuleCards = moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }));
-           
            // Notify everyone (same as a normal pick, but forced)
            broadcast({ 
             t: "moduleCardPicked", 
@@ -1679,7 +1627,7 @@ function tick() {
             playerName: p.name, 
             moduleId, 
             cardIndex,
-            remainingCards: cachedModuleCards,
+            remainingCards: moduleCards.map(id => ({ id, ...TOWER_MODULES[id] })),
             isAutoPick: true
           });
         }
@@ -1695,7 +1643,7 @@ function tick() {
             t: "modulePickTurn", 
             playerId: modulePickOrder[currentModulePicker], 
             timeLeft: MODULE_PICK_TIME,
-            remainingCards: cachedModuleCards
+            remainingCards: moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }))
           });
         }
       }
@@ -1704,50 +1652,20 @@ function tick() {
     // Process spawn queue
     if (spawnQueue.length > 0) {
       spawnTimer -= DT;
-      
-      // FIX: Dynamic burst logic. If queue is huge, dump them faster!
-      // If queue > 10, we treat it as a "Swarm" and spawn aggressively.
-      const isSwarm = spawnQueue.length > 10;
-      const spawnReady = spawnTimer <= 0;
-
-      if (spawnReady) {
-        // Calculate dynamic batch size based on pressure
-        let maxBatch = 3; 
-        if (spawnQueue.length > 20) maxBatch = 8;       // Huge backlog? Open the floodgates
-        else if (spawnQueue.length > 10) maxBatch = 5;  // Moderate backlog? Burst fire
-        
-        // Randomize count slightly so it looks organic, not robotic
-        const count = Math.ceil(Math.random() * maxBatch); 
-        
-        // Determine actual spawn count (capped by available slots)
-        const spawnCount = Math.min(spawnQueue.length, availableSlots, count);
-
-        for (let i = 0; i < spawnCount; i++) {
-          const type = spawnQueue.shift();
-          
-          // Spread them out slightly on X axis so they don't stack perfectly
-          const margin = 100;
-          const x = margin + Math.random() * (3000 - margin * 2); // Assuming 3000 world width
-          const y = -180 - (Math.random() * 200); // Stagger vertical start slightly
-          
-          // Spawn physics entity
-          spawnAsteroid(type, x, y);
-          
-          // Notify clients (so they see it immediately)
-          broadcast({ 
-            t: "spawn", 
-            type: type, 
-            x: x, 
-            y: y, 
-            vx: (Math.random() - 0.5) * 50, 
-            vy: 100 + Math.random() * 100 // Downward velocity
-          });
+      if (spawnTimer <= 0) {
+        // ENTITY CAP: Only spawn if under missile limit
+        const availableSlots = MAX_MISSILES - missiles.length;
+        if (availableSlots > 0) {
+          const spawnCount = Math.min(spawnQueue.length, availableSlots, Math.random() < 0.5 ? 1 : Math.random() < 0.8 ? 2 : 3);
+          for (let i = 0; i < spawnCount && spawnQueue.length > 0; i++) {
+            const queued = spawnQueue.shift();
+            missiles.push(createAsteroid(
+              queued.x, queued.y, queued.type, queued.hp, queued.targetSlot, 
+              queued.attackType, queued.senderId, null, false, queued.isMiniBoss || false
+            ));
+          }
         }
-
-        // RESET TIMER
-        // If it was a swarm burst, wait very little (0.1s). 
-        // If it's a trickle, wait normal time (0.2s - 0.5s).
-        spawnTimer = isSwarm ? 0.05 : (0.2 + Math.random() * 0.3);
+        spawnTimer = 0.1 + Math.random() * 0.4;
       }
     }
 
@@ -3241,8 +3159,26 @@ function assignSlot() {
   return -1;
 }
 
-io.onConnection(channel => {
+const interval = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) return ws.terminate();
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 30000);
+
+wss.on("close", () => { clearInterval(interval); });
+
+wss.on("connection", (ws) => {
   if (phase === "gameover") resetToLobby();
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+  
+  // PERFORMANCE: Disable Nagle's algorithm for lower latency
+  // Nagle buffers small packets (200ms) which kills real-time games
+  if (ws._socket) {
+    ws._socket.setNoDelay(true);
+  }
   
   // Check if they can join as a player
   const canJoinAsPlayer = phase === "lobby" && assignSlot() >= 0;
@@ -3250,7 +3186,7 @@ io.onConnection(channel => {
   // If game in progress or full, offer spectator mode
   if (!canJoinAsPlayer) {
     const reason = phase !== "lobby" ? "Game in progress" : "Game full (max 4)";
-    safeSend(channel, { 
+    safeSend(ws, { 
       t: "spectateOffer", 
       reason,
       canSpectate: phase === "playing",
@@ -3258,14 +3194,14 @@ io.onConnection(channel => {
     });
     
     // Set up spectator message handler
-    channel.on("message", (msg) => {
-      // Geckos auto-parses JSON, no try/catch needed
-      if (!msg) return;
+    ws.on("message", (data) => {
+      let msg;
+      try { msg = JSON.parse(data.toString()); } catch { return; }
       
       if (msg.t === "spectate" && phase === "playing") {
         // Add as spectator
-        spectators.add(channel);
-        safeSend(channel, {
+        spectators.add(ws);
+        safeSend(ws, { 
           t: "spectateStart",
           world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
           wave,
@@ -3277,9 +3213,9 @@ io.onConnection(channel => {
       }
     });
     
-    channel.onDisconnect(() => {
-      if (spectators.has(channel)) {
-        spectators.delete(channel);
+    ws.on("close", () => {
+      if (spectators.has(ws)) {
+        spectators.delete(ws);
         broadcast({ t: "spectatorUpdate", count: spectators.size });
       }
     });
@@ -3290,7 +3226,7 @@ io.onConnection(channel => {
   const slot = assignSlot();
   const id = uid();
   const player = {
-    id, channel, slot, // Changed 'ws' to 'channel'
+    id, ws, slot,
     name: `Player ${slot + 1}`,
     targetX: 0, targetY: 0,
     manualShooting: false,
@@ -3309,20 +3245,20 @@ io.onConnection(channel => {
   if (!hostId) hostId = id;
 
   recomputeWorld();
-  safeSend(channel, { 
+  safeSend(ws, { 
     t: "welcome", id, slot, isHost: id === hostId, 
     world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, 
     phase,
     attackTypes: ATTACK_TYPES,
     towerModules: TOWER_MODULES
   });
-  safeSend(channel, { t: "chatHistory", messages: chatHistory });
+  safeSend(ws, { t: "chatHistory", messages: chatHistory });
   broadcast({ t: "lobby", ...lobbySnapshot() });
 
-  channel.on("message", (msg) => {
-    if (!msg) return;
+  ws.on("message", (data) => {
+    let msg;
+    try { msg = JSON.parse(data.toString()); } catch { return; }
     const p = players.get(id);
-	
     if (!p) return;
 
     if (msg.t === "setName") {
@@ -3727,47 +3663,31 @@ io.onConnection(channel => {
 
     // Pick a module card during boss reward phase
     if (msg.t === "pickModuleCard" && moduleCardPhase) {
-      const { cardIndex, moduleId } = msg;
-      
-      // Verify it's this player's turn
+      const { cardIndex } = msg;
+      if (cardIndex < 0 || cardIndex >= moduleCards.length) return;
       if (modulePickOrder[currentModulePicker] !== p.id) return; // Not your turn
       if (modulePlayersPicked.has(p.id)) return; // Already picked
       
-      // Find the card - prefer moduleId lookup for accuracy, fall back to index
-      let actualIndex = -1;
-      if (moduleId) {
-        // Client sent module ID - find it in the array (handles sync issues)
-        actualIndex = moduleCards.indexOf(moduleId);
-      } else if (cardIndex >= 0 && cardIndex < moduleCards.length) {
-        // Fall back to index if no moduleId sent
-        actualIndex = cardIndex;
-      }
-      
-      if (actualIndex < 0 || actualIndex >= moduleCards.length) return; // Invalid
-      
-      const actualModuleId = moduleCards[actualIndex];
-      if (!TOWER_MODULES[actualModuleId]) return;
+      const moduleId = moduleCards[cardIndex];
+      if (!TOWER_MODULES[moduleId]) return;
       
       // Mark player as picked
       modulePlayersPicked.add(p.id);
       
       // Add to player's inventory
-      p.inventory.push(actualModuleId);
+      p.inventory.push(moduleId);
       
       // Remove from available cards
-      moduleCards.splice(actualIndex, 1);
-      
-      // CRITICAL: Update cached array for state broadcasts
-      cachedModuleCards = moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }));
+      moduleCards.splice(cardIndex, 1);
       
       // Announce pick and send updated card list
       broadcast({ 
         t: "moduleCardPicked", 
         playerId: p.id, 
         playerName: p.name, 
-        moduleId: actualModuleId, 
-        cardIndex: actualIndex,
-        remainingCards: cachedModuleCards
+        moduleId, 
+        cardIndex,
+        remainingCards: moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }))
       });
       
       // Move to next picker
@@ -3783,13 +3703,13 @@ io.onConnection(channel => {
           t: "modulePickTurn", 
           playerId: modulePickOrder[currentModulePicker], 
           timeLeft: MODULE_PICK_TIME,
-          remainingCards: cachedModuleCards
+          remainingCards: moduleCards.map(id => ({ id, ...TOWER_MODULES[id] }))
         });
       }
     }
   });
 
-  channel.onDisconnect(() => {
+  ws.on("close", () => {
     players.delete(id);
     if (hostId === id) hostId = players.size ? Array.from(players.keys())[0] : null;
 
@@ -3821,45 +3741,4 @@ io.onConnection(channel => {
 setInterval(tick, 1000 / TICK_RATE);
 
 const PORT = process.env.PORT || 3000;
-
-// Bind to 0.0.0.0 to accept connections from any network interface
-server.listen(PORT, '0.0.0.0', async () => {
-  console.log(`\n${'='.repeat(65)}`);
-  console.log(`🚀 ROGUE ASTEROID PvP - INTERNET SERVER RUNNING`);
-  console.log(`${'='.repeat(65)}`);
-  console.log(`\n📡 Server listening on port ${PORT}`);
-  console.log(`\n🏠 Local access (you): http://localhost:${PORT}`);
-  
-  // Try to get public IP for remote friends
-  try {
-    const https = await import('https');
-    const getPublicIP = () => new Promise((resolve, reject) => {
-      https.get('https://api.ipify.org', (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => resolve(data.trim()));
-      }).on('error', reject);
-    });
-    
-    const publicIP = await getPublicIP();
-    console.log(`\n🌍 PUBLIC IP (share with remote friends):`);
-    console.log(`   → http://${publicIP}:${PORT}`);
-  } catch (err) {
-    console.log(`\n⚠️  Could not detect public IP. Find it at: https://whatismyip.com`);
-  }
-  
-  console.log(`\n${'='.repeat(65)}`);
-  console.log(`📋 SETUP FOR INTERNET PLAY (required for remote friends):`);
-  console.log(`${'='.repeat(65)}`);
-  console.log(`\n1. PORT FORWARDING - In your router settings, forward:`);
-  console.log(`   • Port ${PORT} TCP (for the web page)`);
-  console.log(`   • Ports 1025-65535 UDP (for game data - or just open all UDP)`);
-  console.log(`\n2. FIREWALL - Allow Node.js through Windows/Mac firewall`);
-  console.log(`\n3. SHARE YOUR PUBLIC IP - Give friends the URL shown above`);
-  console.log(`\n4. FRIENDS CONNECT - They open the URL in their browser`);
-  console.log(`\n${'='.repeat(65)}`);
-  console.log(`💡 TIP: If port forwarding is too complex, consider using:`);
-  console.log(`   • ngrok (https://ngrok.com) - creates a public tunnel`);
-  console.log(`   • Hamachi/ZeroTier - creates a virtual LAN`);
-  console.log(`${'='.repeat(65)}\n`);
-});
+server.listen(PORT, () => { console.log(`Rogue Asteroid PvP (OPTIMIZED v2 - 15Hz): http://localhost:${PORT}`); });

@@ -18,9 +18,9 @@
         <p class="pvp-badge">⚔️ PvP MODE ⚔️</p>
 
         <div class="section">
-          <label>SERVER (host's public IP or leave blank)</label>
+          <label>SERVER</label>
           <div class="input-row">
-            <input type="text" id="serverUrl" value="" placeholder="auto or 123.45.67.89:3000">
+            <input type="text" id="serverUrl" value="wss://mute-lungfish-no-name-orgs-aef98851.koyeb.app/ws" placeholder="wss://server-address/ws">
             <button id="connectBtn" class="btn">CONNECT</button>
           </div>
           <div id="status" class="status">NOT CONNECTED</div>
@@ -48,8 +48,8 @@
         </div>
 
         <div class="pvp-info">
-          <h3>🌍 Online Play</h3>
-          <p>Host shares their public IP. Friends enter it above and connect. Destroy asteroids, buy towers, and send attacks!</p>
+          <h3>⚔️ PvP Mode</h3>
+          <p>Destroy asteroids to earn gold. Buy towers for defense or send attack asteroids at your opponents! Last player standing wins.</p>
         </div>
       </div>
 
@@ -80,7 +80,6 @@
     <canvas id="game"></canvas>
   </div>
 
-  <script src="/geckos-client.js"></script>
   <script src="client.js"></script>
 </body>
 </html>
