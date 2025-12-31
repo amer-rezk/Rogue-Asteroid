@@ -1,11 +1,8 @@
-# fly.toml - Fly.io configuration for Rogue Asteroid PvP with WebRTC/UDP
-
 app = 'rogue-asteroid'
-primary_region = 'iad'
+primary_region = 'arn'
 
 [build]
 
-# HTTP service for the Express server and WebSocket signaling
 [http_service]
   internal_port = 3000
   force_https = true
@@ -14,99 +11,7 @@ primary_region = 'iad'
   min_machines_running = 0
   processes = ['app']
 
-# UDP ports for WebRTC data channels (geckos.io)
-# These are used for the fast, unreliable game state updates
-[[services]]
-  internal_port = 3000
-  protocol = "tcp"
-  
-  [[services.ports]]
-    port = 443
-    handlers = ["tls", "http"]
-
-# UDP port range for WebRTC
-# geckos.io needs UDP ports for the actual data transfer
-[[services]]
-  internal_port = 10000
-  protocol = "udp"
-  
-  [[services.ports]]
-    port = 10000
-
-[[services]]
-  internal_port = 10001
-  protocol = "udp"
-  
-  [[services.ports]]
-    port = 10001
-
-[[services]]
-  internal_port = 10002
-  protocol = "udp"
-  
-  [[services.ports]]
-    port = 10002
-
-[[services]]
-  internal_port = 10003
-  protocol = "udp"
-  
-  [[services.ports]]
-    port = 10003
-
-[[services]]
-  internal_port = 10004
-  protocol = "udp"
-  
-  [[services.ports]]
-    port = 10004
-
-[[services]]
-  internal_port = 10005
-  protocol = "udp"
-  
-  [[services.ports]]
-    port = 10005
-
-[[services]]
-  internal_port = 10006
-  protocol = "udp"
-  
-  [[services.ports]]
-    port = 10006
-
-[[services]]
-  internal_port = 10007
-  protocol = "udp"
-  
-  [[services.ports]]
-    port = 10007
-
-[[services]]
-  internal_port = 10008
-  protocol = "udp"
-  
-  [[services.ports]]
-    port = 10008
-
-[[services]]
-  internal_port = 10009
-  protocol = "udp"
-  
-  [[services.ports]]
-    port = 10009
-
-[[services]]
-  internal_port = 10010
-  protocol = "udp"
-  
-  [[services.ports]]
-    port = 10010
-
 [[vm]]
-  memory = '256mb'
+  memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
-
-[env]
-  PORT = "3000"
