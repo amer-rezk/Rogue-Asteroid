@@ -598,6 +598,7 @@
       }
       
       // CLIENT-SIDE COLLISION PREDICTION: Handle bullet-enemy hits with pierce
+      // ORDER OF OPERATIONS: Ricochet first (if target exists), then pierce
       // OPTIMIZED: Only check missiles in the SAME SLOT (not all missiles)
       let shouldRemove = false;
       const slotMissiles = missilesBySlot[b.slot];
@@ -615,12 +616,36 @@
             if (!b.hitSet) b.hitSet = new Set();
             b.hitSet.add(m.id);
             
-            // Check pierce - if we have pierce stacks, continue through
+            // ORDER: Ricochet is used FIRST (if there's a target), then pierce
+            if (b.ricochet > 0) {
+              // Check if there's another enemy to bounce to
+              let hasBounceTarget = false;
+              const bounceRange = 250;
+              for (let bi = 0; bi < slotMissiles.length; bi++) {
+                const m2 = slotMissiles[bi];
+                if (m2 === m || (b.hitSet && b.hitSet.has(m2.id))) continue;
+                const bdx = m2.x - m.x;
+                const bdy = m2.y - m.y;
+                if (bdx * bdx + bdy * bdy <= bounceRange * bounceRange) {
+                  hasBounceTarget = true;
+                  break;
+                }
+              }
+              
+              if (hasBounceTarget) {
+                // Ricochet will trigger - bullet dies, server spawns new one
+                shouldRemove = true;
+                break;
+              }
+              // No bounce target - fall through to pierce
+            }
+            
+            // Pierce logic (used when ricochet = 0 OR no bounce target)
             if (b.pierce > 0) {
               b.pierce--;
-              // Don't remove, bullet continues
+              // Don't remove, bullet continues through
             } else {
-              // No pierce left, bullet dies
+              // No pierce left - bullet dies
               shouldRemove = true;
               break;
             }
@@ -3448,6 +3473,13 @@
           ctx.font = `bold ${10 * sx}px 'Courier New', monospace`;
           ctx.fillStyle = "#ffd700";
           ctx.fillText(`${p.gold} 🟡`, cx, hpBarY + hpBarH + 12);
+          
+          // Income display (permanent income from attacks)
+          if (p.incomeFromAttacks > 0) {
+            ctx.font = `bold ${9 * sx}px 'Courier New', monospace`;
+            ctx.fillStyle = "#7fff7f";
+            ctx.fillText(`+${Math.floor(p.incomeFromAttacks)}/wave`, cx, hpBarY + hpBarH + 24);
+          }
         }
       }
       ctx.restore();

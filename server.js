@@ -2377,11 +2377,9 @@ function tick() {
               // Original bullet dies after spawning ricochet - DO NOT let pierce override this
               b.dead = true;
               b.ricochetTriggered = true; // Flag to prevent pierce from overriding
-            } else {
-              // No target found - bullet dies (can't ricochet to nothing)
-              b.dead = true;
-              b.ricochetTriggered = true; // Flag to prevent pierce from overriding
             }
+            // If no target found, DON'T set ricochetTriggered - fall through to pierce logic
+            // This allows pierce to work when there's nothing to bounce to
           }
           
           // Pinball Wizard (boss module): Bounce between enemies up to 4 times
