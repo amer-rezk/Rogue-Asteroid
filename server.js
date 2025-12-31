@@ -169,7 +169,7 @@ const TOWER_MODULES = {
     name: "Vampiric Nanobots",
     icon: "🩸",
     color: "#cc0000",
-    desc: "-50% damage, but heal 1 HP per 100 damage dealt",
+    desc: "-50% damage, heal 1 HP per 100 damage dealt",
     effect: "lifesteal"
   },
   matterCompressor: {
@@ -2222,6 +2222,7 @@ function tick() {
                 isCrit: shard.isCrit,
                 bulletColor: shard.bulletColor,
                 bulletType: shard.bulletType, // VISUAL: Inherit tower type for rendering
+                ricochet: shard.ricochet || 0, // For client-side ricochet/pierce order
                 pierce: shard.pierce, // For client-side pierce prediction
                 r: shard.r,
                 lifespan: shard.lifespan // DESYNC FIX: Send lifespan for client expiration
@@ -2257,12 +2258,13 @@ function tick() {
           
           // Vampiric Nanobots: Accumulate damage for healing
           // SYNERGY: All child bullets (shards, ricochets) contribute to healing pool!
+          // NERFED: Now requires 200 accumulated damage (was 100) to heal 1 HP
           if (bulletModules.includes("vampiricNanobots") && owner) {
             owner.lifestealAccum = (owner.lifestealAccum || 0) + b.dmg * 2; // x2 because we halved damage
-            if (owner.lifestealAccum >= 100) {
-              const heals = Math.floor(owner.lifestealAccum / 100);
+            if (owner.lifestealAccum >= 200) {
+              const heals = Math.floor(owner.lifestealAccum / 200);
               owner.hp = Math.min(owner.maxHp, owner.hp + heals);
-              owner.lifestealAccum = owner.lifestealAccum % 100;
+              owner.lifestealAccum = owner.lifestealAccum % 200;
               queueEvent("lifesteal", { slot: owner.slot, amount: heals });
             }
           }
@@ -2286,7 +2288,7 @@ function tick() {
           
           // Ricochet (wave card): Spawn new bullet toward nearest enemy
           // SYNERGY: Ricochet bullets inherit ALL modules and stats from parent bullet
-          // This enables combos like: Ricochet + Viral (chain infection), Ricochet + Fractal (bouncing shards)
+          // ORDER OF OPERATIONS: Ricochet is used FIRST until depleted, THEN pierce kicks in
           // -10% damage per bounce, vanishes if no target found
           // Triggers even if this asteroid dies from the hit
           if (b.ricochet > 0 && bullets.length < MAX_BULLETS) {
@@ -2344,7 +2346,7 @@ function tick() {
                 bulletType: b.bulletType,
                 chainChance: b.chainChance, // Inherit chain lightning
                 ricochet: b.ricochet - 1, // Decrement ricochet counter
-                pierce: b.pierce, // Inherit pierce
+                pierce: b.pierce, // Inherit pierce (used after ricochet depleted)
                 hitSet: (() => { // OPTIMIZED: Avoid spread operator allocation
                   const newSet = new Set(b.hitSet);
                   newSet.add(m.id);
@@ -2366,16 +2368,19 @@ function tick() {
                 isCrit: newBullet.isCrit,
                 bulletColor: newBullet.bulletColor,
                 bulletType: newBullet.bulletType, // Inherit tower type for rendering
+                ricochet: newBullet.ricochet, // For client-side ricochet/pierce order
                 pierce: newBullet.pierce, // For client-side pierce prediction
                 r: newBullet.r,
                 lifespan: newBullet.lifespan // DESYNC FIX: Send lifespan for client expiration
               });
               
-              // Original bullet dies after spawning ricochet
+              // Original bullet dies after spawning ricochet - DO NOT let pierce override this
               b.dead = true;
+              b.ricochetTriggered = true; // Flag to prevent pierce from overriding
             } else {
               // No target found - bullet dies (can't ricochet to nothing)
               b.dead = true;
+              b.ricochetTriggered = true; // Flag to prevent pierce from overriding
             }
           }
           
@@ -2521,12 +2526,12 @@ function tick() {
                 slot: b.ownerSlot
               });
             }
-          } else {
-            // Normal bullet behavior
-            // Pierce allows bullet to pass through enemies
+          } else if (!b.ricochetTriggered) {
+            // Normal bullet behavior (only if ricochet didn't already handle this bullet)
+            // Pierce allows bullet to pass through enemies (only used after ricochet depleted)
             if (b.pierce > 0) { 
               b.pierce--; 
-              b.dead = false; // Explicitly keep alive - overrides ricochet if both are present
+              b.dead = false; // Keep alive to pierce through
             } else { 
               b.dead = true; 
             }
@@ -3163,6 +3168,7 @@ function broadcastGameState() {
     obj.damageDealt = p.damageDealt || 0;
     obj.waveDamage = p.waveDamage || 0;
     obj.lastInterest = p.lastInterest || 0;
+    obj.incomeFromAttacks = p.incomeFromAttacks || 0; // Permanent income from sending attacks
     obj.shieldActive = u.shieldActive || 0;
     obj.slowfield = !!u.slowfield;
     // Reuse upgrades object
