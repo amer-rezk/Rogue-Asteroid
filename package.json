@@ -1,21 +1,17 @@
 {
   "name": "rogue-asteroid-pvp",
-  "version": "0.4.0",
-  "private": true,
-  "description": "Competitive asteroid defense with attack purchasing",
+  "version": "1.0.0",
+  "description": "Competitive asteroid defense",
+  "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
   "dependencies": {
-    "@geckos.io/server": "^3.0.2",
-    "express": "^4.19.2",
-    "ws": "^8.18.0"
+    "@geckos.io/server": "^3.0.0",
+    "express": "^4.19.2"
   },
   "devDependencies": {
     "nodemon": "^3.1.7"
-  },
-  "engines": {
-    "node": ">=18.0.0"
   }
 }

@@ -1,7 +1,8 @@
 (() => {
   // ===== Configuration =====
-  // Updated to new Netlify address
-  const DEFAULT_SERVER = "wss://mute-lungfish-no-name-orgs-aef98851.koyeb.app/ws";
+  // For local LAN hosting - use current page's host by default
+  // This means if you access the page via your IP, it connects to that same IP
+  const DEFAULT_SERVER = window.location.hostname || "localhost";
 
   // ===== PERFORMANCE SETTINGS =====
   // Quality levels: 0=Low (best performance), 1=Medium, 2=High (best visuals)
@@ -286,7 +287,7 @@
   turretImages.barrel.src = "images/turret-main-barrel.png";
 
   // ===== State =====
-  let ws = null;
+  let channel = null;
   let myId = null;
   let mySlot = 0;
   let isHost = false;
@@ -875,17 +876,63 @@
     if (statusText) statusText.textContent = "CONNECTING...";
     if (statusLED) statusLED.className = "led";
 
-    if (ws) try { ws.close(); } catch { }
+    // Close existing connection if any
+    if (channel) {
+      channel.close();
+      channel = null;
+    }
 
     // Use serverUrl input value if available, otherwise use default
     const serverUrlInput = document.getElementById("serverUrl");
-    const serverAddress = serverUrlInput?.value?.trim() || DEFAULT_SERVER;
-    ws = new WebSocket(serverAddress);
+    let serverAddress = serverUrlInput?.value?.trim() || DEFAULT_SERVER;
+    
+    // Parse the server address to extract host and port
+    // Supports formats: "192.168.1.5", "http://192.168.1.5:3000", "localhost"
+    let serverHost = serverAddress;
+    let serverPort = 3000;
+    
+    // Remove protocol prefix if present
+    serverHost = serverHost.replace(/^https?:\/\//, '');
+    // Remove /ws or other paths
+    serverHost = serverHost.replace(/\/.*$/, '');
+    // Remove wss:// prefix too
+    serverHost = serverHost.replace(/^wss?:\/\//, '');
+    
+    // Check for port in the address
+    const portMatch = serverHost.match(/:(\d+)$/);
+    if (portMatch) {
+      serverPort = parseInt(portMatch[1], 10);
+      serverHost = serverHost.replace(/:(\d+)$/, '');
+    }
+    
+    console.log(`Connecting to: ${serverHost}:${serverPort}`);
+    
+    // Initialize Geckos (UDP)
+    // For local hosting, we connect to the parsed host and port
+    channel = geckos({ 
+      url: `http://${serverHost}`, 
+      port: serverPort 
+    });
 
-    ws.onopen = () => {
+    channel.onConnect(error => {
+      if (error) {
+        console.error(error.message);
+        // Emulate onerror/onclose logic
+        if (statusText) statusText.textContent = "ERROR";
+        if (statusLED) statusLED.className = "led red";
+        connected = false;
+        
+        // Retry logic
+        if (!forcedDisconnect) {
+          setTimeout(connect, 3000);
+        }
+        return;
+      }
+
+      // Success!
       connected = true;
       if (statusText) {
-        statusText.textContent = "ONLINE";
+        statusText.textContent = "ONLINE (UDP)";
         statusText.className = "status-text connected";
       }
       if (statusLED) statusLED.className = "led green";
@@ -893,21 +940,21 @@
       lobbyEl.style.display = "block";
 
       const name = nameInput.value.trim() || `Player`;
-      if (name) ws.send(JSON.stringify({ t: "setName", name }));
+      // Send name immediately upon connection
+      if (name) channel.emit('message', { t: "setName", name });
       
-      // Start ping interval for latency measurement
+      // Ping interval (Geckos handles this mostly, but we keep your latency tracker)
       if (pingInterval) clearInterval(pingInterval);
       pingInterval = setInterval(() => {
-        if (ws && ws.readyState === 1) {
+        if (channel) {
           lastPingTime = Date.now();
-          ws.send(JSON.stringify({ t: "ping", ts: lastPingTime }));
+          channel.emit('message', { t: "ping", ts: lastPingTime });
         }
-      }, 2000); // Ping every 2 seconds
-    };
+      }, 2000); 
+    });
 
-    ws.onclose = () => {
+    channel.onDisconnect(() => {
       connected = false;
-      // Clear ping interval
       if (pingInterval) {
         clearInterval(pingInterval);
         pingInterval = null;
@@ -923,8 +970,6 @@
           statusText.className = "status-text";
         }
         if (statusLED) statusLED.className = "led red";
-      } else if (currentStatus.includes("PROGRESS")) {
-        if (statusText) statusText.textContent = "GAME IN PROGRESS - RETRYING...";
       }
 
       lobbyEl.style.display = "none";
@@ -934,21 +979,18 @@
       } else if (phase !== "menu") {
         showMenu();
       }
-    };
+    });
 
-    ws.onerror = () => {
-      if (statusText) statusText.textContent = "ERROR";
-      if (statusLED) statusLED.className = "led red";
-    };
-
-    ws.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
+    // Message Handler
+    channel.on('message', (msg) => {
+      // Geckos parses JSON automatically
+      if (!msg) return;
       handleMessage(msg);
-    };
+    });
   }
 
   function send(obj) {
-    if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+    if (channel) channel.emit('message', obj);
   }
 
   function handleMessage(msg) {
@@ -1447,8 +1489,8 @@
       spectateBtn.textContent = "👁 WATCH GAME";
       spectateBtn.style.cssText = "background: linear-gradient(180deg, #2a4a6a 0%, #1a2a3a 100%); border: 2px solid #4af; font-size: 16px; padding: 12px 24px;";
       spectateBtn.onclick = () => {
-        if (ws && ws.readyState === 1) {
-          ws.send(JSON.stringify({ t: "spectate" }));
+        if (channel) {
+          channel.emit('message', { t: "spectate" });
         }
       };
       spectateContainer.appendChild(spectateBtn);

@@ -10,11 +10,13 @@
 // - PREDICTIVE AIMING: No homing - bullets aim at intercept point
 // - Multishot bullets can target different asteroids
 
-const express = require("express");
-const http = require("http");
-const path = require("path");
-const fs = require("fs");
-const { WebSocketServer } = require("ws");
+import express from "express";
+import http from "http";
+import path from "path";
+import fs from "fs";
+import { geckos } from "@geckos.io/server";
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 
 // ===== Game constants =====
 const MAX_PLAYERS = 4;
@@ -238,7 +240,21 @@ app.use(express.static(path.join(__dirname, "docs")));
 app.get("/health", (_, res) => res.json({ ok: true }));
 
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: "/ws" });
+
+// Setup Geckos (UDP) instead of WebSockets
+// For INTERNET hosting, we need STUN servers to help with NAT traversal
+const io = geckos({
+  cors: { allowAuthorization: true, origin: "*" },
+  // STUN servers help peers find each other through NAT/firewalls
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' }
+  ]
+});
+io.addServer(server);
 
 const players = new Map();
 
@@ -356,19 +372,28 @@ function rand(a, b) {
   return a + Math.random() * (b - a);
 }
 
-function safeSend(ws, obj) {
-  if (ws.readyState === 1) ws.send(JSON.stringify(obj));
+// NEW: Geckos uses 'channel' instead of 'ws'
+function safeSend(channel, obj) {
+  // Geckos handles serialization automatically, no need for JSON.stringify
+  if (channel) channel.emit('message', obj); 
 }
-function safeSendRaw(ws, str) {
-  // Skip if WebSocket buffer is backed up (backpressure)
-  // This prevents server from getting overwhelmed sending to slow clients
-  if (ws.readyState === 1 && ws.bufferedAmount < 65536) {
-    ws.send(str);
+
+// We don't need safeSendRaw for Geckos, it handles backpressure differently.
+// We will just use safeSend.
+
+function broadcast(obj) {
+  // Broadcast to all players
+  for (const p of players.values()) {
+    if(p.channel) p.channel.emit('message', obj);
   }
 }
-function broadcast(obj) {
-  const str = JSON.stringify(obj);
-  for (const p of players.values()) safeSendRaw(p.ws, str);
+
+function broadcastAll(obj) {
+  // Send to both players and spectators
+  broadcast(obj);
+  for (const channel of spectators) {
+     channel.emit('message', obj);
+  }
 }
 function broadcastAll(obj) {
   // Send to both players and spectators - stringify once
@@ -379,9 +404,13 @@ function broadcastAll(obj) {
 function broadcastLobby() {
   // Send lobby state to both players and spectators
   const snapshot = { t: "lobby", ...lobbySnapshot() };
-  const str = JSON.stringify(snapshot);
-  for (const p of players.values()) safeSendRaw(p.ws, str);
-  for (const ws of spectators) safeSendRaw(ws, str);
+  
+  for (const p of players.values()) {
+    if (p.channel) p.channel.emit('message', snapshot);
+  }
+  for (const channel of spectators) {
+    channel.emit('message', snapshot);
+  }
 }
 
 // Spectator tracking
@@ -3192,26 +3221,8 @@ function assignSlot() {
   return -1;
 }
 
-const interval = setInterval(() => {
-  wss.clients.forEach((ws) => {
-    if (ws.isAlive === false) return ws.terminate();
-    ws.isAlive = false;
-    ws.ping();
-  });
-}, 30000);
-
-wss.on("close", () => { clearInterval(interval); });
-
-wss.on("connection", (ws) => {
+io.onConnection(channel => {
   if (phase === "gameover") resetToLobby();
-  ws.isAlive = true;
-  ws.on('pong', () => { ws.isAlive = true; });
-  
-  // PERFORMANCE: Disable Nagle's algorithm for lower latency
-  // Nagle buffers small packets (200ms) which kills real-time games
-  if (ws._socket) {
-    ws._socket.setNoDelay(true);
-  }
   
   // Check if they can join as a player
   const canJoinAsPlayer = phase === "lobby" && assignSlot() >= 0;
@@ -3219,7 +3230,7 @@ wss.on("connection", (ws) => {
   // If game in progress or full, offer spectator mode
   if (!canJoinAsPlayer) {
     const reason = phase !== "lobby" ? "Game in progress" : "Game full (max 4)";
-    safeSend(ws, { 
+    safeSend(channel, { 
       t: "spectateOffer", 
       reason,
       canSpectate: phase === "playing",
@@ -3227,14 +3238,14 @@ wss.on("connection", (ws) => {
     });
     
     // Set up spectator message handler
-    ws.on("message", (data) => {
-      let msg;
-      try { msg = JSON.parse(data.toString()); } catch { return; }
+    channel.on("message", (msg) => {
+      // Geckos auto-parses JSON, no try/catch needed
+      if (!msg) return;
       
       if (msg.t === "spectate" && phase === "playing") {
         // Add as spectator
-        spectators.add(ws);
-        safeSend(ws, { 
+        spectators.add(channel);
+        safeSend(channel, {
           t: "spectateStart",
           world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W },
           wave,
@@ -3246,9 +3257,9 @@ wss.on("connection", (ws) => {
       }
     });
     
-    ws.on("close", () => {
-      if (spectators.has(ws)) {
-        spectators.delete(ws);
+    channel.onDisconnect(() => {
+      if (spectators.has(channel)) {
+        spectators.delete(channel);
         broadcast({ t: "spectatorUpdate", count: spectators.size });
       }
     });
@@ -3259,7 +3270,7 @@ wss.on("connection", (ws) => {
   const slot = assignSlot();
   const id = uid();
   const player = {
-    id, ws, slot,
+    id, channel, slot, // Changed 'ws' to 'channel'
     name: `Player ${slot + 1}`,
     targetX: 0, targetY: 0,
     manualShooting: false,
@@ -3278,20 +3289,20 @@ wss.on("connection", (ws) => {
   if (!hostId) hostId = id;
 
   recomputeWorld();
-  safeSend(ws, { 
+  safeSend(channel, { 
     t: "welcome", id, slot, isHost: id === hostId, 
     world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, 
     phase,
     attackTypes: ATTACK_TYPES,
     towerModules: TOWER_MODULES
   });
-  safeSend(ws, { t: "chatHistory", messages: chatHistory });
+  safeSend(channel, { t: "chatHistory", messages: chatHistory });
   broadcast({ t: "lobby", ...lobbySnapshot() });
 
-  ws.on("message", (data) => {
-    let msg;
-    try { msg = JSON.parse(data.toString()); } catch { return; }
+  channel.on("message", (msg) => {
+    if (!msg) return;
     const p = players.get(id);
+	
     if (!p) return;
 
     if (msg.t === "setName") {
@@ -3758,7 +3769,7 @@ wss.on("connection", (ws) => {
     }
   });
 
-  ws.on("close", () => {
+  channel.onDisconnect(() => {
     players.delete(id);
     if (hostId === id) hostId = players.size ? Array.from(players.keys())[0] : null;
 
@@ -3790,4 +3801,45 @@ wss.on("connection", (ws) => {
 setInterval(tick, 1000 / TICK_RATE);
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => { console.log(`Rogue Asteroid PvP (OPTIMIZED v2 - 15Hz): http://localhost:${PORT}`); });
+
+// Bind to 0.0.0.0 to accept connections from any network interface
+server.listen(PORT, '0.0.0.0', async () => {
+  console.log(`\n${'='.repeat(65)}`);
+  console.log(`🚀 ROGUE ASTEROID PvP - INTERNET SERVER RUNNING`);
+  console.log(`${'='.repeat(65)}`);
+  console.log(`\n📡 Server listening on port ${PORT}`);
+  console.log(`\n🏠 Local access (you): http://localhost:${PORT}`);
+  
+  // Try to get public IP for remote friends
+  try {
+    const https = await import('https');
+    const getPublicIP = () => new Promise((resolve, reject) => {
+      https.get('https://api.ipify.org', (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => resolve(data.trim()));
+      }).on('error', reject);
+    });
+    
+    const publicIP = await getPublicIP();
+    console.log(`\n🌍 PUBLIC IP (share with remote friends):`);
+    console.log(`   → http://${publicIP}:${PORT}`);
+  } catch (err) {
+    console.log(`\n⚠️  Could not detect public IP. Find it at: https://whatismyip.com`);
+  }
+  
+  console.log(`\n${'='.repeat(65)}`);
+  console.log(`📋 SETUP FOR INTERNET PLAY (required for remote friends):`);
+  console.log(`${'='.repeat(65)}`);
+  console.log(`\n1. PORT FORWARDING - In your router settings, forward:`);
+  console.log(`   • Port ${PORT} TCP (for the web page)`);
+  console.log(`   • Ports 1025-65535 UDP (for game data - or just open all UDP)`);
+  console.log(`\n2. FIREWALL - Allow Node.js through Windows/Mac firewall`);
+  console.log(`\n3. SHARE YOUR PUBLIC IP - Give friends the URL shown above`);
+  console.log(`\n4. FRIENDS CONNECT - They open the URL in their browser`);
+  console.log(`\n${'='.repeat(65)}`);
+  console.log(`💡 TIP: If port forwarding is too complex, consider using:`);
+  console.log(`   • ngrok (https://ngrok.com) - creates a public tunnel`);
+  console.log(`   • Hamachi/ZeroTier - creates a virtual LAN`);
+  console.log(`${'='.repeat(65)}\n`);
+});
