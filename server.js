@@ -1037,13 +1037,18 @@ function startModuleCardPhase() {
   // Track which players have picked
   modulePlayersPicked = new Set();
   
-  // Determine pick order: sorted purely by kills (most kills picks first)
+  // Determine pick order: sorted by kills (most kills picks first)
+  // Secondary sort by slot for stability when kills are equal
   const alivePlayers = lockedSlots
     .map(id => players.get(id))
     .filter(p => p && p.hp > 0);
   
-  // Sort by kills descending (most kills picks first)
-  alivePlayers.sort((a, b) => (b.kills || 0) - (a.kills || 0));
+  // Sort by kills descending, then by slot ascending for stability
+  alivePlayers.sort((a, b) => {
+    const killDiff = (b.kills || 0) - (a.kills || 0);
+    if (killDiff !== 0) return killDiff;
+    return (a.slot || 0) - (b.slot || 0); // Stable secondary sort
+  });
   
   modulePickOrder = alivePlayers.map(p => p.id);
   currentModulePicker = 0;
@@ -1052,7 +1057,7 @@ function startModuleCardPhase() {
   // PERFORMANCE: Cache pick order objects for broadcast
   cachedPickOrder = modulePickOrder.map(id => {
     const p = players.get(id);
-    return { id, name: p?.name || "Unknown", isBossKiller: id === bossKillerId };
+    return { id, name: p?.name || "Unknown", kills: p?.kills || 0, isBossKiller: id === bossKillerId };
   });
   
   // Broadcast module card phase start (use cached arrays)

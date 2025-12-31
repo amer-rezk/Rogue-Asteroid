@@ -1127,6 +1127,7 @@
           // Reset upgrade purchase state
           upgradeQueueSize = 0;
           currentRerollCost = 10;
+          buyUpgradeCost = 30; // Reset buy upgrade cost
           hoveredBuyUpgrade = false;
           // Reset attack state
           incomingAttacks = [];
@@ -1151,6 +1152,10 @@
         upgradePicked = false;
         buildMenuOpen = null;
         incomingAttacks = [];
+        // Reset upgrade costs
+        currentRerollCost = 10;
+        buyUpgradeCost = 30;
+        upgradeQueueSize = 0;
         // Reset pause state
         gamePaused = false;
         pauseCountdown = 0;
@@ -4932,9 +4937,11 @@
           ctx.fillStyle = "#0f0";
           ctx.fillText(`YOUR TURN! (${Math.ceil(modulePickTimeLeft)}s)`, panelX + panelW / 2, panelY + 45);
         } else {
-          const pickerName = modulePickOrder.find(p => p.id === currentModulePicker)?.name || "...";
+          const picker = modulePickOrder.find(p => p.id === currentModulePicker);
+          const pickerName = picker?.name || "...";
+          const pickerKills = picker?.kills !== undefined ? ` (${picker.kills} kills)` : "";
           ctx.fillStyle = "#aaa";
-          ctx.fillText(`${pickerName}'s turn`, panelX + panelW / 2, panelY + 45);
+          ctx.fillText(`${pickerName}${pickerKills}'s turn`, panelX + panelW / 2, panelY + 45);
           ctx.font = "10px 'Courier New', monospace";
           ctx.fillText(`(${Math.ceil(modulePickTimeLeft)}s)`, panelX + panelW / 2, panelY + 58);
         }
