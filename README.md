@@ -1,75 +1,84 @@
-# ☄️ Rogue Asteroid PvP
+# 🚀 Rogue Asteroid PvP - Local Hosting Setup
 
-A competitive multiplayer tower defense game where players defend against waves of asteroids while sending attacks at each other. Last player standing wins!
+A competitive asteroid defense game with WebRTC UDP-like transport for low-latency multiplayer.
 
 ## Quick Start
 
 ```bash
+# Install dependencies
 npm install
-node server.js
+
+# Start server
+npm start
 ```
 
 Then open `http://localhost:3000` in your browser.
 
-## Gameplay
+## Network Setup for Internet Play
 
-- **Defend** your base from asteroid waves
-- **Earn gold** by destroying asteroids
-- **Buy towers** for extra firepower
-- **Send attacks** at opponents to overwhelm them
-- **Choose upgrades** between waves (roguelike card system)
+1. **Port Forward TCP 3000** on your router to your machine
+2. Share your **public IP address** with players (find it at [whatismyip.com](https://whatismyip.com))
+3. Players connect to: `http://YOUR_PUBLIC_IP:3000`
+
+## Architecture
+
+- **WebSocket (TCP)**: Signaling, lobby, chat, purchases, upgrades
+- **WebRTC DataChannel (UDP-like)**: High-frequency game state broadcasts (45Hz physics, ~22Hz network)
+
+### WebRTC Status
+
+The server automatically detects WebRTC availability:
+- ✓ **With wrtc**: UDP-like transport via WebRTC DataChannels (lowest latency)
+- ✗ **Without wrtc**: Falls back to WebSocket-only (still playable)
+
+To enable WebRTC on the server (optional, requires native compilation):
+```bash
+npm install wrtc
+```
+
+**Note**: Browser clients use native WebRTC - no special setup required.
+
+## Game Features
+
+- 🎮 **1-4 Player Competitive Mode**
+- 🎯 **13 Roguelike Upgrades** (4 rarities: Common → Legendary)
+- 🗼 **3 Tower Types** (Gatling, Sniper, Missile)
+- ⚔️ **6 PvP Attack Units** (Swarm, Bruiser, Carrier, Splitter, Ghost, Berserker)
+- 👑 **Boss Waves** with module rewards
+- 💬 **Chat System**
+- 👁️ **Spectator Mode**
 
 ## Controls
 
-| Action | Control |
-|--------|---------|
-| Aim | Mouse movement |
-| Manual fire | Click |
-| Auto-aim | Enabled by default |
-| Buy towers/attacks | Click UI buttons |
+- **Mouse**: Aim turret
+- **Left Click**: Fire (auto-fires by default)
+- **1/2/3**: Quick select upgrades
+- **R**: Reroll upgrades
+- **Enter**: Focus chat
+- **Escape**: Pause game
 
-## Towers
+## File Structure
 
-| Tower | Cost | Description |
-|-------|------|-------------|
-| Gatling | 50g | Fast fire rate, low damage |
-| Sniper | 120g | Slow, high damage, piercing |
-| Missile | 250g | Homing rockets, AOE damage |
+```
+rogue-asteroid/
+├── server.js      # Game server (Node.js)
+├── package.json   # Dependencies
+└── docs/
+    └── index.html # Game client
+```
 
-## Attack Units
+## Troubleshooting
 
-| Attack | Cost | Effect |
-|--------|------|--------|
-| 🐝 Swarm | 25g | 3 fast weak asteroids |
-| 🪨 Bruiser | 35g | 1 very tanky asteroid |
-| 👻 Ghost | 40g | 2 phasing asteroids (hard to hit) |
-| 💎 Splitter | 50g | Splits into 15 on death |
-| 👑 Carrier | 60g | Spawns minions as it descends |
+**"WebRTC unavailable"**: The game still works over WebSocket. For lowest latency, install `wrtc`:
+```bash
+npm install wrtc
+```
 
-## Boss Waves
+**Players can't connect**: Ensure:
+1. Port 3000 is forwarded on your router
+2. Firewall allows incoming connections
+3. You're sharing your PUBLIC IP, not 192.168.x.x
 
-Every 10 waves, a boss asteroid appears. Damaging it spawns smaller minions.
-
-### Custom Boss Images
-
-Place PNG images in `docs/images/`:
-- `Boss.png` - Main boss
-- `boss-ad-1.png` to `boss-ad-5.png` - Boss minions
-
-## Multiplayer
-
-- Up to 4 players
-- Host can force-start the game
-- Spectator mode for late joiners
-- Chat available in lobby and in-game
-
-## Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `PORT` | Server port (default: 3000) |
-| `LEADERBOARD_PASSWORD` | Password to clear leaderboard |
-
----
-
-*Survive the asteroid storm. Destroy your enemies.*
+**High latency**: WebRTC provides the best performance. Check the connection indicator in-game (top-right):
+- 🟢 WebRTC = UDP-like transport
+- 🟡 WebSocket = TCP fallback

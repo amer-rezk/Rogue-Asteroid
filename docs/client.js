@@ -1,7 +1,7 @@
 (() => {
   // ===== Configuration =====
-  // Updated to new Netlify address
-  const DEFAULT_SERVER = "wss://mute-lungfish-no-name-orgs-aef98851.koyeb.app/ws";
+  // Fly.io server address
+  const DEFAULT_SERVER = "wss://rogue-asteroid.fly.dev/ws";
 
   // ===== PERFORMANCE SETTINGS =====
   // Quality levels: 0=Low (best performance), 1=Medium, 2=High (best visuals)
