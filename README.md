@@ -58,7 +58,6 @@ You need to forward ports on your router so friends can reach your PC:
 ### 2. Windows Firewall
 
 When you first run `node server.js`, Windows will ask to allow it. **Click "Allow"!**
-
 If you missed it:
 1. Open **Windows Defender Firewall**
 2. Click **Allow an app through firewall**
