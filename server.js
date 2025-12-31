@@ -241,6 +241,28 @@ const MODULE_IDS = Object.keys(TOWER_MODULES);
 // ===== Server state =====
 const app = express();
 app.use(express.static(path.join(__dirname, "docs")));
+
+// Serve geckos.io client from node_modules (avoids CDN issues)
+app.get("/geckos-client.js", (req, res) => {
+  // Try different possible paths for the geckos client
+  const possiblePaths = [
+    path.join(__dirname, "node_modules", "@geckos.io", "client", "dist", "geckos.io-client.min.js"),
+    path.join(__dirname, "node_modules", "@geckos.io", "client", "dist", "geckos.io-client.2.2.3.min.js"),
+    path.join(__dirname, "node_modules", "@geckos.io", "client", "bundle", "geckos.io-client.min.js")
+  ];
+  
+  for (const filePath of possiblePaths) {
+    if (fs.existsSync(filePath)) {
+      res.setHeader('Content-Type', 'application/javascript');
+      return res.sendFile(filePath);
+    }
+  }
+  
+  // If not found, log and return error
+  console.error("Could not find geckos.io client. Checked paths:", possiblePaths);
+  res.status(404).send("// Geckos client not found");
+});
+
 app.get("/health", (_, res) => res.json({ ok: true }));
 
 const server = http.createServer(app);
