@@ -378,7 +378,9 @@ function broadcastMusicState() {
     serverTime: Date.now(),
     playing: musicState.playing,
     shuffle: musicState.shuffle,
-    trackList: MUSIC_TRACKS
+    trackList: MUSIC_TRACKS,
+    hostId: hostId, // Who controls music in lobby
+    phase: phase    // Current game phase
   });
   for (const [, p] of players) {
     if (p.ws.readyState === 1) p.ws.send(msg);
@@ -4106,32 +4108,39 @@ wss.on("connection", (ws) => {
     }
 
     // ===== MUSIC CONTROLS =====
-    // Only the score leader can change tracks (everyone can mute/volume locally)
-    const isScoreLeader = () => {
-      if (players.size <= 1) return true; // Solo player is always leader
-      let maxScore = -1;
-      let leaderId = null;
-      for (const [pid, player] of players) {
-        const score = player.score || 0;
-        if (score > maxScore) {
-          maxScore = score;
-          leaderId = pid;
+    // In lobby: host controls music. In game: score leader controls music.
+    const canControlMusic = () => {
+      if (players.size <= 1) return true; // Solo player always controls
+      
+      if (phase === "lobby") {
+        // In lobby, only host can control
+        return id === hostId;
+      } else {
+        // In game, score leader controls
+        let maxScore = -1;
+        let leaderId = null;
+        for (const [pid, player] of players) {
+          const score = player.score || 0;
+          if (score > maxScore) {
+            maxScore = score;
+            leaderId = pid;
+          }
         }
+        return id === leaderId;
       }
-      return id === leaderId;
     };
     
     if (msg.t === "musicNext") {
-      if (isScoreLeader()) nextTrack();
+      if (canControlMusic()) nextTrack();
     }
     if (msg.t === "musicPrev") {
-      if (isScoreLeader()) prevTrack();
+      if (canControlMusic()) prevTrack();
     }
     if (msg.t === "musicSetTrack") {
-      if (isScoreLeader()) setTrack(msg.index);
+      if (canControlMusic()) setTrack(msg.index);
     }
     if (msg.t === "musicToggleShuffle") {
-      if (isScoreLeader()) toggleShuffle();
+      if (canControlMusic()) toggleShuffle();
     }
     if (msg.t === "musicTrackEnded") {
       // Client reports track ended - advance to next
@@ -4158,7 +4167,9 @@ wss.on("connection", (ws) => {
         serverTime: Date.now(),
         playing: musicState.playing,
         shuffle: musicState.shuffle,
-        trackList: MUSIC_TRACKS
+        trackList: MUSIC_TRACKS,
+        hostId: hostId,
+        phase: phase
       });
     }
 
