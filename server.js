@@ -225,7 +225,7 @@ const TOWER_MODULES = {
     name: "Copycat",
     icon: "🪞",
     color: "#aaaaff",
-    desc: "Mirrors main turret at 50% effectiveness",
+    desc: "Mirrors main turret at 75% effectiveness",
     effect: "mirror"
   }
 };
@@ -536,7 +536,7 @@ const UPGRADE_DEFS = [
   { id: "multi", name: "Multishot", cat: "offense", icon: "⚔️", desc: "+{val} Bullets (-{penalty}% dmg)", stat: "multishot", base: 1, type: "multishot" },
   { id: "crit", name: "Crit Scope", cat: "offense", icon: "🎯", desc: "+{val}% Crit Chance", stat: "critChance", base: 0.05, type: "add_cap", cap: 1.0 },
   { id: "boom", name: "Explosive", cat: "offense", icon: "💣", desc: "Explosions size +{val}", stat: "explosive", base: 1, type: "add" },
-  { id: "caliber", name: "Caliber", cat: "offense", icon: "⚫", desc: "+{val}% Bullet Size", stat: "bulletSize", base: 0.0375, type: "mult" },
+  { id: "caliber", name: "Caliber", cat: "offense", icon: "⚫", desc: "+{val}% Bullet Size", stat: "bulletSize", base: 0.1125, type: "mult" },
   { id: "rico", name: "Ricochet", cat: "utility", icon: "🎱", desc: "Chains to {val} enemies (-10% dmg each)", stat: "ricochet", base: 1, type: "add" },
   { id: "pierce", name: "Railgun", cat: "utility", icon: "📌", desc: "Pierces {val} enemies", stat: "pierce", base: 1, type: "add" },
   { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "{val}% chance for Lightning", stat: "chainChance", base: 0.02, type: "add_cap", cap: 0.30 },
@@ -1782,39 +1782,39 @@ function tick() {
                 }
               }
               
-              // COPYCAT MODULE: Becomes an exact 50% copy of main turret
+              // COPYCAT MODULE: Becomes an exact 75% copy of main turret
               if (activeModules.includes("copycat")) {
-                // Use main turret's base cooldown with 50% of fire rate bonus
+                // Use main turret's base cooldown with 75% of fire rate bonus
                 const mainFireRate = p.upgrades?.fireRateMult ?? 1;
-                const halfFireRate = 1 + (mainFireRate - 1) * 0.5;
-                tower.cd = BULLET_COOLDOWN / halfFireRate;
+                const scaledFireRate = 1 + (mainFireRate - 1) * 0.75;
+                tower.cd = BULLET_COOLDOWN / scaledFireRate;
                 
                 // Get other modules (excluding copycat itself) to apply additively
                 const otherModules = activeModules.filter(m => m !== "copycat");
                 
-                // Create a "half owner" with 50% of all main turret stats
-                const halfOwner = {
+                // Create a "scaled owner" with 75% of all main turret stats
+                const scaledOwner = {
                   id: p.id,
                   slot: p.slot,
                   gold: p.gold,
                   modules: otherModules, // Pass other modules for additive effects
                   upgrades: {
-                    multishot: Math.max(1, Math.floor((p.upgrades?.multishot ?? 1) * 0.5)),
-                    damageAdd: (p.upgrades?.damageAdd ?? 0) * 0.5,
-                    bulletSpeedMult: 1 + ((p.upgrades?.bulletSpeedMult ?? 1) - 1) * 0.5,
-                    critChance: (p.upgrades?.critChance ?? 0) * 0.5,
-                    explosive: Math.floor((p.upgrades?.explosive ?? 0) * 0.5),
-                    bulletSize: 1 + ((p.upgrades?.bulletSize ?? 1) - 1) * 0.5,
-                    ricochet: Math.floor((p.upgrades?.ricochet ?? 0) * 0.5),
-                    pierce: Math.floor((p.upgrades?.pierce ?? 0) * 0.5),
-                    chainChance: (p.upgrades?.chainChance ?? 0) * 0.5,
-                    fireRateMult: halfFireRate,
+                    multishot: Math.max(1, Math.floor((p.upgrades?.multishot ?? 1) * 0.75)),
+                    damageAdd: (p.upgrades?.damageAdd ?? 0) * 0.75,
+                    bulletSpeedMult: 1 + ((p.upgrades?.bulletSpeedMult ?? 1) - 1) * 0.75,
+                    critChance: (p.upgrades?.critChance ?? 0) * 0.75,
+                    explosive: Math.floor((p.upgrades?.explosive ?? 0) * 0.75),
+                    bulletSize: 1 + ((p.upgrades?.bulletSize ?? 1) - 1) * 0.75,
+                    ricochet: Math.floor((p.upgrades?.ricochet ?? 0) * 0.75),
+                    pierce: Math.floor((p.upgrades?.pierce ?? 0) * 0.75),
+                    chainChance: (p.upgrades?.chainChance ?? 0) * 0.75,
+                    fireRateMult: scaledFireRate,
                     multishotDmgMult: p.upgrades?.multishotDmgMult ?? 1, // Keep full penalty
                   }
                 };
                 
                 // Fire using the same logic as main turret
-                fireWithMultishot(halfOwner, towerPos.x, towerPos.y, aim.x, aim.y, false);
+                fireWithMultishot(scaledOwner, towerPos.x, towerPos.y, aim.x, aim.y, false);
               } else {
                 // Normal tower firing
                 const towerProps = {

@@ -4,132 +4,43 @@
   const DEFAULT_SERVER = "wss://correct-jenni-no-name-orgs-8d502912.koyeb.app/ws";
 
   // ===== PERFORMANCE SETTINGS =====
-  // Quality levels: 0=Low (best performance), 1=Medium, 2=High (best visuals)
-  let graphicsQuality = parseInt(localStorage.getItem("rogueAsteroidQuality") || "1");
-  
-  // Performance thresholds - automatically reduce quality when entity counts are high
-  // PERFORMANCE: Lower thresholds for more aggressive quality scaling
-  const QUALITY_THRESHOLDS = {
-    missiles: { low: 60, medium: 35 },  // Was 80/50 - trigger earlier
-    bullets: { low: 50, medium: 25 }    // Was 60/35 - trigger earlier
-  };
-  
-  // Cached quality-dependent settings
-  let qualitySettings = {
+  // Always use high quality settings
+  const HIGH_QUALITY_SETTINGS = {
     useShadows: true,
-    useGradients: true,
+    useGradients: false, // Still disabled - too expensive with many bullets
     useTrails: true,
-    particleMultiplier: 1.0,
+    particleMultiplier: 0.8,
     maxDamageNumbers: 50,
-    maxParticles: 100
+    maxParticles: 80
   };
   
-  // PERFORMANCE: Track player count for quality scaling
+  // PERFORMANCE: Track player count for scaling
   let lastKnownPlayerCount = 1;
   
-  function updateQualitySettings() {
-    // PERFORMANCE: Scale down max particles based on player count
-    const playerScale = lastKnownPlayerCount > 2 ? 0.5 : (lastKnownPlayerCount > 1 ? 0.75 : 1.0);
-    
-    switch (graphicsQuality) {
-      case 0: // Low - maximum performance
-        qualitySettings = {
-          useShadows: false,
-          useGradients: false,
-          useTrails: false,
-          particleMultiplier: 0.2 * playerScale,
-          maxDamageNumbers: Math.floor(15 * playerScale),
-          maxParticles: Math.floor(20 * playerScale)
-        };
-        break;
-      case 1: // Medium - balanced
-        qualitySettings = {
-          useShadows: false,
-          useGradients: false, // PERFORMANCE: Disabled - gradients are expensive
-          useTrails: true,
-          particleMultiplier: 0.5 * playerScale,
-          maxDamageNumbers: Math.floor(30 * playerScale),
-          maxParticles: Math.floor(40 * playerScale)
-        };
-        break;
-      case 2: // High - full effects
-      default:
-        qualitySettings = {
-          useShadows: true,
-          useGradients: false, // PERFORMANCE: Disabled even on high - too expensive with many bullets
-          useTrails: true,
-          particleMultiplier: 0.8 * playerScale,
-          maxDamageNumbers: Math.floor(50 * playerScale),
-          maxParticles: Math.floor(80 * playerScale)
-        };
-        break;
-    }
-  }
-  updateQualitySettings();
-  
-  // Auto-quality adjustment based on entity counts
-  function checkAutoQuality(missiles, bullets, playerCount) {
-    // PERFORMANCE: Track player count and update settings if changed
+  function updatePlayerCount(playerCount) {
     if (playerCount && playerCount !== lastKnownPlayerCount) {
       lastKnownPlayerCount = playerCount;
-      updateQualitySettings();
-    }
-    
-    if (graphicsQuality === 0) return;
-    const missileCount = missiles?.length || 0;
-    const bulletCount = bullets?.length || 0;
-    const totalEntities = missileCount + bulletCount;
-    
-    // AGGRESSIVE SCALING: If > 100 entities, KILL effects immediately
-    // With 4 players this happens fast - prioritize FPS over visuals
-    if (totalEntities > 100) {
-      if (graphicsQuality !== 0) {
-        graphicsQuality = 0;
-        updateQualitySettings();
-      }
-      return;
-    }
-    
-    // PERFORMANCE: More aggressive with more players
-    const playerMultiplier = lastKnownPlayerCount > 2 ? 0.7 : 1.0;
-    const lowMissiles = QUALITY_THRESHOLDS.missiles.low * playerMultiplier;
-    const lowBullets = QUALITY_THRESHOLDS.bullets.low * playerMultiplier;
-    const medMissiles = QUALITY_THRESHOLDS.missiles.medium * playerMultiplier;
-    const medBullets = QUALITY_THRESHOLDS.bullets.medium * playerMultiplier;
-    
-    if (missileCount > lowMissiles || bulletCount > lowBullets) {
-      if (graphicsQuality > 0) {
-        graphicsQuality = 0;
-        updateQualitySettings();
-      }
-    } else if (missileCount > medMissiles || bulletCount > medBullets) {
-      if (graphicsQuality > 1) {
-        graphicsQuality = 1;
-        updateQualitySettings();
-      }
     }
   }
   
-  // Optimized shadow functions - NO-OP when shadows disabled
+  // Optimized shadow functions
   function setShadowOpt(ctx, color, blur) {
     // HARD OPTIMIZATION: Never render shadows with 3+ players
     // The chaos on screen makes them unnoticeable, but the cost is huge
     if (lastKnownPlayerCount >= 3) return;
     
-    if (qualitySettings.useShadows && blur > 0) {
+    if (blur > 0) {
       ctx.shadowColor = color;
       ctx.shadowBlur = blur;
     }
   }
   
   function clearShadowOpt(ctx) {
-    // Skip if shadows already disabled
+    // Skip if shadows already disabled due to player count
     if (lastKnownPlayerCount >= 3) return;
     
-    if (qualitySettings.useShadows) {
-      ctx.shadowColor = "transparent";
-      ctx.shadowBlur = 0;
-    }
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
   }
 
   // Polyfill for roundRect
@@ -438,8 +349,8 @@
   let currentShadowBlur = 0;
   
   function setShadow(ctx, color, blur) {
-    // Performance optimization: Skip shadows at low/medium quality
-    if (!qualitySettings.useShadows) return;
+    // Skip shadows with 3+ players for performance
+    if (lastKnownPlayerCount >= 3) return;
     if (currentShadowColor !== color || currentShadowBlur !== blur) {
       ctx.shadowColor = color;
       ctx.shadowBlur = blur;
@@ -449,7 +360,7 @@
   }
   
   function clearShadow(ctx) {
-    if (!qualitySettings.useShadows) return;
+    if (lastKnownPlayerCount >= 3) return;
     if (currentShadowBlur !== 0) {
       ctx.shadowBlur = 0;
       currentShadowBlur = 0;
@@ -473,12 +384,12 @@
 
   // ===== CLIENT-SIDE VISUAL EFFECTS (offloaded from server) =====
   function createClientParticle(x, y, color, count = 8, speedMult = 1) {
-    // Respect quality limits
-    const adjustedCount = Math.ceil(count * qualitySettings.particleMultiplier);
-    if (clientParticles.length >= qualitySettings.maxParticles) return;
+    // Use high quality settings
+    const adjustedCount = Math.ceil(count * HIGH_QUALITY_SETTINGS.particleMultiplier);
+    if (clientParticles.length >= HIGH_QUALITY_SETTINGS.maxParticles) return;
     
     for (let i = 0; i < adjustedCount; i++) {
-      if (clientParticles.length >= qualitySettings.maxParticles) break;
+      if (clientParticles.length >= HIGH_QUALITY_SETTINGS.maxParticles) break;
       const angle = (i / adjustedCount) * Math.PI * 2 + Math.random() * 0.5;
       const speed = (60 + Math.random() * 60) * speedMult;
       clientParticles.push({
@@ -495,7 +406,7 @@
 
   function createClientDamageNumber(x, y, amount, isCrit, customColor = null) {
     // Limit damage numbers for performance
-    if (clientDamageNumbers.length >= qualitySettings.maxDamageNumbers) {
+    if (clientDamageNumbers.length >= HIGH_QUALITY_SETTINGS.maxDamageNumbers) {
       // Remove oldest damage number
       clientDamageNumbers.shift();
     }
@@ -1405,9 +1316,9 @@
           }
         }
 
-        // Auto-quality adjustment (pass player count for scaling)
+        // Track player count for performance scaling
         const playerCount = msg.players?.length || 1;
-        checkAutoQuality(msg.missiles, msg.bullets, playerCount);
+        updatePlayerCount(playerCount);
         
         // Use client-side particles/damage numbers
         if (!msg.particles || msg.particles.length === 0) msg.particles = clientParticles;
@@ -2070,18 +1981,6 @@
         return;
       }
     }
-    
-    // Handle graphics quality toggle click
-    if (phase === "playing" && statsPanelOpen && window.gfxToggleBounds) {
-      const b = window.gfxToggleBounds;
-      if (mouseX >= b.x && mouseX <= b.x + b.w && mouseY >= b.y && mouseY <= b.y + b.h) {
-        graphicsQuality = (graphicsQuality + 1) % 3; // Cycle: 0 (Low) -> 1 (Med) -> 2 (High) -> 0
-        updateQualitySettings();
-        localStorage.setItem("rogueAsteroidQuality", graphicsQuality.toString());
-        mouseDown = false;
-        return;
-      }
-    }
 
     // Handle quantity mode button clicks
     if (hoveredQuantityBtn && phase === "playing") {
@@ -2275,16 +2174,6 @@
     const y = b.y * sy;
     const r = b.r * sx;
 
-    // LOW QUALITY: Simple circles only
-    if (graphicsQuality === 0) {
-      const color = b.isCrit ? "#ffffff" : (b.bulletColor || baseColor);
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
-      return;
-    }
-
     const angle = Math.atan2(b.vy, b.vx);
     const fadeStart = 0.5;
     const alpha = b.lifespan < fadeStart ? Math.max(0.2, b.lifespan / fadeStart) : 1.0;
@@ -2293,17 +2182,15 @@
 
     switch (b.bulletType) {
       case "gatling":
-        // Gatling: Simple yellow tracer
-        if (qualitySettings.useTrails) {
-          const gatlingTrail = 10 * sx;
-          ctx.strokeStyle = hexToRgba("#ffff00", 0.5 * alpha);
-          ctx.lineWidth = r * 1.5;
-          ctx.lineCap = "round";
-          ctx.beginPath();
-          ctx.moveTo(x, y);
-          ctx.lineTo(x - Math.cos(angle) * gatlingTrail, y - Math.sin(angle) * gatlingTrail);
-          ctx.stroke();
-        }
+        // Gatling: Simple yellow tracer with trail
+        const gatlingTrail = 10 * sx;
+        ctx.strokeStyle = hexToRgba("#ffff00", 0.5 * alpha);
+        ctx.lineWidth = r * 1.5;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - Math.cos(angle) * gatlingTrail, y - Math.sin(angle) * gatlingTrail);
+        ctx.stroke();
         ctx.fillStyle = hexToRgba("#ffff00", alpha);
         ctx.beginPath();
         ctx.arc(x, y, r * 0.7, 0, Math.PI * 2);
@@ -2328,20 +2215,17 @@
         break;
 
       case "missile":
-        // Missile: Simplified red rocket
+        // Missile: Simplified red rocket with smoke trail
         const missileLen = 12 * sx;
         const missileWidth = r * 1.2;
-        // Skip smoke trail at medium quality
-        if (qualitySettings.useTrails) {
-          ctx.fillStyle = hexToRgba("#ff6600", 0.6 * alpha);
-          ctx.beginPath();
-          ctx.moveTo(x - Math.cos(angle) * missileLen * 0.5, y - Math.sin(angle) * missileLen * 0.5);
-          ctx.lineTo(x - Math.cos(angle) * missileLen * 2, y - Math.sin(angle) * missileLen * 2);
-          ctx.lineTo(x - Math.cos(angle) * missileLen * 1.5 + Math.cos(angle - 0.5) * 4 * sx,
-                     y - Math.sin(angle) * missileLen * 1.5 + Math.sin(angle - 0.5) * 4 * sx);
-          ctx.closePath();
-          ctx.fill();
-        }
+        ctx.fillStyle = hexToRgba("#ff6600", 0.6 * alpha);
+        ctx.beginPath();
+        ctx.moveTo(x - Math.cos(angle) * missileLen * 0.5, y - Math.sin(angle) * missileLen * 0.5);
+        ctx.lineTo(x - Math.cos(angle) * missileLen * 2, y - Math.sin(angle) * missileLen * 2);
+        ctx.lineTo(x - Math.cos(angle) * missileLen * 1.5 + Math.cos(angle - 0.5) * 4 * sx,
+                   y - Math.sin(angle) * missileLen * 1.5 + Math.sin(angle - 0.5) * 4 * sx);
+        ctx.closePath();
+        ctx.fill();
         // PERFORMANCE: Only save/restore for rotate transform
         ctx.save();
         ctx.translate(x, y);
@@ -2366,17 +2250,14 @@
           return c;
         };
 
-        if (qualitySettings.useTrails) {
-          // PERFORMANCE: Skip gradient creation - use solid color trail instead
-          // Gradients create new objects every frame, causing GC pressure
-          ctx.strokeStyle = getColorAlpha(color, 0.5 * alpha);
-          ctx.lineWidth = r * 1.8;
-          ctx.lineCap = "round";
-          ctx.beginPath();
-          ctx.moveTo(x, y);
-          ctx.lineTo(x - Math.cos(angle) * trail, y - Math.sin(angle) * trail);
-          ctx.stroke();
-        }
+        // Trail always drawn
+        ctx.strokeStyle = getColorAlpha(color, 0.5 * alpha);
+        ctx.lineWidth = r * 1.8;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - Math.cos(angle) * trail, y - Math.sin(angle) * trail);
+        ctx.stroke();
 
         // Bullet body
         ctx.fillStyle = getColorAlpha(color, alpha);
@@ -2709,8 +2590,8 @@
       }
 
       // Tesla Coil Lightning Effects
-      // PERFORMANCE: Skip outer glow in low quality or low FPS
-      const drawLightningGlow = graphicsQuality > 0 && !isLowFPS;
+      // PERFORMANCE: Skip outer glow only in low FPS situations
+      const drawLightningGlow = !isLowFPS;
       
       for (const lightning of clientLightning) {
         const alpha = lightning.life / lightning.maxLife;
@@ -4430,31 +4311,6 @@
           ctx.textAlign = "right";
           ctx.fillStyle = showDamageNumbers ? "#66ff66" : "#ff6666";
           ctx.fillText(showDamageNumbers ? "ON" : "OFF", toggleX + toggleW - 8, toggleY + 18);
-          
-          // Graphics Quality toggle button
-          const gfxToggleY = toggleY + toggleH + 8;
-          const isHoveringGfxToggle = mouseX >= toggleX && mouseX <= toggleX + toggleW && 
-                                       mouseY >= gfxToggleY && mouseY <= gfxToggleY + toggleH;
-          window.gfxToggleBounds = { x: toggleX, y: gfxToggleY, w: toggleW, h: toggleH };
-          
-          ctx.fillStyle = isHoveringGfxToggle ? "rgba(100,180,255,0.3)" : "rgba(40,60,100,0.4)";
-          ctx.strokeStyle = isHoveringGfxToggle ? "#7ae0ff" : "rgba(122,224,255,0.3)";
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.roundRect(toggleX, gfxToggleY, toggleW, toggleH, 5);
-          ctx.fill();
-          ctx.stroke();
-          
-          ctx.font = "11px 'Courier New', monospace";
-          ctx.textAlign = "left";
-          ctx.fillStyle = "#ccc";
-          ctx.fillText("Graphics:", toggleX + 8, gfxToggleY + 18);
-          
-          ctx.textAlign = "right";
-          const gfxLabels = ["LOW", "MED", "HIGH"];
-          const gfxColors = ["#ff6666", "#ffaa00", "#66ff66"];
-          ctx.fillStyle = gfxColors[graphicsQuality] || "#fff";
-          ctx.fillText(gfxLabels[graphicsQuality] || "???", toggleX + toggleW - 8, gfxToggleY + 18);
         }
         
         ctx.textAlign = "left";
