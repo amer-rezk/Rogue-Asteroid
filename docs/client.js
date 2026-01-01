@@ -364,8 +364,9 @@
   
   function loadMusicTrack(trackName) {
     if (!musicAudio) initMusicPlayer();
-    const url = `/music/${encodeURIComponent(trackName)}`;
-    if (musicAudio.src !== location.origin + url) {
+    const url = `Music/${encodeURIComponent(trackName)}`;
+    // Check if we need to load a new track
+    if (!musicAudio.src.endsWith(encodeURIComponent(trackName))) {
       musicAudio.src = url;
       musicAudio.load();
     }
@@ -3909,12 +3910,13 @@
       }
       ctx.textAlign = "left";
 
-      // ===== MUSIC PLAYER (Bottom Right) =====
+      // ===== MUSIC PLAYER (Above Stats Button - Bottom Right) =====
       if (musicState.trackName) {
         const mpW = musicState.expanded ? 220 : 40;
         const mpH = musicState.expanded ? 80 : 40;
         const mpX = canvas.width - mpW - 12;
-        const mpY = canvas.height - mpH - 12;
+        // Position above stats button (stats btn is at canvas.height - 47)
+        const mpY = canvas.height - mpH - 60;
         
         // Store bounds for click detection
         window.musicPlayerBounds = { x: mpX, y: mpY, w: mpW, h: mpH };
@@ -5871,7 +5873,7 @@
         const mpW = 180;
         const mpH = 40;
         const mpX = canvas.width - mpW - 12;
-        const mpY = canvas.height - mpH - 12;
+        const mpY = canvas.height - mpH - 60; // Above stats button position
         
         window.musicPlayerBounds = { x: mpX, y: mpY, w: mpW, h: mpH };
         

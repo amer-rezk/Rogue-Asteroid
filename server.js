@@ -246,7 +246,8 @@ const MODULE_IDS = Object.keys(TOWER_MODULES);
 // ===== Server state =====
 const app = express();
 app.use(express.static(path.join(__dirname, "docs")));
-app.use("/music", express.static(path.join(__dirname, "Music"))); // Serve music files
+// Music folder is inside docs/ for GitHub Pages compatibility
+app.use("/Music", express.static(path.join(__dirname, "docs", "Music")));
 app.get("/health", (_, res) => res.json({ ok: true }));
 
 const server = http.createServer(app);
