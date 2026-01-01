@@ -3960,6 +3960,30 @@
           ctx.fillText(displayName, mpX + 8, mpY + 20);
           ctx.restore();
           
+          // Check if current player is score leader (can control music) - check early for crown
+          let isScoreLeader = true;
+          let leaderName = "";
+          if (lastSnap && lastSnap.players && lastSnap.players.length > 1) {
+            const myPlayer = lastSnap.players.find(p => p.id === myId);
+            let maxScore = -1;
+            let leader = null;
+            for (const p of lastSnap.players) {
+              if ((p.score || 0) > maxScore) {
+                maxScore = p.score || 0;
+                leader = p;
+              }
+            }
+            isScoreLeader = myPlayer && leader && myPlayer.id === leader.id;
+            leaderName = leader ? leader.name : "";
+          }
+          
+          // Show DJ crown indicator
+          ctx.font = "10px sans-serif";
+          ctx.fillStyle = isScoreLeader ? "#ffd700" : "#555";
+          ctx.textAlign = "right";
+          ctx.fillText(isScoreLeader ? "👑 DJ" : `👑 ${leaderName.slice(0,6)}`, mpX + mpW - 30, mpY + 20);
+          ctx.textAlign = "left";
+          
           // Collapse button (top right)
           const collapseX = mpX + mpW - 28;
           const collapseY = mpY + 8;
@@ -3976,21 +4000,23 @@
           const btnSpacing = 6;
           let btnX = mpX + 10;
           
-          // Previous button
+          // Previous button (leader only)
           const prevHover = mouseX >= btnX && mouseX <= btnX + btnSize && 
                             mouseY >= btnY && mouseY <= btnY + btnSize;
-          ctx.fillStyle = prevHover ? "rgba(122,224,255,0.3)" : "rgba(40,60,100,0.4)";
-          ctx.strokeStyle = prevHover ? "#7ae0ff" : "#557";
+          const prevEnabled = isScoreLeader;
+          ctx.fillStyle = !prevEnabled ? "rgba(30,30,40,0.4)" : 
+                          (prevHover ? "rgba(122,224,255,0.3)" : "rgba(40,60,100,0.4)");
+          ctx.strokeStyle = !prevEnabled ? "#333" : (prevHover ? "#7ae0ff" : "#557");
           ctx.lineWidth = 1;
           ctx.beginPath();
           ctx.roundRect(btnX, btnY, btnSize, btnSize, 4);
           ctx.fill();
           ctx.stroke();
-          ctx.fillStyle = prevHover ? "#fff" : "#aaa";
+          ctx.fillStyle = !prevEnabled ? "#444" : (prevHover ? "#fff" : "#aaa");
           ctx.font = "14px sans-serif";
           ctx.textAlign = "center";
           ctx.fillText("⏮", btnX + btnSize/2, btnY + btnSize/2 + 5);
-          if (prevHover) musicPlayerHover = "prev";
+          if (prevHover && prevEnabled) musicPlayerHover = "prev";
           btnX += btnSize + btnSpacing;
           
           // Play/Pause (visual only - always playing)
@@ -4004,36 +4030,42 @@
           ctx.fillText("▶", btnX + btnSize/2, btnY + btnSize/2 + 5);
           btnX += btnSize + btnSpacing;
           
-          // Next button
+          // Next button (leader only)
           const nextHover = mouseX >= btnX && mouseX <= btnX + btnSize && 
                             mouseY >= btnY && mouseY <= btnY + btnSize;
-          ctx.fillStyle = nextHover ? "rgba(122,224,255,0.3)" : "rgba(40,60,100,0.4)";
-          ctx.strokeStyle = nextHover ? "#7ae0ff" : "#557";
+          const nextEnabled = isScoreLeader;
+          ctx.fillStyle = !nextEnabled ? "rgba(30,30,40,0.4)" : 
+                          (nextHover ? "rgba(122,224,255,0.3)" : "rgba(40,60,100,0.4)");
+          ctx.strokeStyle = !nextEnabled ? "#333" : (nextHover ? "#7ae0ff" : "#557");
           ctx.beginPath();
           ctx.roundRect(btnX, btnY, btnSize, btnSize, 4);
           ctx.fill();
           ctx.stroke();
-          ctx.fillStyle = nextHover ? "#fff" : "#aaa";
+          ctx.fillStyle = !nextEnabled ? "#444" : (nextHover ? "#fff" : "#aaa");
           ctx.fillText("⏭", btnX + btnSize/2, btnY + btnSize/2 + 5);
-          if (nextHover) musicPlayerHover = "next";
+          if (nextHover && nextEnabled) musicPlayerHover = "next";
           btnX += btnSize + btnSpacing;
           
-          // Shuffle button
+          // Shuffle button (leader only)
           const shuffleHover = mouseX >= btnX && mouseX <= btnX + btnSize && 
                                mouseY >= btnY && mouseY <= btnY + btnSize;
-          ctx.fillStyle = shuffleHover ? "rgba(122,224,255,0.3)" : 
-                          (musicState.shuffle ? "rgba(122,224,255,0.4)" : "rgba(40,60,100,0.4)");
-          ctx.strokeStyle = shuffleHover || musicState.shuffle ? "#7ae0ff" : "#557";
+          const shuffleEnabled = isScoreLeader;
+          ctx.fillStyle = !shuffleEnabled ? "rgba(30,30,40,0.4)" : 
+                          (shuffleHover ? "rgba(122,224,255,0.3)" : 
+                          (musicState.shuffle ? "rgba(122,224,255,0.4)" : "rgba(40,60,100,0.4)"));
+          ctx.strokeStyle = !shuffleEnabled ? "#333" : 
+                            (shuffleHover || musicState.shuffle ? "#7ae0ff" : "#557");
           ctx.beginPath();
           ctx.roundRect(btnX, btnY, btnSize, btnSize, 4);
           ctx.fill();
           ctx.stroke();
-          ctx.fillStyle = musicState.shuffle ? "#7ae0ff" : (shuffleHover ? "#fff" : "#aaa");
+          ctx.fillStyle = !shuffleEnabled ? "#444" : 
+                          (musicState.shuffle ? "#7ae0ff" : (shuffleHover ? "#fff" : "#aaa"));
           ctx.fillText("🔀", btnX + btnSize/2, btnY + btnSize/2 + 5);
-          if (shuffleHover) musicPlayerHover = "shuffle";
+          if (shuffleHover && shuffleEnabled) musicPlayerHover = "shuffle";
           btnX += btnSize + btnSpacing;
           
-          // Mute button
+          // Mute button (everyone can use)
           const muteHover = mouseX >= btnX && mouseX <= btnX + btnSize && 
                             mouseY >= btnY && mouseY <= btnY + btnSize;
           ctx.fillStyle = muteHover ? "rgba(122,224,255,0.3)" : "rgba(40,60,100,0.4)";

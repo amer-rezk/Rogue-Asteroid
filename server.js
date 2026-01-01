@@ -3942,17 +3942,32 @@ wss.on("connection", (ws) => {
     }
 
     // ===== MUSIC CONTROLS =====
+    // Only the score leader can change tracks (everyone can mute/volume locally)
+    const isScoreLeader = () => {
+      if (players.size <= 1) return true; // Solo player is always leader
+      let maxScore = -1;
+      let leaderId = null;
+      for (const [pid, player] of players) {
+        const score = player.score || 0;
+        if (score > maxScore) {
+          maxScore = score;
+          leaderId = pid;
+        }
+      }
+      return id === leaderId;
+    };
+    
     if (msg.t === "musicNext") {
-      nextTrack();
+      if (isScoreLeader()) nextTrack();
     }
     if (msg.t === "musicPrev") {
-      prevTrack();
+      if (isScoreLeader()) prevTrack();
     }
     if (msg.t === "musicSetTrack") {
-      setTrack(msg.index);
+      if (isScoreLeader()) setTrack(msg.index);
     }
     if (msg.t === "musicToggleShuffle") {
-      toggleShuffle();
+      if (isScoreLeader()) toggleShuffle();
     }
     if (msg.t === "musicTrackEnded") {
       // Client reports track ended - advance to next
