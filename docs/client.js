@@ -9,9 +9,9 @@
     useShadows: true,
     useGradients: false, // Still disabled - too expensive with many bullets
     useTrails: true,
-    particleMultiplier: 0.8,
+    particleMultiplier: 1.0,
     maxDamageNumbers: 50,
-    maxParticles: 80
+    maxParticles: 150  // Increased for confetti party! 🎉
   };
   
   // PERFORMANCE: Track player count for scaling
@@ -706,6 +706,52 @@
           // Skip visual effects if tab was hidden
           if (!skipVisualEffects) {
             createClientParticle(ev.x, ev.y, ev.color, ev.radius > 30 ? 12 : 8, ev.radius / 25);
+          }
+          break;
+          
+        case "confettiExplosion":
+          // 🎉🎊 CONFETTI PARTY EXPLOSION!!! 🎊🎉
+          if (!skipVisualEffects) {
+            const numParticles = 12 + Math.floor(ev.size || 5);
+            for (let i = 0; i < numParticles; i++) {
+              const hue = (i / numParticles) * 360; // Rainbow distribution!
+              const angle = (i / numParticles) * Math.PI * 2 + Math.random() * 0.5;
+              const speed = 80 + Math.random() * 120;
+              const size = 2 + Math.random() * 4;
+              
+              // Different shapes for confetti particles
+              const shapeRand = Math.random();
+              clientParticles.push({
+                x: ev.x,
+                y: ev.y,
+                vx: Math.cos(angle) * speed + (Math.random() - 0.5) * 40,
+                vy: Math.sin(angle) * speed + (Math.random() - 0.5) * 40 - 30, // Upward bias
+                life: 0.8 + Math.random() * 0.6,
+                maxLife: 1.4,
+                color: `hsl(${hue}, 100%, 65%)`,
+                size: size,
+                isConfetti: true, // Special flag for confetti rendering
+                confettiShape: shapeRand < 0.33 ? 'star' : shapeRand < 0.66 ? 'square' : 'circle',
+                spin: (Math.random() - 0.5) * 15, // Rotation speed
+                rotation: Math.random() * Math.PI * 2
+              });
+            }
+            
+            // Extra sparkle burst
+            for (let i = 0; i < 8; i++) {
+              const sparkAngle = Math.random() * Math.PI * 2;
+              const sparkDist = 5 + Math.random() * 15;
+              clientParticles.push({
+                x: ev.x + Math.cos(sparkAngle) * sparkDist,
+                y: ev.y + Math.sin(sparkAngle) * sparkDist,
+                vx: Math.cos(sparkAngle) * 150,
+                vy: Math.sin(sparkAngle) * 150 - 50,
+                life: 0.3 + Math.random() * 0.2,
+                maxLife: 0.5,
+                color: '#ffffff',
+                size: 1 + Math.random() * 2,
+              });
+            }
           }
           break;
           
@@ -2181,6 +2227,230 @@
     // PERFORMANCE: No ctx.save()/restore() here - only used for missile rotation below
 
     switch (b.bulletType) {
+      case "confetti":
+        // 🎉🎊 MAXIMUM CONFETTI PARTY MODE!!! 🎊🎉
+        const confettiColor = b.bulletColor || `hsl(${(Date.now() / 10) % 360}, 100%, 60%)`;
+        const time = Date.now() / 1000;
+        const sparkle = 0.7 + Math.sin(time * 15 + b.x + b.y) * 0.3; // Twinkle effect
+        const wobble = Math.sin(time * 8 + b.x * 0.1) * 3; // Wobble side to side!
+        const bounce = Math.abs(Math.sin(time * 12 + b.y * 0.1)) * 2; // Bouncy!
+        const pulse = 1 + Math.sin(time * 10) * 0.2; // Size pulsing
+        
+        // Helper for confetti colors
+        const getConfettiAlpha = (c, a) => {
+          if (!c) return `rgba(255,255,255,${a})`;
+          if (c.startsWith("#")) return hexToRgba(c, a);
+          if (c.startsWith("hsl")) return c.replace("hsl", "hsla").replace(")", `, ${a})`);
+          return c;
+        };
+        
+        // RAINBOW TRAIL - 5 colors cycling through the rainbow!
+        const trailLen = 25 * sx;
+        for (let i = 0; i < 5; i++) {
+          const trailHue = (parseInt(confettiColor.match(/\d+/)?.[0] || 0) + i * 30 + time * 100) % 360;
+          const trailOffset = i * 0.25;
+          const waveOffset = Math.sin(time * 6 + i) * 3 * sx;
+          ctx.strokeStyle = `hsla(${trailHue}, 100%, 65%, ${(0.5 - i * 0.08) * alpha})`;
+          ctx.lineWidth = (r * (2 - i * 0.3)) * pulse;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          const startX = x - Math.cos(angle) * (trailOffset * trailLen) + Math.cos(angle + Math.PI/2) * waveOffset;
+          const startY = y - Math.sin(angle) * (trailOffset * trailLen) + Math.sin(angle + Math.PI/2) * waveOffset;
+          const endX = x - Math.cos(angle) * trailLen * (1 + trailOffset) + Math.cos(angle + Math.PI/2) * waveOffset * 0.5;
+          const endY = y - Math.sin(angle) * trailLen * (1 + trailOffset) + Math.sin(angle + Math.PI/2) * waveOffset * 0.5;
+          ctx.moveTo(startX, startY);
+          ctx.lineTo(endX, endY);
+          ctx.stroke();
+        }
+        
+        // Double glow rings - pulsing!
+        for (let ring = 0; ring < 2; ring++) {
+          const ringHue = (parseInt(confettiColor.match(/\d+/)?.[0] || 0) + ring * 60 + time * 50) % 360;
+          ctx.strokeStyle = `hsla(${ringHue}, 100%, 70%, ${(0.4 - ring * 0.15) * alpha * sparkle})`;
+          ctx.lineWidth = 2 - ring;
+          ctx.beginPath();
+          ctx.arc(x + wobble, y + bounce, r * (2.2 + ring * 0.8) * pulse, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        
+        // Random shape based on bullet id hash - MORE SHAPES!
+        const shapeType = (b.id?.charCodeAt(0) || 0) % 8;
+        ctx.fillStyle = getConfettiAlpha(confettiColor, alpha * sparkle);
+        
+        ctx.save();
+        ctx.translate(x + wobble, y + bounce);
+        const spinSpeed = 4 + (b.id?.charCodeAt(2) || 0) % 4; // Variable spin speed
+        ctx.rotate(time * spinSpeed + (b.id?.charCodeAt(1) || 0));
+        ctx.scale(pulse, pulse); // Pulsing size!
+        
+        switch (shapeType) {
+          case 0: // Star ⭐ (5 pointed)
+            ctx.beginPath();
+            for (let i = 0; i < 5; i++) {
+              const outerAngle = (i * 4 * Math.PI / 5) - Math.PI / 2;
+              const innerAngle = outerAngle + Math.PI / 5;
+              if (i === 0) {
+                ctx.moveTo(Math.cos(outerAngle) * r, Math.sin(outerAngle) * r);
+              } else {
+                ctx.lineTo(Math.cos(outerAngle) * r, Math.sin(outerAngle) * r);
+              }
+              ctx.lineTo(Math.cos(innerAngle) * r * 0.4, Math.sin(innerAngle) * r * 0.4);
+            }
+            ctx.closePath();
+            ctx.fill();
+            // Add a white center
+            ctx.fillStyle = `rgba(255,255,255,${0.7 * alpha})`;
+            ctx.beginPath();
+            ctx.arc(0, 0, r * 0.25, 0, Math.PI * 2);
+            ctx.fill();
+            break;
+            
+          case 1: // Heart ❤️
+            ctx.beginPath();
+            ctx.moveTo(0, r * 0.4);
+            ctx.bezierCurveTo(r, -r * 0.3, r * 0.8, -r, 0, -r * 0.4);
+            ctx.bezierCurveTo(-r * 0.8, -r, -r, -r * 0.3, 0, r * 0.4);
+            ctx.fill();
+            // Shine on heart
+            ctx.fillStyle = `rgba(255,255,255,${0.5 * alpha})`;
+            ctx.beginPath();
+            ctx.arc(-r * 0.3, -r * 0.3, r * 0.2, 0, Math.PI * 2);
+            ctx.fill();
+            break;
+            
+          case 2: // Diamond 💎
+            ctx.beginPath();
+            ctx.moveTo(0, -r * 1.2);
+            ctx.lineTo(r * 0.8, 0);
+            ctx.lineTo(0, r * 1.2);
+            ctx.lineTo(-r * 0.8, 0);
+            ctx.closePath();
+            ctx.fill();
+            // Inner facet
+            ctx.fillStyle = `rgba(255,255,255,${0.4 * alpha})`;
+            ctx.beginPath();
+            ctx.moveTo(0, -r * 0.6);
+            ctx.lineTo(r * 0.3, 0);
+            ctx.lineTo(0, r * 0.4);
+            ctx.lineTo(-r * 0.3, 0);
+            ctx.closePath();
+            ctx.fill();
+            break;
+            
+          case 3: // Moon 🌙
+            ctx.beginPath();
+            ctx.arc(0, 0, r, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "#111";
+            ctx.beginPath();
+            ctx.arc(r * 0.4, -r * 0.1, r * 0.7, 0, Math.PI * 2);
+            ctx.fill();
+            break;
+            
+          case 4: // Flower 🌸
+            const petalCount = 6;
+            for (let i = 0; i < petalCount; i++) {
+              const petalAngle = (i / petalCount) * Math.PI * 2;
+              ctx.fillStyle = getConfettiAlpha(confettiColor, alpha * sparkle);
+              ctx.beginPath();
+              ctx.ellipse(
+                Math.cos(petalAngle) * r * 0.5,
+                Math.sin(petalAngle) * r * 0.5,
+                r * 0.6, r * 0.3,
+                petalAngle, 0, Math.PI * 2
+              );
+              ctx.fill();
+            }
+            // Center of flower
+            ctx.fillStyle = "#ffff00";
+            ctx.beginPath();
+            ctx.arc(0, 0, r * 0.35, 0, Math.PI * 2);
+            ctx.fill();
+            break;
+            
+          case 5: // Lightning bolt ⚡
+            ctx.beginPath();
+            ctx.moveTo(r * 0.3, -r);
+            ctx.lineTo(-r * 0.2, -r * 0.1);
+            ctx.lineTo(r * 0.2, -r * 0.1);
+            ctx.lineTo(-r * 0.3, r);
+            ctx.lineTo(r * 0.1, r * 0.1);
+            ctx.lineTo(-r * 0.3, r * 0.1);
+            ctx.closePath();
+            ctx.fill();
+            break;
+            
+          case 6: // Spiral/Swirl 🌀
+            ctx.beginPath();
+            for (let i = 0; i < 720; i += 20) {
+              const spiralAngle = (i / 180) * Math.PI;
+              const spiralR = (i / 720) * r;
+              if (i === 0) {
+                ctx.moveTo(Math.cos(spiralAngle) * spiralR, Math.sin(spiralAngle) * spiralR);
+              } else {
+                ctx.lineTo(Math.cos(spiralAngle) * spiralR, Math.sin(spiralAngle) * spiralR);
+              }
+            }
+            ctx.strokeStyle = getConfettiAlpha(confettiColor, alpha);
+            ctx.lineWidth = r * 0.4;
+            ctx.lineCap = "round";
+            ctx.stroke();
+            break;
+            
+          default: // Classic circle with sparkle burst
+            // Outer ring
+            ctx.beginPath();
+            ctx.arc(0, 0, r, 0, Math.PI * 2);
+            ctx.fill();
+            // Inner white sparkle
+            ctx.fillStyle = `rgba(255,255,255,${0.9 * alpha * sparkle})`;
+            ctx.beginPath();
+            ctx.arc(-r * 0.25, -r * 0.25, r * 0.35, 0, Math.PI * 2);
+            ctx.fill();
+            // Tiny highlight
+            ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+            ctx.beginPath();
+            ctx.arc(-r * 0.15, -r * 0.4, r * 0.15, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.restore();
+        
+        // SPARKLE EXPLOSION! Multiple particles
+        for (let sp = 0; sp < 2; sp++) {
+          if (Math.random() < 0.4) {
+            const sparkleHue = (Math.random() * 360);
+            ctx.fillStyle = `hsla(${sparkleHue}, 100%, 85%, ${(0.6 + Math.random() * 0.4) * alpha})`;
+            const sparkDist = r * (2 + Math.random() * 3);
+            const sparkAngle = Math.random() * Math.PI * 2;
+            const sparkX = x + wobble + Math.cos(sparkAngle) * sparkDist;
+            const sparkY = y + bounce + Math.sin(sparkAngle) * sparkDist;
+            const sparkSize = 1 + Math.random() * 2.5;
+            
+            // Some sparkles are stars, some are circles
+            if (Math.random() < 0.3) {
+              // Mini 4-point star
+              ctx.save();
+              ctx.translate(sparkX, sparkY);
+              ctx.rotate(time * 5);
+              ctx.beginPath();
+              for (let i = 0; i < 4; i++) {
+                const a = (i / 4) * Math.PI * 2;
+                const nextA = ((i + 0.5) / 4) * Math.PI * 2;
+                ctx.lineTo(Math.cos(a) * sparkSize * 1.5, Math.sin(a) * sparkSize * 1.5);
+                ctx.lineTo(Math.cos(nextA) * sparkSize * 0.5, Math.sin(nextA) * sparkSize * 0.5);
+              }
+              ctx.closePath();
+              ctx.fill();
+              ctx.restore();
+            } else {
+              ctx.beginPath();
+              ctx.arc(sparkX, sparkY, sparkSize, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+        }
+        break;
+
       case "gatling":
         // Gatling: Simple yellow tracer with trail
         const gatlingTrail = 10 * sx;
@@ -2582,10 +2852,62 @@
       if (lastSnap.particles) {
         for (let i = 0; i < lastSnap.particles.length; i++) {
           const p = lastSnap.particles[i];
-          ctx.fillStyle = hexToRgba(p.color, p.life / (p.maxLife || 0.5));
-          ctx.beginPath();
-          ctx.arc(p.x * sx, p.y * sy, (p.size || 2) * sx, 0, Math.PI * 2);
-          ctx.fill();
+          const alpha = p.life / (p.maxLife || 0.5);
+          const px = p.x * sx;
+          const py = p.y * sy;
+          const pSize = (p.size || 2) * sx;
+          
+          // Special confetti particle rendering! 🎉
+          if (p.isConfetti) {
+            ctx.save();
+            ctx.translate(px, py);
+            
+            // Update and apply rotation
+            const rotation = (p.rotation || 0) + (p.spin || 0) * 0.016;
+            p.rotation = rotation;
+            ctx.rotate(rotation);
+            
+            // Parse HSL color for the fill
+            ctx.fillStyle = p.color.replace(')', `, ${alpha})`).replace('hsl', 'hsla');
+            
+            switch (p.confettiShape) {
+              case 'star':
+                // 4-pointed star
+                ctx.beginPath();
+                for (let j = 0; j < 4; j++) {
+                  const a = (j / 4) * Math.PI * 2;
+                  const nextA = ((j + 0.5) / 4) * Math.PI * 2;
+                  ctx.lineTo(Math.cos(a) * pSize, Math.sin(a) * pSize);
+                  ctx.lineTo(Math.cos(nextA) * pSize * 0.4, Math.sin(nextA) * pSize * 0.4);
+                }
+                ctx.closePath();
+                ctx.fill();
+                break;
+              case 'square':
+                // Spinning square/rectangle
+                const w = pSize * (0.8 + Math.sin(rotation * 2) * 0.3);
+                const h = pSize * (1.2 - Math.sin(rotation * 2) * 0.3);
+                ctx.fillRect(-w/2, -h/2, w, h);
+                break;
+              default:
+                // Circle with shine
+                ctx.beginPath();
+                ctx.arc(0, 0, pSize, 0, Math.PI * 2);
+                ctx.fill();
+                // Add a little shine
+                ctx.fillStyle = `rgba(255,255,255,${alpha * 0.5})`;
+                ctx.beginPath();
+                ctx.arc(-pSize * 0.3, -pSize * 0.3, pSize * 0.3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.restore();
+          } else {
+            // Normal particle
+            ctx.fillStyle = hexToRgba(p.color, alpha);
+            ctx.beginPath();
+            ctx.arc(px, py, pSize, 0, Math.PI * 2);
+            ctx.fill();
+          }
         }
       }
 

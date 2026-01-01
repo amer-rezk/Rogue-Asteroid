@@ -193,7 +193,7 @@ const TOWER_MODULES = {
     name: "Confetti Cannon",
     icon: "🎉",
     color: "#ff88ff",
-    desc: "Each bullet has random stats (size, speed, damage)",
+    desc: "PARTY MODE! Random shapes, colors & stats! 🎊",
     effect: "random"
   },
   pinballWizard: {
@@ -1274,12 +1274,13 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
   
   // Apply module effects on bullet creation
   
-  // Confetti Cannon: randomize stats
+  // Confetti Cannon: PARTY MODE! 🎉
   if (modules.includes("confettiCannon")) {
     speed *= 0.5 + Math.random() * 2; // 0.5x to 2.5x speed
     finalDmg *= 0.3 + Math.random() * 3; // 0.3x to 3.3x damage
     bulletR = 2 + Math.random() * 8; // 2 to 10 size
     bulletColor = `hsl(${Math.random() * 360}, 100%, 60%)`; // Random color
+    bulletType = "confetti"; // Special confetti rendering!
   }
   
   // Russian Roulette: random 0x-10x damage
@@ -2167,6 +2168,16 @@ function tick() {
           // IMPORTANT: Always pass modules to child bullets to enable creative combos!
           const bulletModules = b.modules || [];
           const owner = players.get(b.ownerId);
+          
+          // 🎉 CONFETTI CANNON: Party explosion on hit!
+          if (bulletModules.includes("confettiCannon")) {
+            queueEvent("confettiExplosion", { 
+              x: m.x, 
+              y: m.y, 
+              color: b.bulletColor || `hsl(${Math.random() * 360}, 100%, 60%)`,
+              size: b.r || 5
+            });
+          }
           
           // Fractal Prism: Shatter into 4 smaller bullets (2 Left, 2 Right)
           // SYNERGY: Shards inherit all modules EXCEPT fractalPrism itself (prevents infinite recursion)
