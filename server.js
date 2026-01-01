@@ -1126,9 +1126,15 @@ function queueUpgradesAndNextWave() {
     // 1. Existing Treasury Interest (10% of current gold, max 100)
     const treasuryInterest = Math.min(100, Math.floor(p.gold * 0.10));
 
-    // 2. New Attack Income (Permanent income from attacks * Gold Multiplier Card)
+    // 2. Attack Income with DIMINISHING RETURNS
+    // Formula: effectiveIncome = rawIncome / sqrt(1 + rawIncome / threshold)
+    // This means early income is nearly full, but high income grows much slower
+    // threshold of 15 means: 10 raw → 7.7 effective, 30 raw → 17.3, 60 raw → 27.7
     const goldMult = p.upgrades?.goldMult ?? 1;
-    const attackIncome = Math.floor((p.incomeFromAttacks || 0) * goldMult);
+    const rawAttackIncome = p.incomeFromAttacks || 0;
+    const INCOME_THRESHOLD = 15; // Diminishing returns kick in around this value
+    const effectiveAttackIncome = rawAttackIncome / Math.sqrt(1 + rawAttackIncome / INCOME_THRESHOLD);
+    const attackIncome = Math.floor(effectiveAttackIncome * goldMult);
 
     const totalIncome = treasuryInterest + attackIncome;
 

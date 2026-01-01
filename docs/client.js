@@ -313,6 +313,7 @@
   let banishedCount = 0;  // Number of upgrades player has banished
   let banishFeedback = null; // Feedback when banish succeeds
   let banishError = null; // Feedback when banish fails
+  let hoveredOpponentTower = null; // { playerId, towerIndex, x, y, tower } - for showing module tooltip
   
   // Buy additional upgrade
   let buyUpgradeCost = 30;
@@ -3671,6 +3672,7 @@
       }
 
       // Players and turrets
+      hoveredOpponentTower = null; // Reset hover state
       for (const p of lastSnap.players) {
         if (p.slot < 0) continue;
         const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
@@ -3775,6 +3777,25 @@
         towers.forEach((t, i) => {
           const tx = cx + offsets[i] * sx;
           const ty = 560 * sy;
+          
+          // Check hover for OPPONENT towers (not own)
+          if (t && p.id !== myId) {
+            const hoverRadius = 20 * sx;
+            const towerCenterY = ty - 15 * sy;
+            const dist = Math.sqrt((mouseX - tx) ** 2 + (mouseY - towerCenterY) ** 2);
+            if (dist < hoverRadius) {
+              hoveredOpponentTower = {
+                playerId: p.id,
+                playerName: p.name,
+                towerIndex: i,
+                x: tx,
+                y: towerCenterY,
+                tower: t,
+                color: color.main
+              };
+            }
+          }
+          
           if (t) {
             const typeInfo = TOWER_TYPES[t.type];
             if (typeInfo) {
@@ -4005,6 +4026,74 @@
         }
       }
       ctx.restore();
+
+      // ===== OPPONENT TOWER MODULE TOOLTIP =====
+      if (hoveredOpponentTower && hoveredOpponentTower.tower) {
+        const t = hoveredOpponentTower.tower;
+        const typeInfo = TOWER_TYPES[t.type];
+        const modules = t.modules || [];
+        const MODULES = window.TOWER_MODULES || {};
+        
+        // Tooltip dimensions
+        const tooltipW = 160;
+        const hasModules = modules.length > 0 && modules.some(m => m);
+        const moduleCount = modules.filter(m => m).length;
+        const tooltipH = 45 + (hasModules ? moduleCount * 22 : 20);
+        
+        // Position tooltip above the tower
+        let tooltipX = hoveredOpponentTower.x - tooltipW / 2;
+        let tooltipY = hoveredOpponentTower.y - tooltipH - 25;
+        
+        // Keep on screen
+        tooltipX = Math.max(5, Math.min(canvas.width - tooltipW - 5, tooltipX));
+        tooltipY = Math.max(5, tooltipY);
+        
+        // Background
+        ctx.fillStyle = "rgba(10,15,30,0.95)";
+        ctx.strokeStyle = hoveredOpponentTower.color || "#7ae0ff";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(tooltipX, tooltipY, tooltipW, tooltipH, 8);
+        ctx.fill();
+        ctx.stroke();
+        
+        // Player name and tower type
+        ctx.font = "bold 10px 'Courier New', monospace";
+        ctx.textAlign = "left";
+        ctx.fillStyle = hoveredOpponentTower.color || "#fff";
+        ctx.fillText(`${hoveredOpponentTower.playerName}'s`, tooltipX + 8, tooltipY + 14);
+        
+        ctx.fillStyle = typeInfo?.color || "#fff";
+        ctx.font = "bold 11px 'Courier New', monospace";
+        const towerName = typeInfo?.name || "Tower";
+        const levelText = t.level > 1 ? ` ${"★".repeat(Math.min(t.level - 1, 4))}` : "";
+        ctx.fillText(`${towerName}${levelText}`, tooltipX + 8, tooltipY + 28);
+        
+        // Modules
+        if (hasModules) {
+          ctx.font = "9px 'Courier New', monospace";
+          ctx.fillStyle = "#888";
+          ctx.fillText("MODULES:", tooltipX + 8, tooltipY + 42);
+          
+          let modY = tooltipY + 56;
+          for (const modId of modules) {
+            if (!modId) continue;
+            const mod = MODULES[modId];
+            if (mod) {
+              ctx.font = "11px sans-serif";
+              ctx.fillStyle = mod.color || "#aaa";
+              ctx.fillText(`${mod.icon} ${mod.name}`, tooltipX + 10, modY);
+              modY += 22;
+            }
+          }
+        } else {
+          ctx.font = "9px 'Courier New', monospace";
+          ctx.fillStyle = "#555";
+          ctx.fillText("No modules", tooltipX + 8, tooltipY + 42);
+        }
+        
+        ctx.textAlign = "left";
+      }
 
       // HUD
       ctx.fillStyle = "rgba(0,0,0,0.7)";
