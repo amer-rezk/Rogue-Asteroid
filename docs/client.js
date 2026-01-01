@@ -222,6 +222,23 @@
   let attackHitFeedback = null; // Feedback when attack hits opponent
   let interestFeedback = null; // Feedback for wave interest
   let refundFeedback = null; // Feedback for attack refund
+  
+  // Death mod (spite) system
+  let spiteFeedback = null; // Feedback when spite earned
+  let deathModFeedback = null; // Feedback when death mod used
+  let deathModError = null; // Feedback when death mod failed
+  let goldStolenFeedback = null; // Curse of Greed stole gold
+  let spiteDamageFeedback = null; // Shield Breaker damage
+  let activeSpeedDemon = null; // Speed demon effect active
+  let hoveredDeathMod = null; // Which death mod button is hovered
+  
+  const DEATH_MODS = {
+    meteorShower: { id: "meteorShower", name: "Meteor Shower", icon: "☄️", cost: 2, desc: "Spawn 8 extra asteroids for all players" },
+    speedDemon: { id: "speedDemon", name: "Speed Demon", icon: "💨", cost: 3, desc: "All enemies move 50% faster for 10 seconds" },
+    curseOfGreed: { id: "curseOfGreed", name: "Curse of Greed", icon: "💸", cost: 4, desc: "Steal 15% gold from each living player" },
+    shieldBreaker: { id: "shieldBreaker", name: "Shield Breaker", icon: "💔", cost: 5, desc: "All living players take 3 damage" },
+    chaosRift: { id: "chaosRift", name: "Chaos Rift", icon: "🌀", cost: 7, desc: "Summon a mini-boss for each living player" }
+  };
   let gameOverData = null;
   
   // Latency tracking
@@ -311,6 +328,7 @@
   
   // ===== MUSIC PLAYER =====
   let musicAudio = null;
+  let musicPermissionGranted = localStorage.getItem("rogueAsteroidMusicPermission") === "true";
   let musicState = {
     track: 0,
     trackName: "",
@@ -325,6 +343,7 @@
     syncing: false
   };
   let musicPlayerHover = null; // Which button is hovered
+  let showMusicPermissionPrompt = false;
   
   function initMusicPlayer() {
     if (musicAudio) return;
@@ -340,10 +359,27 @@
     });
     // Request current music state from server
     send({ t: "getMusicState" });
+    
+    // Show permission prompt if not granted
+    if (!musicPermissionGranted) {
+      showMusicPermissionPrompt = true;
+    }
+  }
+  
+  function grantMusicPermission() {
+    musicPermissionGranted = true;
+    localStorage.setItem("rogueAsteroidMusicPermission", "true");
+    showMusicPermissionPrompt = false;
+    // Try to play immediately after user interaction
+    if (musicAudio && musicState.trackName) {
+      musicAudio.play().catch(() => {});
+    }
   }
   
   function syncMusicToServer() {
     if (!musicAudio || !musicState.trackName || musicState.syncing) return;
+    if (!musicPermissionGranted) return; // Don't try to play without permission
+    
     musicState.syncing = true;
     
     // Calculate how far into the track we should be
@@ -1299,6 +1335,50 @@
         interestFeedback = { amount: msg.amount, time: Date.now() };
         break;
 
+      case "spiteEarned":
+        // Dead player earned spite currency
+        spiteFeedback = { spite: msg.spite, time: Date.now() };
+        break;
+
+      case "deathModUsed":
+        // Someone used a death mod
+        deathModFeedback = { 
+          modName: msg.modName, 
+          modIcon: msg.modIcon,
+          playerName: msg.playerName,
+          time: Date.now() 
+        };
+        break;
+
+      case "deathModFailed":
+        // Death mod failed
+        deathModError = { reason: msg.reason, time: Date.now() };
+        break;
+
+      case "goldStolen":
+        // Curse of Greed stole our gold
+        goldStolenFeedback = { amount: msg.amount, by: msg.by, time: Date.now() };
+        break;
+
+      case "spiteDamage":
+        // Shield Breaker damaged us
+        spiteDamageFeedback = { amount: msg.amount, by: msg.by, time: Date.now() };
+        break;
+
+      case "deathModEffect":
+        // A timed death mod effect started
+        if (msg.effect === "speedDemon") {
+          activeSpeedDemon = { endTime: Date.now() + msg.duration * 1000 };
+        }
+        break;
+
+      case "deathModExpired":
+        // A timed death mod effect ended
+        if (msg.effect === "speedDemon") {
+          activeSpeedDemon = null;
+        }
+        break;
+
       case "attackRefund":
         // Show refund when attack target is dead
         refundFeedback = { gold: msg.gold, reason: msg.reason, time: Date.now() };
@@ -1824,6 +1904,15 @@
     const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
     const my = (e.clientY - rect.top) * (canvas.height / rect.height);
 
+    // Handle music permission popup click (highest priority)
+    if (showMusicPermissionPrompt && window.musicPermissionBtnBounds) {
+      const btn = window.musicPermissionBtnBounds;
+      if (mx >= btn.x && mx <= btn.x + btn.w && my >= btn.y && my <= btn.y + btn.h) {
+        grantMusicPermission();
+        return;
+      }
+    }
+
     // 1. Handle Inventory Clicks (Select Module)
     if (window.invBounds && lastSnap) {
       const myP = lastSnap.players.find(p => p.id === myId);
@@ -2120,6 +2209,13 @@
         // Toggle mute in lobby
         toggleMusicMute();
       }
+      mouseDown = false;
+      return;
+    }
+
+    // Handle death mod button clicks
+    if (phase === "playing" && hoveredDeathMod) {
+      send({ t: "useDeathMod", modId: hoveredDeathMod });
       mouseDown = false;
       return;
     }
@@ -4120,6 +4216,96 @@
         }
       }
 
+      // ===== DEATH MODS PANEL (For dead players only) =====
+      if (phase === "playing" && myPlayer && myPlayer.hp <= 0 && !isSpectator) {
+        hoveredDeathMod = null;
+        const spite = myPlayer.spite || 0;
+        
+        const panelW = 200;
+        const panelH = 280;
+        const panelX = 15;
+        const panelY = 60;
+        
+        // Panel background
+        const grad = ctx.createLinearGradient(panelX, panelY, panelX, panelY + panelH);
+        grad.addColorStop(0, "rgba(40,10,30,0.95)");
+        grad.addColorStop(1, "rgba(20,5,15,0.95)");
+        ctx.fillStyle = grad;
+        ctx.strokeStyle = "#f448";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(panelX, panelY, panelW, panelH, 10);
+        ctx.fill();
+        ctx.stroke();
+        
+        // Title
+        ctx.font = "bold 14px 'Courier New', monospace";
+        ctx.fillStyle = "#f44";
+        ctx.textAlign = "center";
+        ctx.fillText("💀 SPITE POWERS 💀", panelX + panelW / 2, panelY + 22);
+        
+        // Spite currency
+        ctx.font = "bold 16px 'Courier New', monospace";
+        ctx.fillStyle = "#f88";
+        ctx.fillText(`${spite} 💢`, panelX + panelW / 2, panelY + 45);
+        
+        ctx.font = "9px 'Courier New', monospace";
+        ctx.fillStyle = "#888";
+        ctx.fillText("+1 per wave while dead", panelX + panelW / 2, panelY + 58);
+        
+        // Death mod buttons
+        const modIds = Object.keys(DEATH_MODS);
+        let modY = panelY + 72;
+        
+        for (const modId of modIds) {
+          const mod = DEATH_MODS[modId];
+          const canAfford = spite >= mod.cost;
+          
+          const btnH = 38;
+          const btnX = panelX + 8;
+          const btnW = panelW - 16;
+          
+          const isHover = mouseX >= btnX && mouseX <= btnX + btnW && 
+                          mouseY >= modY && mouseY <= modY + btnH;
+          
+          if (isHover) hoveredDeathMod = modId;
+          
+          // Button background
+          ctx.fillStyle = !canAfford ? "rgba(30,20,25,0.6)" : 
+                          (isHover ? "rgba(100,40,60,0.7)" : "rgba(60,20,40,0.6)");
+          ctx.strokeStyle = !canAfford ? "#333" : (isHover ? "#f66" : "#844");
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(btnX, modY, btnW, btnH, 5);
+          ctx.fill();
+          ctx.stroke();
+          
+          // Icon and name
+          ctx.font = "bold 11px 'Courier New', monospace";
+          ctx.textAlign = "left";
+          ctx.fillStyle = !canAfford ? "#555" : (isHover ? "#fff" : "#ccc");
+          ctx.fillText(`${mod.icon} ${mod.name}`, btnX + 6, modY + 14);
+          
+          // Cost
+          ctx.textAlign = "right";
+          ctx.fillStyle = !canAfford ? "#622" : (isHover ? "#f88" : "#f66");
+          ctx.fillText(`${mod.cost}💢`, btnX + btnW - 6, modY + 14);
+          
+          // Description
+          ctx.font = "9px 'Courier New', monospace";
+          ctx.textAlign = "left";
+          ctx.fillStyle = !canAfford ? "#444" : "#888";
+          ctx.fillText(mod.desc.slice(0, 30), btnX + 6, modY + 28);
+          if (mod.desc.length > 30) {
+            ctx.fillText(mod.desc.slice(30), btnX + 6, modY + 36);
+          }
+          
+          modY += btnH + 4;
+        }
+        
+        ctx.textAlign = "left";
+      }
+
       // ===== UNIFIED RIGHT PANEL (Attacks + DPS Meters) =====
       if (phase === "playing" && lastSnap && lastSnap.players.length > 1) {
         hoveredAttack = null;
@@ -5693,6 +5879,87 @@
         }
       }
 
+      // Spite earned feedback (for dead players)
+      if (spiteFeedback && Date.now() - spiteFeedback.time < 2000) {
+        const fadeAlpha = 1 - (Date.now() - spiteFeedback.time) / 2000;
+        ctx.save();
+        ctx.globalAlpha = fadeAlpha;
+        ctx.font = "bold 16px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#f44";
+        ctx.shadowColor = "#f44";
+        ctx.shadowBlur = 10;
+        ctx.fillText(`+1 💢 SPITE (${spiteFeedback.spite} total)`, canvas.width / 2, feedbackBaseY);
+        ctx.shadowBlur = 0;
+        ctx.restore();
+        ctx.textAlign = "left";
+      }
+
+      // Death mod used feedback
+      if (deathModFeedback && Date.now() - deathModFeedback.time < 3000) {
+        const fadeAlpha = 1 - (Date.now() - deathModFeedback.time) / 3000;
+        ctx.save();
+        ctx.globalAlpha = fadeAlpha;
+        ctx.font = "bold 22px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#f44";
+        ctx.shadowColor = "#f00";
+        ctx.shadowBlur = 20;
+        ctx.fillText(`${deathModFeedback.modIcon} ${deathModFeedback.playerName} used ${deathModFeedback.modName}!`, canvas.width / 2, 80);
+        ctx.shadowBlur = 0;
+        ctx.restore();
+        ctx.textAlign = "left";
+      }
+
+      // Gold stolen feedback
+      if (goldStolenFeedback && Date.now() - goldStolenFeedback.time < 2500) {
+        const fadeAlpha = 1 - (Date.now() - goldStolenFeedback.time) / 2500;
+        ctx.save();
+        ctx.globalAlpha = fadeAlpha;
+        ctx.font = "bold 18px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#f88";
+        ctx.shadowColor = "#f44";
+        ctx.shadowBlur = 10;
+        ctx.fillText(`💸 -${goldStolenFeedback.amount}g STOLEN by ${goldStolenFeedback.by}!`, canvas.width / 2, feedbackBaseY + 80);
+        ctx.shadowBlur = 0;
+        ctx.restore();
+        ctx.textAlign = "left";
+      }
+
+      // Spite damage feedback
+      if (spiteDamageFeedback && Date.now() - spiteDamageFeedback.time < 2500) {
+        const fadeAlpha = 1 - (Date.now() - spiteDamageFeedback.time) / 2500;
+        ctx.save();
+        ctx.globalAlpha = fadeAlpha;
+        ctx.font = "bold 18px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#f44";
+        ctx.shadowColor = "#f00";
+        ctx.shadowBlur = 15;
+        ctx.fillText(`💔 -${spiteDamageFeedback.amount} HP from ${spiteDamageFeedback.by}!`, canvas.width / 2, feedbackBaseY + 100);
+        ctx.shadowBlur = 0;
+        ctx.restore();
+        ctx.textAlign = "left";
+      }
+
+      // Speed Demon active indicator
+      if (activeSpeedDemon) {
+        const remaining = Math.max(0, Math.ceil((activeSpeedDemon.endTime - Date.now()) / 1000));
+        if (remaining > 0) {
+          ctx.font = "bold 14px 'Courier New', monospace";
+          ctx.textAlign = "center";
+          ctx.fillStyle = "#ff8800";
+          ctx.shadowColor = "#ff4400";
+          ctx.shadowBlur = 10;
+          ctx.fillText(`💨 SPEED DEMON ACTIVE: ${remaining}s 💨`, canvas.width / 2, 110);
+          ctx.shadowBlur = 0;
+          ctx.textAlign = "left";
+        } else {
+          activeSpeedDemon = null;
+        }
+      }
+
       // Module error feedback
       if (moduleErrorFeedback && Date.now() - moduleErrorFeedback.time < 2000) {
         const fadeAlpha = 1 - (Date.now() - moduleErrorFeedback.time) / 2000;
@@ -5950,6 +6217,64 @@
         ctx.textAlign = "left";
         
         if (isHovering) musicPlayerHover = "lobbyToggle";
+      }
+
+      // ===== MUSIC PERMISSION POPUP =====
+      if (showMusicPermissionPrompt && musicState.trackName) {
+        const popW = 300;
+        const popH = 120;
+        const popX = (canvas.width - popW) / 2;
+        const popY = (canvas.height - popH) / 2;
+        
+        // Darken background
+        ctx.fillStyle = "rgba(0,0,0,0.7)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Popup background
+        ctx.fillStyle = "rgba(20,25,40,0.98)";
+        ctx.strokeStyle = "#7ae0ff";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(popX, popY, popW, popH, 12);
+        ctx.fill();
+        ctx.stroke();
+        
+        // Title
+        ctx.font = "bold 16px 'Courier New', monospace";
+        ctx.fillStyle = "#7ae0ff";
+        ctx.textAlign = "center";
+        ctx.fillText("🎵 Enable Music?", popX + popW / 2, popY + 30);
+        
+        // Description
+        ctx.font = "12px 'Courier New', monospace";
+        ctx.fillStyle = "#aaa";
+        ctx.fillText("Click to enable synchronized music", popX + popW / 2, popY + 55);
+        
+        // Button
+        const btnW = 120;
+        const btnH = 32;
+        const btnX = popX + (popW - btnW) / 2;
+        const btnY = popY + popH - btnH - 15;
+        
+        const btnHover = mouseX >= btnX && mouseX <= btnX + btnW && 
+                         mouseY >= btnY && mouseY <= btnY + btnH;
+        
+        ctx.fillStyle = btnHover ? "rgba(122,224,255,0.4)" : "rgba(60,100,140,0.6)";
+        ctx.strokeStyle = btnHover ? "#7ae0ff" : "#557";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(btnX, btnY, btnW, btnH, 6);
+        ctx.fill();
+        ctx.stroke();
+        
+        ctx.font = "bold 14px 'Courier New', monospace";
+        ctx.fillStyle = btnHover ? "#fff" : "#ccc";
+        ctx.fillText("▶ ENABLE", btnX + btnW / 2, btnY + 21);
+        
+        // Store bounds for click detection
+        window.musicPermissionBtnBounds = { x: btnX, y: btnY, w: btnW, h: btnH };
+        
+        ctx.textAlign = "left";
       }
     } catch (err) {
       console.error('Draw error:', err);

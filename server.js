@@ -243,6 +243,56 @@ const TOWER_MODULES = {
 
 const MODULE_IDS = Object.keys(TOWER_MODULES);
 
+// ===== DEATH MODS SYSTEM =====
+// Dead players earn "spite" currency and can spend it to make life harder for living players
+const DEATH_MODS = {
+  meteorShower: {
+    id: "meteorShower",
+    name: "Meteor Shower",
+    icon: "☄️",
+    cost: 2,
+    desc: "Spawn 8 extra asteroids for all players",
+    duration: 0 // Instant
+  },
+  speedDemon: {
+    id: "speedDemon",
+    name: "Speed Demon",
+    icon: "💨",
+    cost: 3,
+    desc: "All enemies move 50% faster for 10 seconds",
+    duration: 10
+  },
+  curseOfGreed: {
+    id: "curseOfGreed",
+    name: "Curse of Greed",
+    icon: "💸",
+    cost: 4,
+    desc: "Steal 15% gold from each living player",
+    duration: 0 // Instant
+  },
+  shieldBreaker: {
+    id: "shieldBreaker",
+    name: "Shield Breaker",
+    icon: "💔",
+    cost: 5,
+    desc: "All living players take 3 damage to their base",
+    duration: 0 // Instant
+  },
+  chaosRift: {
+    id: "chaosRift",
+    name: "Chaos Rift",
+    icon: "🌀",
+    cost: 7,
+    desc: "Summon a mini-boss for each living player",
+    duration: 0 // Instant
+  }
+};
+
+// Active death mod effects (timed effects)
+let activeDeathMods = {
+  speedDemon: { active: false, endTime: 0 }
+};
+
 // ===== Server state =====
 const app = express();
 app.use(express.static(path.join(__dirname, "docs")));
@@ -1056,7 +1106,14 @@ function queueUpgradesAndNextWave() {
   
   for (const id of lockedSlots) {
     const p = players.get(id);
-    if (!p || p.hp <= 0) continue;
+    if (!p) continue;
+    
+    // Dead players earn spite currency
+    if (p.hp <= 0) {
+      p.spite = (p.spite || 0) + 1;
+      safeSend(p.ws, { t: "spiteEarned", spite: p.spite });
+      continue;
+    }
 
     // 1. Existing Treasury Interest (10% of current gold, max 100)
     const treasuryInterest = Math.min(100, Math.floor(p.gold * 0.10));
@@ -1268,6 +1325,99 @@ function checkGameOver() {
     return true;
   }
   return false;
+}
+
+// ===== DEATH MOD EFFECTS =====
+function applyDeathMod(modId, deadPlayer) {
+  const playerCount = lockedSlots.length;
+  
+  switch (modId) {
+    case "meteorShower":
+      // Spawn 8 extra asteroids for each living player
+      for (let playerIdx = 0; playerIdx < playerCount; playerIdx++) {
+        const playerId = lockedSlots[playerIdx];
+        const player = players.get(playerId);
+        if (!player || player.hp <= 0) continue;
+        
+        const { x0, x1 } = segmentBounds(playerIdx);
+        for (let i = 0; i < 8; i++) {
+          const x = rand(x0 + 30, x1 - 30);
+          const y = rand(-50, -20);
+          const hp = Math.ceil(1 + wave * 0.5);
+          spawnQueue.push({ x, y, type: "medium", hp, targetSlot: playerIdx, attackType: null });
+        }
+      }
+      broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} summoned a METEOR SHOWER! ☄️`, timestamp: Date.now() });
+      break;
+      
+    case "speedDemon":
+      // All enemies move 50% faster for 10 seconds
+      activeDeathMods.speedDemon.active = true;
+      activeDeathMods.speedDemon.endTime = Date.now() + 10000;
+      broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} activated SPEED DEMON! 💨 Enemies are faster for 10s!`, timestamp: Date.now() });
+      broadcast({ t: "deathModEffect", effect: "speedDemon", duration: 10 });
+      break;
+      
+    case "curseOfGreed":
+      // Steal 15% gold from each living player, give to dead player as score
+      let totalStolen = 0;
+      for (const [pid, player] of players) {
+        if (player.hp <= 0) continue;
+        const stolen = Math.floor(player.gold * 0.15);
+        if (stolen > 0) {
+          player.gold -= stolen;
+          totalStolen += stolen;
+          safeSend(player.ws, { t: "goldStolen", amount: stolen, by: deadPlayer.name });
+        }
+      }
+      // Dead player gets some score from the theft
+      deadPlayer.score += Math.floor(totalStolen * 0.5);
+      broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} cast CURSE OF GREED! 💸 Stole ${totalStolen} gold!`, timestamp: Date.now() });
+      break;
+      
+    case "shieldBreaker":
+      // All living players take 3 damage
+      for (const [pid, player] of players) {
+        if (player.hp <= 0) continue;
+        player.hp = Math.max(0, player.hp - 3);
+        safeSend(player.ws, { t: "spiteDamage", amount: 3, by: deadPlayer.name });
+        
+        // Check if this killed anyone
+        if (player.hp <= 0) {
+          deadPlayer.score += 100; // Bonus score for getting a kill from beyond!
+          broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} ELIMINATED ${player.name} from beyond the grave! 💔`, timestamp: Date.now() });
+        }
+      }
+      broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} used SHIELD BREAKER! 💔 All bases took 3 damage!`, timestamp: Date.now() });
+      break;
+      
+    case "chaosRift":
+      // Summon a mini-boss for each living player
+      for (let playerIdx = 0; playerIdx < playerCount; playerIdx++) {
+        const playerId = lockedSlots[playerIdx];
+        const player = players.get(playerId);
+        if (!player || player.hp <= 0) continue;
+        
+        const { x0 } = segmentBounds(playerIdx);
+        let miniBossHp = 15 + (wave * 2);
+        if (wave > 10) {
+          miniBossHp += Math.floor(Math.pow(wave - 10, 1.3) * 2);
+        }
+        
+        spawnQueue.push({ 
+          x: x0 + SEGMENT_W / 2, 
+          y: -80, 
+          type: "miniboss", 
+          hp: miniBossHp, 
+          targetSlot: playerIdx, 
+          attackType: null,
+          isMiniBoss: true,
+          isSpiteSpawn: true // Mark as spite spawn for potential visual
+        });
+      }
+      broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} opened a CHAOS RIFT! 🌀 Mini-bosses incoming!`, timestamp: Date.now() });
+      break;
+  }
 }
 
 function endGame(winnerId) {
@@ -1716,6 +1866,13 @@ function tick() {
       return;
     }
     
+    // Check for expired death mod effects
+    if (activeDeathMods.speedDemon.active && Date.now() >= activeDeathMods.speedDemon.endTime) {
+      activeDeathMods.speedDemon.active = false;
+      broadcast({ t: "deathModExpired", effect: "speedDemon" });
+      broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: "Speed Demon effect has ended!", timestamp: Date.now() });
+    }
+    
     // Module card pick timer
     if (moduleCardPhase) {
       modulePickTimer -= DT;
@@ -1964,7 +2121,12 @@ function tick() {
       }
 
       // OPTIMIZED: Use cached speed multiplier for this slot
-      const speedMult = slotSpeedMultipliers[m.targetSlot] || 1;
+      let speedMult = slotSpeedMultipliers[m.targetSlot] || 1;
+      
+      // Death Mod: Speed Demon makes enemies 50% faster
+      if (activeDeathMods.speedDemon.active) {
+        speedMult *= 1.5;
+      }
       
       m.x += m.vx * DT * speedMult;
       m.y += m.vy * DT * speedMult;
@@ -3341,6 +3503,7 @@ function broadcastGameState() {
     obj.towers = p.towers;
     obj.inventory = p.inventory || [];
     obj.kills = p.kills || 0;
+    obj.spite = p.spite || 0;
     obj.damageDealt = p.damageDealt || 0;
     obj.waveDamage = p.waveDamage || 0;
     obj.lastInterest = p.lastInterest || 0;
@@ -3456,6 +3619,7 @@ wss.on("connection", (ws) => {
     maxHp: BASE_HP_PER_PLAYER,
     kills: 0,
     lastInterest: 0,
+    spite: 0, // Death currency - earned while dead
   };
 
   players.set(id, player);
@@ -3995,6 +4159,41 @@ wss.on("connection", (ws) => {
         playing: musicState.playing,
         shuffle: musicState.shuffle,
         trackList: MUSIC_TRACKS
+      });
+    }
+
+    // ===== DEATH MODS (Spite System) =====
+    if (msg.t === "useDeathMod" && phase === "playing") {
+      const modId = msg.modId;
+      const mod = DEATH_MODS[modId];
+      if (!mod) return;
+      
+      // Must be dead to use death mods
+      if (p.hp > 0) {
+        safeSend(ws, { t: "deathModFailed", reason: "You must be dead to use death mods!" });
+        return;
+      }
+      
+      // Check spite cost
+      if ((p.spite || 0) < mod.cost) {
+        safeSend(ws, { t: "deathModFailed", reason: "Not enough spite!" });
+        return;
+      }
+      
+      // Deduct spite
+      p.spite -= mod.cost;
+      
+      // Apply the death mod effect
+      applyDeathMod(modId, p);
+      
+      // Notify everyone
+      broadcast({ 
+        t: "deathModUsed", 
+        modId, 
+        modName: mod.name,
+        modIcon: mod.icon,
+        playerName: p.name,
+        playerId: p.id
       });
     }
   });
