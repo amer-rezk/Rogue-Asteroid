@@ -4,15 +4,18 @@
   const DEFAULT_SERVER = "wss://correct-jenni-no-name-orgs-8d502912.koyeb.app/ws";
 
   // ===== PERFORMANCE SETTINGS =====
-  // Always use high quality settings
+  // Always use high quality settings - optimized for modern hardware
   const HIGH_QUALITY_SETTINGS = {
     useShadows: true,
-    useGradients: false, // Still disabled - too expensive with many bullets
+    useGradients: false, // Still disabled - gradients are expensive
     useTrails: true,
     particleMultiplier: 1.0,
-    maxDamageNumbers: 50,
-    maxParticles: 150  // Increased for confetti party! 🎉
+    maxDamageNumbers: 80,    // Increased from 50
+    maxParticles: 200        // Increased from 150
   };
+  
+  // Client-side bullet cap (visual only - server is authoritative)
+  const MAX_CLIENT_BULLETS = 600; // Increased from 400
   
   // PERFORMANCE: Track player count for scaling
   let lastKnownPlayerCount = 1;
@@ -305,6 +308,84 @@
   let pendingTracers = [];       // Tracer lines for module effects
   let asteroidCache = new Map(); // Cache: id -> {vertices, rotSpeed, rotation, color}
   let lastUpdateTime = Date.now();
+  
+  // ===== MUSIC PLAYER =====
+  let musicAudio = null;
+  let musicState = {
+    track: 0,
+    trackName: "",
+    trackList: [],
+    playing: true,
+    shuffle: false,
+    volume: parseFloat(localStorage.getItem("rogueAsteroidMusicVolume") || "0.5"),
+    muted: localStorage.getItem("rogueAsteroidMusicMuted") === "true",
+    serverStartTime: 0,
+    serverTime: 0,
+    expanded: false,  // UI expanded state
+    syncing: false
+  };
+  let musicPlayerHover = null; // Which button is hovered
+  
+  function initMusicPlayer() {
+    if (musicAudio) return;
+    musicAudio = new Audio();
+    musicAudio.volume = musicState.muted ? 0 : musicState.volume;
+    musicAudio.addEventListener("ended", () => {
+      // Report to server that track ended
+      send({ t: "musicTrackEnded", track: musicState.track });
+    });
+    musicAudio.addEventListener("canplaythrough", () => {
+      // Sync to server time when loaded
+      syncMusicToServer();
+    });
+    // Request current music state from server
+    send({ t: "getMusicState" });
+  }
+  
+  function syncMusicToServer() {
+    if (!musicAudio || !musicState.trackName || musicState.syncing) return;
+    musicState.syncing = true;
+    
+    // Calculate how far into the track we should be
+    const elapsed = (Date.now() - musicState.serverTime) + (musicState.serverTime - musicState.serverStartTime);
+    const elapsedSeconds = elapsed / 1000;
+    
+    // Only sync if we're more than 0.5s off
+    if (Math.abs(musicAudio.currentTime - elapsedSeconds) > 0.5) {
+      musicAudio.currentTime = Math.max(0, elapsedSeconds);
+    }
+    
+    if (musicState.playing && musicAudio.paused) {
+      musicAudio.play().catch(() => {}); // Ignore autoplay errors
+    }
+    
+    musicState.syncing = false;
+  }
+  
+  function loadMusicTrack(trackName) {
+    if (!musicAudio) initMusicPlayer();
+    const url = `/music/${encodeURIComponent(trackName)}`;
+    if (musicAudio.src !== location.origin + url) {
+      musicAudio.src = url;
+      musicAudio.load();
+    }
+  }
+  
+  function setMusicVolume(vol) {
+    musicState.volume = Math.max(0, Math.min(1, vol));
+    localStorage.setItem("rogueAsteroidMusicVolume", musicState.volume.toString());
+    if (musicAudio && !musicState.muted) {
+      musicAudio.volume = musicState.volume;
+    }
+  }
+  
+  function toggleMusicMute() {
+    musicState.muted = !musicState.muted;
+    localStorage.setItem("rogueAsteroidMusicMuted", musicState.muted.toString());
+    if (musicAudio) {
+      musicAudio.volume = musicState.muted ? 0 : musicState.volume;
+    }
+  }
   
   // SMOOTH INTERPOLATION for fluid movement
   let missileStates = new Map();  // id -> true (tracking only, no position prediction)
@@ -771,7 +852,7 @@
         case "bulletSpawn":
           // Create local bullet from server event
           // PERFORMANCE: Cap client bullets to prevent overwhelming rendering
-          if (clientBullets.length >= 400) {
+          if (clientBullets.length >= MAX_CLIENT_BULLETS) {
             // Drop oldest bullets if we're at cap
             clientBullets.shift();
           }
@@ -1120,6 +1201,8 @@
         phase = "lobby";
         lobbyEl.style.display = "block";
         updateLobbyUI();
+        // Initialize music player
+        initMusicPlayer();
         break;
 
       case "started":
@@ -1151,7 +1234,24 @@
         // Clear prediction states
         missileStates.clear();
         bulletStates.clear();
+        // Initialize music player
+        initMusicPlayer();
         showGame();
+        break;
+
+      case "musicState":
+        // Synchronized music state from server
+        musicState.track = msg.track;
+        musicState.trackName = msg.trackName;
+        musicState.trackList = msg.trackList || musicState.trackList;
+        musicState.playing = msg.playing;
+        musicState.shuffle = msg.shuffle;
+        musicState.serverStartTime = msg.startTime;
+        musicState.serverTime = msg.serverTime;
+        // Load and sync the track
+        if (msg.trackName) {
+          loadMusicTrack(msg.trackName);
+        }
         break;
 
       case "wave":
@@ -1980,6 +2080,35 @@
         send({ t: "unpauseGame" });
       } else if (!gamePaused) {
         send({ t: "pauseGame" });
+      }
+      mouseDown = false;
+      return;
+    }
+
+    // Handle music player clicks
+    if (musicPlayerHover && window.musicPlayerBounds) {
+      const mpBounds = window.musicPlayerBounds;
+      if (musicPlayerHover === "expand") {
+        musicState.expanded = true;
+      } else if (musicPlayerHover === "collapse") {
+        musicState.expanded = false;
+      } else if (musicPlayerHover === "prev") {
+        send({ t: "musicPrev" });
+      } else if (musicPlayerHover === "next") {
+        send({ t: "musicNext" });
+      } else if (musicPlayerHover === "shuffle") {
+        send({ t: "musicToggleShuffle" });
+      } else if (musicPlayerHover === "mute") {
+        toggleMusicMute();
+      } else if (musicPlayerHover === "volume") {
+        // Calculate volume from click position
+        const volX = mpBounds.x + 10;
+        const volW = mpBounds.w - 20;
+        const clickVol = Math.max(0, Math.min(1, (mouseX - volX) / volW));
+        setMusicVolume(clickVol);
+      } else if (musicPlayerHover === "lobbyToggle") {
+        // Toggle mute in lobby
+        toggleMusicMute();
       }
       mouseDown = false;
       return;
@@ -3780,6 +3909,173 @@
       }
       ctx.textAlign = "left";
 
+      // ===== MUSIC PLAYER (Bottom Right) =====
+      if (musicState.trackName) {
+        const mpW = musicState.expanded ? 220 : 40;
+        const mpH = musicState.expanded ? 80 : 40;
+        const mpX = canvas.width - mpW - 12;
+        const mpY = canvas.height - mpH - 12;
+        
+        // Store bounds for click detection
+        window.musicPlayerBounds = { x: mpX, y: mpY, w: mpW, h: mpH };
+        
+        // Check hover
+        const isHovering = mouseX >= mpX && mouseX <= mpX + mpW && 
+                           mouseY >= mpY && mouseY <= mpY + mpH;
+        
+        // Background
+        ctx.fillStyle = isHovering ? "rgba(20,30,50,0.95)" : "rgba(10,17,34,0.9)";
+        ctx.strokeStyle = "#7ae0ff55";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(mpX, mpY, mpW, mpH, 8);
+        ctx.fill();
+        ctx.stroke();
+        
+        if (musicState.expanded) {
+          // Expanded view - full controls
+          musicPlayerHover = null;
+          
+          // Track name (scrolling if too long)
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(mpX + 8, mpY + 8, mpW - 50, 18);
+          ctx.clip();
+          ctx.font = "bold 11px 'Courier New', monospace";
+          ctx.fillStyle = "#7ae0ff";
+          const trackNum = musicState.track + 1;
+          const displayName = `${trackNum}. ${musicState.trackName.replace('.mp3', '')}`;
+          ctx.fillText(displayName, mpX + 8, mpY + 20);
+          ctx.restore();
+          
+          // Collapse button (top right)
+          const collapseX = mpX + mpW - 28;
+          const collapseY = mpY + 8;
+          const collapseHover = mouseX >= collapseX && mouseX <= collapseX + 20 && 
+                                mouseY >= collapseY && mouseY <= collapseY + 18;
+          ctx.fillStyle = collapseHover ? "#7ae0ff" : "#557";
+          ctx.font = "14px sans-serif";
+          ctx.fillText("▼", collapseX + 4, collapseY + 14);
+          if (collapseHover) musicPlayerHover = "collapse";
+          
+          // Control buttons row
+          const btnY = mpY + 32;
+          const btnSize = 28;
+          const btnSpacing = 6;
+          let btnX = mpX + 10;
+          
+          // Previous button
+          const prevHover = mouseX >= btnX && mouseX <= btnX + btnSize && 
+                            mouseY >= btnY && mouseY <= btnY + btnSize;
+          ctx.fillStyle = prevHover ? "rgba(122,224,255,0.3)" : "rgba(40,60,100,0.4)";
+          ctx.strokeStyle = prevHover ? "#7ae0ff" : "#557";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(btnX, btnY, btnSize, btnSize, 4);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = prevHover ? "#fff" : "#aaa";
+          ctx.font = "14px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText("⏮", btnX + btnSize/2, btnY + btnSize/2 + 5);
+          if (prevHover) musicPlayerHover = "prev";
+          btnX += btnSize + btnSpacing;
+          
+          // Play/Pause (visual only - always playing)
+          ctx.fillStyle = "rgba(122,224,255,0.2)";
+          ctx.strokeStyle = "#7ae0ff";
+          ctx.beginPath();
+          ctx.roundRect(btnX, btnY, btnSize, btnSize, 4);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = "#7ae0ff";
+          ctx.fillText("▶", btnX + btnSize/2, btnY + btnSize/2 + 5);
+          btnX += btnSize + btnSpacing;
+          
+          // Next button
+          const nextHover = mouseX >= btnX && mouseX <= btnX + btnSize && 
+                            mouseY >= btnY && mouseY <= btnY + btnSize;
+          ctx.fillStyle = nextHover ? "rgba(122,224,255,0.3)" : "rgba(40,60,100,0.4)";
+          ctx.strokeStyle = nextHover ? "#7ae0ff" : "#557";
+          ctx.beginPath();
+          ctx.roundRect(btnX, btnY, btnSize, btnSize, 4);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = nextHover ? "#fff" : "#aaa";
+          ctx.fillText("⏭", btnX + btnSize/2, btnY + btnSize/2 + 5);
+          if (nextHover) musicPlayerHover = "next";
+          btnX += btnSize + btnSpacing;
+          
+          // Shuffle button
+          const shuffleHover = mouseX >= btnX && mouseX <= btnX + btnSize && 
+                               mouseY >= btnY && mouseY <= btnY + btnSize;
+          ctx.fillStyle = shuffleHover ? "rgba(122,224,255,0.3)" : 
+                          (musicState.shuffle ? "rgba(122,224,255,0.4)" : "rgba(40,60,100,0.4)");
+          ctx.strokeStyle = shuffleHover || musicState.shuffle ? "#7ae0ff" : "#557";
+          ctx.beginPath();
+          ctx.roundRect(btnX, btnY, btnSize, btnSize, 4);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = musicState.shuffle ? "#7ae0ff" : (shuffleHover ? "#fff" : "#aaa");
+          ctx.fillText("🔀", btnX + btnSize/2, btnY + btnSize/2 + 5);
+          if (shuffleHover) musicPlayerHover = "shuffle";
+          btnX += btnSize + btnSpacing;
+          
+          // Mute button
+          const muteHover = mouseX >= btnX && mouseX <= btnX + btnSize && 
+                            mouseY >= btnY && mouseY <= btnY + btnSize;
+          ctx.fillStyle = muteHover ? "rgba(122,224,255,0.3)" : "rgba(40,60,100,0.4)";
+          ctx.strokeStyle = muteHover ? "#7ae0ff" : "#557";
+          ctx.beginPath();
+          ctx.roundRect(btnX, btnY, btnSize, btnSize, 4);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = muteHover ? "#fff" : "#aaa";
+          ctx.fillText(musicState.muted ? "🔇" : "🔊", btnX + btnSize/2, btnY + btnSize/2 + 5);
+          if (muteHover) musicPlayerHover = "mute";
+          
+          // Volume slider
+          const volX = mpX + 10;
+          const volY = mpY + 66;
+          const volW = mpW - 20;
+          const volH = 6;
+          
+          ctx.fillStyle = "rgba(40,60,100,0.6)";
+          ctx.beginPath();
+          ctx.roundRect(volX, volY, volW, volH, 3);
+          ctx.fill();
+          
+          const volFillW = volW * musicState.volume;
+          ctx.fillStyle = "#7ae0ff";
+          ctx.beginPath();
+          ctx.roundRect(volX, volY, volFillW, volH, 3);
+          ctx.fill();
+          
+          // Volume knob
+          const knobX = volX + volFillW;
+          ctx.fillStyle = "#fff";
+          ctx.beginPath();
+          ctx.arc(knobX, volY + volH/2, 5, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // Check volume slider hover
+          if (mouseX >= volX && mouseX <= volX + volW && mouseY >= volY - 5 && mouseY <= volY + volH + 5) {
+            musicPlayerHover = "volume";
+          }
+          
+          ctx.textAlign = "left";
+        } else {
+          // Collapsed view - just music icon
+          ctx.font = "20px sans-serif";
+          ctx.fillStyle = isHovering ? "#7ae0ff" : "#557";
+          ctx.textAlign = "center";
+          ctx.fillText("🎵", mpX + mpW/2, mpY + mpH/2 + 7);
+          ctx.textAlign = "left";
+          
+          if (isHovering) musicPlayerHover = "expand";
+        }
+      }
+
       // ===== UNIFIED RIGHT PANEL (Attacks + DPS Meters) =====
       if (phase === "playing" && lastSnap && lastSnap.players.length > 1) {
         hoveredAttack = null;
@@ -5565,6 +5861,51 @@
           window.gameChatInputBounds = { x: chatX + 5, y: chatY + chatH - 35, w: chatW - 10, h: 28 };
           window.gameChatBounds = { x: chatX, y: chatY, w: chatW, h: chatH };
         }
+      }
+
+      // ===== GLOBAL MUSIC PLAYER (always visible in bottom right) =====
+      if (musicState.trackName && phase !== "lobby") {
+        // Already rendered in HUD section for gameplay
+      } else if (musicState.trackName && phase === "lobby") {
+        // Lobby music player (smaller, simpler)
+        const mpW = 180;
+        const mpH = 40;
+        const mpX = canvas.width - mpW - 12;
+        const mpY = canvas.height - mpH - 12;
+        
+        window.musicPlayerBounds = { x: mpX, y: mpY, w: mpW, h: mpH };
+        
+        const isHovering = mouseX >= mpX && mouseX <= mpX + mpW && 
+                           mouseY >= mpY && mouseY <= mpY + mpH;
+        
+        ctx.fillStyle = isHovering ? "rgba(20,30,50,0.95)" : "rgba(10,17,34,0.85)";
+        ctx.strokeStyle = "#7ae0ff55";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(mpX, mpY, mpW, mpH, 8);
+        ctx.fill();
+        ctx.stroke();
+        
+        // Music icon
+        ctx.font = "16px sans-serif";
+        ctx.fillStyle = "#7ae0ff";
+        ctx.textAlign = "left";
+        ctx.fillText("🎵", mpX + 8, mpY + 26);
+        
+        // Track name
+        ctx.font = "11px 'Courier New', monospace";
+        ctx.fillStyle = "#aaa";
+        const trackName = musicState.trackName.replace('.mp3', '').slice(0, 15);
+        ctx.fillText(trackName, mpX + 32, mpY + 24);
+        
+        // Volume indicator
+        ctx.fillStyle = musicState.muted ? "#f44" : "#7ae0ff";
+        ctx.font = "12px sans-serif";
+        ctx.textAlign = "right";
+        ctx.fillText(musicState.muted ? "🔇" : "🔊", mpX + mpW - 8, mpY + 26);
+        ctx.textAlign = "left";
+        
+        if (isHovering) musicPlayerHover = "lobbyToggle";
       }
     } catch (err) {
       console.error('Draw error:', err);

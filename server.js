@@ -2,7 +2,7 @@
 // Competitive asteroid defense with attack purchasing
 // 
 // ARCHITECTURE:
-// - Server physics at 45Hz, broadcasts at ~22Hz (cloud-hosting friendly)
+// - Server physics at 60Hz, broadcasts at ~30Hz (optimized for dedicated hosting)
 // - Client renders with interpolation for smooth visuals
 // - This eliminates all desync - client always matches server
 // - Particles/damage numbers are client-side (visual only)
@@ -16,19 +16,30 @@ const path = require("path");
 const fs = require("fs");
 const { WebSocketServer } = require("ws");
 
-// ===== Game constants =====
-const MAX_PLAYERS = 4;
-const TICK_RATE = 45;          // Physics at 45Hz (balanced for cloud hosting)
-const BROADCAST_RATE = 22;     // Network at ~22Hz (smooth but not overwhelming)
+// ===== PERFORMANCE TUNING =====
+// Adjust these values based on your server's capabilities
+// Higher values = smoother gameplay but more CPU/bandwidth
+
+// TICK RATES
+const TICK_RATE = 60;          // Physics updates per second (was 45)
+const BROADCAST_RATE = 30;     // Network updates per second (was 22)
 const DT = 1 / TICK_RATE;
 const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 2 ticks
 
-// === RATE LIMITING (prevent packet flood / DoS) ===
-const MIN_INPUT_INTERVAL = 20; // Minimum 20ms between inputs (50Hz max per player)
+// RATE LIMITING
+const MIN_INPUT_INTERVAL = 16; // Minimum ms between inputs (was 20, now 60Hz)
 
-// === ENTITY CAPS (SERVER-SIDE LAG PREVENTION) ===
-const MAX_MISSILES = 150;      // Hard cap on asteroids/enemies (increased for late game)
-const MAX_BULLETS = 80;        // Hard cap on player bullets (increased for multishot builds)
+// ENTITY CAPS
+const MAX_MISSILES = 200;      // Max asteroids/enemies on screen (was 150)
+const MAX_BULLETS = 120;       // Max player bullets (was 80)
+
+// EVENT THROTTLING (per tick)
+const MAX_BULLET_EVENTS_SMALL = 100;  // Max bullet spawn events with <3 players (was 60)
+const MAX_BULLET_EVENTS_LARGE = 80;   // Max bullet spawn events with 3+ players (was 40)
+const MAX_VISUAL_EVENTS = 30;         // Max explosion/damage events per tick (was 20)
+
+// ===== Game constants =====
+const MAX_PLAYERS = 4;
 
 const WORLD_H = 600;
 const GROUND_Y = 560;
@@ -54,11 +65,11 @@ const broadcastState = {
   players: []
 };
 // Pre-allocate arrays with capacity (will grow if needed)
-for (let i = 0; i < 200; i++) broadcastState.missiles.push({});
-for (let i = 0; i < 100; i++) broadcastState.bullets.push({});
-for (let i = 0; i < 10; i++) broadcastState.shieldExplosions.push({});
-for (let i = 0; i < 20; i++) broadcastState.ghostAllies.push({});
-for (let i = 0; i < 10; i++) broadcastState.gravityWells.push({});
+for (let i = 0; i < 250; i++) broadcastState.missiles.push({});
+for (let i = 0; i < 150; i++) broadcastState.bullets.push({});
+for (let i = 0; i < 15; i++) broadcastState.shieldExplosions.push({});
+for (let i = 0; i < 30; i++) broadcastState.ghostAllies.push({});
+for (let i = 0; i < 15; i++) broadcastState.gravityWells.push({});
 for (let i = 0; i < 4; i++) broadcastState.players.push({ upgrades: {} });
 
 const BASE_HP_PER_PLAYER = 20;
@@ -235,6 +246,7 @@ const MODULE_IDS = Object.keys(TOWER_MODULES);
 // ===== Server state =====
 const app = express();
 app.use(express.static(path.join(__dirname, "docs")));
+app.use("/music", express.static(path.join(__dirname, "Music"))); // Serve music files
 app.get("/health", (_, res) => res.json({ ok: true }));
 
 const server = http.createServer(app);
@@ -245,6 +257,88 @@ const players = new Map();
 let hostId = null;
 let phase = "lobby";
 let soloMode = false;
+
+// ===== MUSIC SYSTEM =====
+const MUSIC_TRACKS = [
+  "Song (1).mp3",
+  "Song (2).mp3",
+  "Song (3).mp3",
+  "Song (4).mp3",
+  "Song (5).mp3",
+  "Song (6).mp3",
+  "Song (7).mp3",
+  "Song (8).mp3",
+  "Song (9).mp3",
+  "Song (10).mp3",
+  "Song (11).mp3"
+];
+let musicState = {
+  currentTrack: 0,
+  startTime: Date.now(),  // When the current track started
+  playing: true,
+  shuffle: false,
+  trackOrder: [...Array(MUSIC_TRACKS.length).keys()] // [0,1,2,3...]
+};
+
+function shuffleArray(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function nextTrack() {
+  musicState.currentTrack = (musicState.currentTrack + 1) % MUSIC_TRACKS.length;
+  musicState.startTime = Date.now();
+  broadcastMusicState();
+}
+
+function prevTrack() {
+  musicState.currentTrack = (musicState.currentTrack - 1 + MUSIC_TRACKS.length) % MUSIC_TRACKS.length;
+  musicState.startTime = Date.now();
+  broadcastMusicState();
+}
+
+function setTrack(index) {
+  if (index >= 0 && index < MUSIC_TRACKS.length) {
+    musicState.currentTrack = index;
+    musicState.startTime = Date.now();
+    broadcastMusicState();
+  }
+}
+
+function toggleShuffle() {
+  musicState.shuffle = !musicState.shuffle;
+  if (musicState.shuffle) {
+    musicState.trackOrder = shuffleArray([...Array(MUSIC_TRACKS.length).keys()]);
+  } else {
+    musicState.trackOrder = [...Array(MUSIC_TRACKS.length).keys()];
+  }
+  broadcastMusicState();
+}
+
+function broadcastMusicState() {
+  const msg = JSON.stringify({
+    t: "musicState",
+    track: musicState.currentTrack,
+    trackName: MUSIC_TRACKS[musicState.currentTrack],
+    startTime: musicState.startTime,
+    serverTime: Date.now(),
+    playing: musicState.playing,
+    shuffle: musicState.shuffle,
+    trackList: MUSIC_TRACKS
+  });
+  for (const [, p] of players) {
+    if (p.ws.readyState === 1) p.ws.send(msg);
+  }
+  // Also send to spectators
+  for (const client of wss.clients) {
+    if (client.readyState === 1 && !client.playerId) {
+      client.send(msg);
+    }
+  }
+}
 
 let lockedSlots = null;
 let worldW = SEGMENT_W;
@@ -1355,7 +1449,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
   // PERFORMANCE: Throttle bullet spawn events under heavy load
   // Too many events can overwhelm the network and client JSON parsing
   // Use global counter (reset each tick) instead of filter for efficiency
-  const maxBulletEvents = players.size >= 3 ? 40 : 60;
+  const maxBulletEvents = players.size >= 3 ? MAX_BULLET_EVENTS_LARGE : MAX_BULLET_EVENTS_SMALL;
   
   if (bulletSpawnEventCount < maxBulletEvents) {
     bulletSpawnEventCount++;
@@ -1560,13 +1654,13 @@ function clampAimAngle(turretX, turretY, targetX, targetY) {
 // PERFORMANCE: Track event load for throttling visual effects
 let visualEventCount = 0;
 let bulletSpawnEventCount = 0; // Track bullet spawn events per tick
-// Cap visual events - more aggressive with more players
+// Cap visual events - scale with player count
 function getMaxVisualEvents() {
   const playerCount = players.size;
-  if (playerCount >= 4) return 15; // Very aggressive
-  if (playerCount >= 3) return 20;
-  if (playerCount >= 2) return 25;
-  return 30; // Solo
+  if (playerCount >= 4) return Math.floor(MAX_VISUAL_EVENTS * 0.6);  // 18
+  if (playerCount >= 3) return Math.floor(MAX_VISUAL_EVENTS * 0.8);  // 24
+  if (playerCount >= 2) return MAX_VISUAL_EVENTS;                     // 30
+  return Math.floor(MAX_VISUAL_EVENTS * 1.5);                         // 45 for solo
 }
 
 // OPTIMIZED: Create explosion - throttled under heavy load
@@ -3844,6 +3938,48 @@ wss.on("connection", (ws) => {
           remainingCards: cachedModuleCards
         });
       }
+    }
+
+    // ===== MUSIC CONTROLS =====
+    if (msg.t === "musicNext") {
+      nextTrack();
+    }
+    if (msg.t === "musicPrev") {
+      prevTrack();
+    }
+    if (msg.t === "musicSetTrack") {
+      setTrack(msg.index);
+    }
+    if (msg.t === "musicToggleShuffle") {
+      toggleShuffle();
+    }
+    if (msg.t === "musicTrackEnded") {
+      // Client reports track ended - advance to next
+      // Only process if this matches current track to avoid race conditions
+      if (msg.track === musicState.currentTrack) {
+        if (musicState.shuffle) {
+          const currentOrderIndex = musicState.trackOrder.indexOf(musicState.currentTrack);
+          const nextOrderIndex = (currentOrderIndex + 1) % musicState.trackOrder.length;
+          musicState.currentTrack = musicState.trackOrder[nextOrderIndex];
+        } else {
+          musicState.currentTrack = (musicState.currentTrack + 1) % MUSIC_TRACKS.length;
+        }
+        musicState.startTime = Date.now();
+        broadcastMusicState();
+      }
+    }
+    if (msg.t === "getMusicState") {
+      // Client requesting current music state (e.g., on connect)
+      safeSend(ws, {
+        t: "musicState",
+        track: musicState.currentTrack,
+        trackName: MUSIC_TRACKS[musicState.currentTrack],
+        startTime: musicState.startTime,
+        serverTime: Date.now(),
+        playing: musicState.playing,
+        shuffle: musicState.shuffle,
+        trackList: MUSIC_TRACKS
+      });
     }
   });
 
