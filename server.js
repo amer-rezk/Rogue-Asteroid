@@ -921,8 +921,6 @@ function spawnWave() {
         attackType: null 
       });
     }
-    // Announce Boss
-    broadcast({ t: "chatMsg", id: uid(), from: "SYSTEM", text: "⚠️ GIANT ASTEROID DETECTED ⚠️", timestamp: Date.now() });
     return; // Skip normal spawns
   }
 
