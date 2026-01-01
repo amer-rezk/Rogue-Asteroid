@@ -703,8 +703,16 @@ function rollRarity() {
 
 function makeUpgradeOptions(player) {
   const opts = [];
+  const banished = player.banishedUpgrades || [];
+  
+  // Filter available upgrades (exclude banished ones)
+  const availableDefs = UPGRADE_DEFS.filter(def => !banished.includes(def.id));
+  
+  // If all upgrades are banished, use full pool (safety fallback)
+  const pool = availableDefs.length > 0 ? availableDefs : UPGRADE_DEFS;
+  
   for (let i = 0; i < 3; i++) {
-    const def = UPGRADE_DEFS[Math.floor(Math.random() * UPGRADE_DEFS.length)];
+    const def = pool[Math.floor(Math.random() * pool.length)];
     if (opts.find(o => o.defId === def.id)) { i--; continue; }
     if (def.type === "bool" && player.upgrades[def.stat]) { i--; continue; }
     if (def.stat === "critChance" && (player.upgrades.critChance || 0) >= 1) { i--; continue; }
@@ -3626,6 +3634,7 @@ wss.on("connection", (ws) => {
     kills: 0,
     lastInterest: 0,
     spite: 0, // Death currency - earned while dead
+    banishedUpgrades: [], // Upgrade def IDs permanently removed from this player's pool
   };
 
   players.set(id, player);
@@ -3820,6 +3829,51 @@ wss.on("connection", (ws) => {
         goldSpent: rerollCost,
         queueSize: queue.length
       });
+      return;
+    }
+
+    // Banish an upgrade type permanently from player's pool (ONE TIME ONLY)
+    if (msg.t === "banishUpgrade" && phase === "playing") {
+      const queue = pendingUpgrades.get(id);
+      if (!queue || queue.length === 0) return;
+      
+      const defId = msg.defId;
+      if (!defId) return;
+      
+      // Check if this defId exists in UPGRADE_DEFS
+      const def = UPGRADE_DEFS.find(d => d.id === defId);
+      if (!def) return;
+      
+      // ONE BANISH PER GAME - check if already used
+      if (!p.banishedUpgrades) p.banishedUpgrades = [];
+      if (p.banishedUpgrades.length >= 1) {
+        safeSend(p.ws, { t: "banishFailed", reason: "You can only banish once per game!" });
+        return;
+      }
+      
+      // Add to banished list
+      p.banishedUpgrades.push(defId);
+      
+      // Generate new options without the banished type
+      const current = queue[0];
+      const newOptions = makeUpgradeOptions(p);
+      current.options = newOptions;
+      
+      const rerollCost = getRerollCost(current.rerollCount);
+      
+      // Notify player
+      safeSend(p.ws, { 
+        t: "upgradeBanished", 
+        defId: defId,
+        defName: def.name,
+        options: newOptions,
+        wave: current.wave,
+        rerollCost: rerollCost,
+        queueSize: queue.length,
+        banishedCount: p.banishedUpgrades.length
+      });
+      
+      broadcast({ t: "chatMsg", id: uid(), from: "SYSTEM", text: `${p.name} banished ${def.icon} ${def.name}!`, timestamp: Date.now() });
       return;
     }
 

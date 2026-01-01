@@ -308,6 +308,11 @@
   // Upgrade reroll
   let currentRerollCost = 10;
   let hoveredReroll = false;
+  let hoveredBanish = false;
+  let banishMode = false; // When true, clicking a card banishes it instead of selecting it
+  let banishedCount = 0;  // Number of upgrades player has banished
+  let banishFeedback = null; // Feedback when banish succeeds
+  let banishError = null; // Feedback when banish fails
   
   // Buy additional upgrade
   let buyUpgradeCost = 30;
@@ -1257,6 +1262,11 @@
           goldStolenFeedback = null;
           spiteDamageFeedback = null;
           activeSpeedDemon = null;
+          // Reset banish states
+          banishMode = false;
+          banishedCount = 0;
+          banishFeedback = null;
+          banishError = null;
           showMenu();
         }
         phase = "lobby";
@@ -1336,6 +1346,7 @@
       case "upgrade":
         upgradeOptions = msg.options;
         upgradePicked = false;
+        banishMode = false; // Reset banish mode when new upgrade appears
         // Don't close buildMenuOpen - let tower menu stay open
         if (msg.rerollCost !== undefined) currentRerollCost = msg.rerollCost;
         if (msg.queueSize !== undefined) upgradeQueueSize = msg.queueSize;
@@ -1351,10 +1362,30 @@
         upgradeOptions = [];
         upgradePicked = true;
         upgradeQueueSize = 0;
+        banishMode = false;
         break;
 
       case "picked":
         upgradePicked = true;
+        banishMode = false;
+        break;
+
+      case "upgradeBanished":
+        // Upgrade was banished successfully
+        upgradeOptions = msg.options;
+        banishMode = false;
+        if (msg.rerollCost !== undefined) currentRerollCost = msg.rerollCost;
+        if (msg.queueSize !== undefined) upgradeQueueSize = msg.queueSize;
+        if (msg.wave !== undefined) upgradeWaveNum = msg.wave;
+        if (msg.banishedCount !== undefined) banishedCount = msg.banishedCount;
+        // Show feedback
+        banishFeedback = { name: msg.defName, time: Date.now() };
+        break;
+
+      case "banishFailed":
+        // Banish failed
+        banishMode = false;
+        banishError = { reason: msg.reason, time: Date.now() };
         break;
 
       case "attackHit":
@@ -2183,7 +2214,15 @@
     
     if (phase === "playing" && hoveredUpgrade >= 0 && !upgradePicked && upgradeOptions.length > 0) {
       const opt = upgradeOptions[hoveredUpgrade];
-      if (opt) send({ t: "pickUpgrade", key: opt.key });
+      if (opt) {
+        if (banishMode) {
+          // In banish mode, banish the card instead of picking it
+          send({ t: "banishUpgrade", defId: opt.defId });
+        } else {
+          // Normal mode, pick the upgrade
+          send({ t: "pickUpgrade", key: opt.key });
+        }
+      }
       mouseDown = false;
       return;
     }
@@ -2265,6 +2304,13 @@
       if (myPlayer && myPlayer.gold >= currentRerollCost) {
         send({ t: "rerollUpgrades" });
       }
+      mouseDown = false;
+      return;
+    }
+
+    // Handle banish button click - toggle banish mode (only if not already used)
+    if (phase === "playing" && hoveredBanish && !upgradePicked && upgradeOptions.length > 0 && banishedCount < 1) {
+      banishMode = !banishMode;
       mouseDown = false;
       return;
     }
@@ -5627,9 +5673,23 @@
           
           // Hover hint
           if (isHovered) {
-            ctx.fillStyle = hexToRgba(rarityColor, 0.9);
-            ctx.font = "bold 9px 'Courier New', monospace";
-            ctx.fillText("CLICK", cardX + cardW / 2, cardY + cardH - 12);
+            if (banishMode) {
+              ctx.fillStyle = "#f44";
+              ctx.font = "bold 9px 'Courier New', monospace";
+              ctx.fillText("🚫 BANISH", cardX + cardW / 2, cardY + cardH - 12);
+            } else {
+              ctx.fillStyle = hexToRgba(rarityColor, 0.9);
+              ctx.font = "bold 9px 'Courier New', monospace";
+              ctx.fillText("CLICK", cardX + cardW / 2, cardY + cardH - 12);
+            }
+          }
+          
+          // Banish mode overlay - red tint on cards
+          if (banishMode) {
+            ctx.fillStyle = "rgba(255,50,50,0.15)";
+            ctx.beginPath();
+            ctx.roundRect(cardX, cardY, cardW, cardH, 8);
+            ctx.fill();
           }
         }
         
@@ -5665,7 +5725,50 @@
         ctx.fillText("🎲", rerollBtnX + rerollBtnW / 2, rerollBtnY + 25);
         ctx.font = "bold 10px 'Courier New', monospace";
         ctx.fillText(`${currentRerollCost}g`, rerollBtnX + rerollBtnW / 2, rerollBtnY + 42);
+        
+        // Banish button (next to reroll) - ONLY SHOWS IF NOT YET USED
+        if (banishedCount < 1) {
+          const banishBtnW = 70;
+          const banishBtnH = 50;
+          const banishBtnX = rerollBtnX + rerollBtnW + 8;
+          const banishBtnY = rerollBtnY;
+          
+          const isBanishHovered = mouseX >= banishBtnX && mouseX <= banishBtnX + banishBtnW && 
+                                  mouseY >= banishBtnY && mouseY <= banishBtnY + banishBtnH;
+          hoveredBanish = isBanishHovered;
+          
+          // Banish button background - red/orange theme
+          ctx.fillStyle = banishMode ? "rgba(200,80,80,0.5)" :
+                          (isBanishHovered ? "rgba(180,100,60,0.4)" : "rgba(100,50,40,0.25)");
+          ctx.strokeStyle = banishMode ? "#f44" :
+                            (isBanishHovered ? "#f84" : "rgba(200,100,80,0.5)");
+          ctx.lineWidth = banishMode || isBanishHovered ? 2 : 1;
+          ctx.beginPath();
+          ctx.roundRect(banishBtnX, banishBtnY, banishBtnW, banishBtnH, 6);
+          ctx.fill();
+          ctx.stroke();
+          
+          // Banish button text
+          ctx.font = "18px sans-serif";
+          ctx.fillStyle = banishMode ? "#f44" : (isBanishHovered ? "#f84" : "#a64");
+          ctx.fillText("🚫", banishBtnX + banishBtnW / 2, banishBtnY + 25);
+          ctx.font = "bold 9px 'Courier New', monospace";
+          ctx.fillStyle = banishMode ? "#f88" : (isBanishHovered ? "#fa8" : "#864");
+          ctx.fillText(banishMode ? "CANCEL" : "BANISH", banishBtnX + banishBtnW / 2, banishBtnY + 42);
+        } else {
+          hoveredBanish = false;
+        }
+        
         ctx.textAlign = "left";
+        
+        // Banish mode indicator on cards
+        if (banishMode) {
+          ctx.font = "bold 12px 'Courier New', monospace";
+          ctx.textAlign = "center";
+          ctx.fillStyle = "#f44";
+          ctx.fillText("🚫 CLICK A CARD TO BANISH IT FOREVER (1 per game) 🚫", canvas.width / 2, cardY - 8);
+          ctx.textAlign = "left";
+        }
       }
 
       // MODULE CARD SELECTION (after boss waves) - Left panel
@@ -5916,6 +6019,35 @@
           ctx.restore();
           ctx.textAlign = "left";
         }
+      }
+
+      // Banish feedback
+      if (banishFeedback && Date.now() - banishFeedback.time < 2500) {
+        const fadeAlpha = 1 - (Date.now() - banishFeedback.time) / 2500;
+        ctx.save();
+        ctx.globalAlpha = fadeAlpha;
+        ctx.font = "bold 16px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#f84";
+        ctx.shadowColor = "#f44";
+        ctx.shadowBlur = 12;
+        ctx.fillText(`🚫 BANISHED: ${banishFeedback.name.toUpperCase()} FOREVER! 🚫`, canvas.width / 2, feedbackBaseY + 80);
+        ctx.shadowBlur = 0;
+        ctx.restore();
+        ctx.textAlign = "left";
+      }
+
+      // Banish error feedback
+      if (banishError && Date.now() - banishError.time < 2000) {
+        const fadeAlpha = 1 - (Date.now() - banishError.time) / 2000;
+        ctx.save();
+        ctx.globalAlpha = fadeAlpha;
+        ctx.font = "bold 14px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#f44";
+        ctx.fillText(`⚠️ ${banishError.reason}`, canvas.width / 2, feedbackBaseY + 100);
+        ctx.restore();
+        ctx.textAlign = "left";
       }
 
       // Spite earned feedback (for dead players)
