@@ -3474,11 +3474,11 @@
           ctx.fillStyle = "#ffd700";
           ctx.fillText(`${p.gold} 🟡`, cx, hpBarY + hpBarH + 12);
           
-          // Income display (permanent income from attacks)
-          if (p.incomeFromAttacks > 0) {
+          // Total income display (what they earned last wave)
+          if (p.totalIncome > 0) {
             ctx.font = `bold ${9 * sx}px 'Courier New', monospace`;
             ctx.fillStyle = "#7fff7f";
-            ctx.fillText(`+${Math.floor(p.incomeFromAttacks)}/wave`, cx, hpBarY + hpBarH + 24);
+            ctx.fillText(`+${p.totalIncome}/wave`, cx, hpBarY + hpBarH + 24);
           }
         }
       }

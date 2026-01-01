@@ -3238,7 +3238,7 @@ function broadcastGameState() {
     obj.damageDealt = p.damageDealt || 0;
     obj.waveDamage = p.waveDamage || 0;
     obj.lastInterest = p.lastInterest || 0;
-    obj.incomeFromAttacks = p.incomeFromAttacks || 0; // Permanent income from sending attacks
+    obj.totalIncome = p.lastInterest || 0; // Total income earned last wave (for display to other players)
     obj.shieldActive = u.shieldActive || 0;
     obj.slowfield = !!u.slowfield;
     // Reuse upgrades object
