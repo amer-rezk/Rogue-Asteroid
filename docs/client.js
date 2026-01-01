@@ -3779,17 +3779,20 @@
           const ty = 560 * sy;
           
           // Check hover for OPPONENT towers (not own)
+          // Note: tx/ty are in translated coordinates, mouseX/mouseY are screen coords
+          // Need to add offsetX/offsetY to convert tx/ty to screen coords
           if (t && p.id !== myId) {
+            const screenTx = tx + offsetX;
+            const screenTy = (ty - 15 * sy) + offsetY;
             const hoverRadius = 20 * sx;
-            const towerCenterY = ty - 15 * sy;
-            const dist = Math.sqrt((mouseX - tx) ** 2 + (mouseY - towerCenterY) ** 2);
+            const dist = Math.sqrt((mouseX - screenTx) ** 2 + (mouseY - screenTy) ** 2);
             if (dist < hoverRadius) {
               hoveredOpponentTower = {
                 playerId: p.id,
                 playerName: p.name,
                 towerIndex: i,
-                x: tx,
-                y: towerCenterY,
+                x: screenTx,
+                y: screenTy,
                 tower: t,
                 color: color.main
               };
@@ -4379,6 +4382,7 @@
           ctx.textAlign = "left";
         } else {
           // Collapsed view - just music icon
+          musicPlayerHover = null; // Reset first
           ctx.font = "20px sans-serif";
           ctx.fillStyle = isHovering ? "#7ae0ff" : "#557";
           ctx.textAlign = "center";
@@ -4387,6 +4391,10 @@
           
           if (isHovering) musicPlayerHover = "expand";
         }
+      } else {
+        // Music player not shown - clear bounds and hover
+        window.musicPlayerBounds = null;
+        musicPlayerHover = null;
       }
 
       // ===== DEATH MODS PANEL (For dead players only) =====
