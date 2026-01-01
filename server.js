@@ -1381,11 +1381,13 @@ function applyDeathMod(modId, deadPlayer) {
       // All living players take 3 damage
       for (const [pid, player] of players) {
         if (player.hp <= 0) continue;
+        const wasAlive = player.hp > 0;
         player.hp = Math.max(0, player.hp - 3);
         safeSend(player.ws, { t: "spiteDamage", amount: 3, by: deadPlayer.name });
         
         // Check if this killed anyone
-        if (player.hp <= 0) {
+        if (wasAlive && player.hp <= 0) {
+          player.spite = 0; // Reset spite on death
           deadPlayer.score += 100; // Bonus score for getting a kill from beyond!
           broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} ELIMINATED ${player.name} from beyond the grave! 💔`, timestamp: Date.now() });
         }
@@ -2250,6 +2252,7 @@ function tick() {
                   createExplosion(m.x, GROUND_Y - 5, 60, "#ff0000");
                   
                   if (wasAlive && p.hp <= 0) {
+                    p.spite = 0; // Reset spite on death - starts accumulating next wave
                     redistributeAsteroids(targetSlot);
                   }
                 }
@@ -2281,6 +2284,7 @@ function tick() {
                   createExplosion(m.x, GROUND_Y - 5, 40, "#f44");
                   
                   if (wasAlive && p.hp <= 0) {
+                    p.spite = 0; // Reset spite on death - starts accumulating next wave
                     redistributeAsteroids(targetSlot);
                   }
                   
