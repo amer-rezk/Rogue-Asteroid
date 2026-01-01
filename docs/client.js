@@ -1272,8 +1272,7 @@
         phase = "lobby";
         lobbyEl.style.display = "block";
         updateLobbyUI();
-        // Initialize music player (will request fresh state from server)
-        initMusicPlayer();
+        // Music only plays during game, not in lobby
         break;
 
       case "started":
@@ -1321,15 +1320,15 @@
         musicState.serverTime = msg.serverTime;
         musicState.hostId = msg.hostId; // Who controls in lobby
         musicState.serverPhase = msg.phase; // Server's current phase
-        // Load and sync the track
-        if (msg.trackName && musicPermissionGranted) {
+        // Load and sync the track - ONLY during gameplay, not lobby
+        if (msg.trackName && musicPermissionGranted && phase === "playing") {
           loadMusicTrack(msg.trackName);
           // Try to play immediately - don't wait for load events
-          if ((phase === "playing" || phase === "lobby") && musicAudio) {
+          if (musicAudio) {
             syncMusicToServer();
             // Also set a short timeout to retry in case audio wasn't ready
             setTimeout(() => {
-              if (musicAudio && musicAudio.paused && musicPermissionGranted) {
+              if (musicAudio && musicAudio.paused && musicPermissionGranted && phase === "playing") {
                 syncMusicToServer();
               }
             }, 500);
@@ -4101,8 +4100,8 @@
       ctx.textAlign = "left";
 
       // ===== MUSIC PLAYER (Above Stats Button - Bottom Right) =====
-      // Don't show during gameover
-      if (musicState.trackName && phase !== "gameover") {
+      // Only show during gameplay (not lobby or gameover)
+      if (musicState.trackName && phase === "playing") {
         const mpW = musicState.expanded ? 220 : 40;
         const mpH = musicState.expanded ? 80 : 40;
         const mpX = canvas.width - mpW - 12;
@@ -6345,196 +6344,8 @@
         }
       }
 
-      // ===== GLOBAL MUSIC PLAYER (always visible in bottom right) =====
-      if (musicState.trackName && phase !== "lobby" && phase !== "gameover") {
-        // Already rendered in HUD section for gameplay
-      } else if (musicState.trackName && phase === "lobby") {
-        // Lobby music player with full controls
-        musicPlayerHover = null;
-        
-        const isLobbyHost = myId === musicState.hostId;
-        const mpW = musicState.expanded ? 220 : 180;
-        const mpH = musicState.expanded ? 80 : 40;
-        const mpX = canvas.width - mpW - 12;
-        const mpY = canvas.height - mpH - 20;
-        
-        window.musicPlayerBounds = { x: mpX, y: mpY, w: mpW, h: mpH };
-        
-        const isHovering = mouseX >= mpX && mouseX <= mpX + mpW && 
-                           mouseY >= mpY && mouseY <= mpY + mpH;
-        
-        ctx.fillStyle = isHovering ? "rgba(20,30,50,0.95)" : "rgba(10,17,34,0.9)";
-        ctx.strokeStyle = "#7ae0ff55";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.roundRect(mpX, mpY, mpW, mpH, 8);
-        ctx.fill();
-        ctx.stroke();
-        
-        if (musicState.expanded) {
-          // Expanded lobby player
-          // Track name
-          ctx.save();
-          ctx.beginPath();
-          ctx.rect(mpX + 8, mpY + 8, mpW - 50, 18);
-          ctx.clip();
-          ctx.font = "bold 11px 'Courier New', monospace";
-          ctx.fillStyle = "#7ae0ff";
-          const trackNum = musicState.track + 1;
-          const displayName = `${trackNum}. ${musicState.trackName.replace('.mp3', '')}`;
-          ctx.fillText(displayName, mpX + 8, mpY + 20);
-          ctx.restore();
-          
-          // Host indicator
-          ctx.font = "10px sans-serif";
-          ctx.fillStyle = isLobbyHost ? "#ffd700" : "#555";
-          ctx.textAlign = "right";
-          ctx.fillText(isLobbyHost ? "👑 HOST" : `👑 ${lobbyPlayers?.find(p => p.id === musicState.hostId)?.name?.slice(0,6) || "Host"}`, mpX + mpW - 30, mpY + 20);
-          ctx.textAlign = "left";
-          
-          // Collapse button
-          const collapseX = mpX + mpW - 28;
-          const collapseY = mpY + 8;
-          const collapseHover = mouseX >= collapseX && mouseX <= collapseX + 20 && 
-                                mouseY >= collapseY && mouseY <= collapseY + 18;
-          ctx.fillStyle = collapseHover ? "#7ae0ff" : "#557";
-          ctx.font = "14px sans-serif";
-          ctx.fillText("▼", collapseX + 4, collapseY + 14);
-          if (collapseHover) musicPlayerHover = "collapse";
-          
-          // Control buttons
-          const btnY = mpY + 32;
-          const btnSize = 28;
-          const btnSpacing = 6;
-          let btnX = mpX + 10;
-          
-          // Prev button (host only)
-          const prevHover = mouseX >= btnX && mouseX <= btnX + btnSize && 
-                            mouseY >= btnY && mouseY <= btnY + btnSize;
-          ctx.fillStyle = !isLobbyHost ? "rgba(30,30,40,0.4)" : 
-                          (prevHover ? "rgba(122,224,255,0.3)" : "rgba(40,60,100,0.4)");
-          ctx.strokeStyle = !isLobbyHost ? "#333" : (prevHover ? "#7ae0ff" : "#557");
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.roundRect(btnX, btnY, btnSize, btnSize, 4);
-          ctx.fill();
-          ctx.stroke();
-          ctx.fillStyle = !isLobbyHost ? "#444" : (prevHover ? "#fff" : "#aaa");
-          ctx.font = "14px sans-serif";
-          ctx.textAlign = "center";
-          ctx.fillText("⏮", btnX + btnSize/2, btnY + btnSize/2 + 5);
-          if (prevHover && isLobbyHost) musicPlayerHover = "prev";
-          btnX += btnSize + btnSpacing;
-          
-          // Play indicator
-          ctx.fillStyle = "rgba(122,224,255,0.2)";
-          ctx.strokeStyle = "#7ae0ff";
-          ctx.beginPath();
-          ctx.roundRect(btnX, btnY, btnSize, btnSize, 4);
-          ctx.fill();
-          ctx.stroke();
-          ctx.fillStyle = "#7ae0ff";
-          ctx.fillText("▶", btnX + btnSize/2, btnY + btnSize/2 + 5);
-          btnX += btnSize + btnSpacing;
-          
-          // Next button (host only)
-          const nextHover = mouseX >= btnX && mouseX <= btnX + btnSize && 
-                            mouseY >= btnY && mouseY <= btnY + btnSize;
-          ctx.fillStyle = !isLobbyHost ? "rgba(30,30,40,0.4)" : 
-                          (nextHover ? "rgba(122,224,255,0.3)" : "rgba(40,60,100,0.4)");
-          ctx.strokeStyle = !isLobbyHost ? "#333" : (nextHover ? "#7ae0ff" : "#557");
-          ctx.beginPath();
-          ctx.roundRect(btnX, btnY, btnSize, btnSize, 4);
-          ctx.fill();
-          ctx.stroke();
-          ctx.fillStyle = !isLobbyHost ? "#444" : (nextHover ? "#fff" : "#aaa");
-          ctx.fillText("⏭", btnX + btnSize/2, btnY + btnSize/2 + 5);
-          if (nextHover && isLobbyHost) musicPlayerHover = "next";
-          btnX += btnSize + btnSpacing;
-          
-          // Shuffle button (host only)
-          const shuffleHover = mouseX >= btnX && mouseX <= btnX + btnSize && 
-                               mouseY >= btnY && mouseY <= btnY + btnSize;
-          ctx.fillStyle = !isLobbyHost ? "rgba(30,30,40,0.4)" : 
-                          (shuffleHover ? "rgba(122,224,255,0.3)" : 
-                          (musicState.shuffle ? "rgba(122,224,255,0.4)" : "rgba(40,60,100,0.4)"));
-          ctx.strokeStyle = !isLobbyHost ? "#333" : 
-                            (shuffleHover || musicState.shuffle ? "#7ae0ff" : "#557");
-          ctx.beginPath();
-          ctx.roundRect(btnX, btnY, btnSize, btnSize, 4);
-          ctx.fill();
-          ctx.stroke();
-          ctx.fillStyle = !isLobbyHost ? "#444" : 
-                          (musicState.shuffle ? "#7ae0ff" : (shuffleHover ? "#fff" : "#aaa"));
-          ctx.fillText("🔀", btnX + btnSize/2, btnY + btnSize/2 + 5);
-          if (shuffleHover && isLobbyHost) musicPlayerHover = "shuffle";
-          btnX += btnSize + btnSpacing;
-          
-          // Mute button (everyone)
-          const muteHover = mouseX >= btnX && mouseX <= btnX + btnSize && 
-                            mouseY >= btnY && mouseY <= btnY + btnSize;
-          ctx.fillStyle = muteHover ? "rgba(122,224,255,0.3)" : "rgba(40,60,100,0.4)";
-          ctx.strokeStyle = muteHover ? "#7ae0ff" : "#557";
-          ctx.beginPath();
-          ctx.roundRect(btnX, btnY, btnSize, btnSize, 4);
-          ctx.fill();
-          ctx.stroke();
-          ctx.fillStyle = muteHover ? "#fff" : "#aaa";
-          ctx.fillText(musicState.muted ? "🔇" : "🔊", btnX + btnSize/2, btnY + btnSize/2 + 5);
-          if (muteHover) musicPlayerHover = "mute";
-          
-          // Volume slider
-          const volX = mpX + 10;
-          const volY = mpY + 66;
-          const volW = mpW - 20;
-          const volH = 6;
-          
-          ctx.fillStyle = "rgba(40,60,100,0.6)";
-          ctx.beginPath();
-          ctx.roundRect(volX, volY, volW, volH, 3);
-          ctx.fill();
-          
-          const volFillW = volW * musicState.volume;
-          ctx.fillStyle = "#7ae0ff";
-          ctx.beginPath();
-          ctx.roundRect(volX, volY, volFillW, volH, 3);
-          ctx.fill();
-          
-          const knobX = volX + volFillW;
-          ctx.fillStyle = "#fff";
-          ctx.beginPath();
-          ctx.arc(knobX, volY + volH/2, 5, 0, Math.PI * 2);
-          ctx.fill();
-          
-          if (mouseX >= volX && mouseX <= volX + volW && mouseY >= volY - 5 && mouseY <= volY + volH + 5) {
-            musicPlayerHover = "volume";
-          }
-          
-          ctx.textAlign = "left";
-        } else {
-          // Collapsed lobby player
-          ctx.font = "16px sans-serif";
-          ctx.fillStyle = "#7ae0ff";
-          ctx.textAlign = "left";
-          ctx.fillText("🎵", mpX + 8, mpY + 26);
-          
-          ctx.font = "11px 'Courier New', monospace";
-          ctx.fillStyle = "#aaa";
-          const trackName = musicState.trackName.replace('.mp3', '').slice(0, 12);
-          ctx.fillText(trackName, mpX + 32, mpY + 24);
-          
-          ctx.fillStyle = musicState.muted ? "#f44" : "#7ae0ff";
-          ctx.font = "12px sans-serif";
-          ctx.textAlign = "right";
-          ctx.fillText(musicState.muted ? "🔇" : "🔊", mpX + mpW - 8, mpY + 26);
-          ctx.textAlign = "left";
-          
-          if (isHovering) musicPlayerHover = "expand";
-        }
-      }
-
-      // ===== MUSIC PERMISSION POPUP =====
-      if (showMusicPermissionPrompt && musicState.trackName) {
+      // ===== MUSIC PERMISSION POPUP (only show during gameplay) =====
+      if (showMusicPermissionPrompt && musicState.trackName && phase === "playing") {
         const popW = 300;
         const popH = 120;
         const popX = (canvas.width - popW) / 2;
