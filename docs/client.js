@@ -1252,6 +1252,10 @@
         // Load and sync the track
         if (msg.trackName) {
           loadMusicTrack(msg.trackName);
+          // Resume playback if in playing phase
+          if (phase === "playing" && musicAudio && musicAudio.paused) {
+            musicAudio.play().catch(() => {});
+          }
         }
         break;
 
@@ -1502,6 +1506,11 @@
         phase = "gameover";
         gameOverData = msg;
         buildMenuOpen = null;
+        // Stop the music
+        if (musicAudio) {
+          musicAudio.pause();
+          musicAudio.currentTime = 0;
+        }
         // If spectating, auto-reconnect after showing results
         if (isSpectator || msg.wasSpectating) {
           setTimeout(() => {
@@ -3911,7 +3920,8 @@
       ctx.textAlign = "left";
 
       // ===== MUSIC PLAYER (Above Stats Button - Bottom Right) =====
-      if (musicState.trackName) {
+      // Don't show during gameover
+      if (musicState.trackName && phase !== "gameover") {
         const mpW = musicState.expanded ? 220 : 40;
         const mpH = musicState.expanded ? 80 : 40;
         const mpX = canvas.width - mpW - 12;
@@ -5866,7 +5876,7 @@
       }
 
       // ===== GLOBAL MUSIC PLAYER (always visible in bottom right) =====
-      if (musicState.trackName && phase !== "lobby") {
+      if (musicState.trackName && phase !== "lobby" && phase !== "gameover") {
         // Already rendered in HUD section for gameplay
       } else if (musicState.trackName && phase === "lobby") {
         // Lobby music player (smaller, simpler)
