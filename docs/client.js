@@ -351,12 +351,20 @@
     if (!musicAudio) {
       musicAudio = new Audio();
       musicAudio.volume = musicState.muted ? 0 : musicState.volume;
+      musicAudio.preload = "auto"; // Hint to browser to load quickly
       musicAudio.addEventListener("ended", () => {
         // Report to server that track ended
         send({ t: "musicTrackEnded", track: musicState.track });
       });
-      musicAudio.addEventListener("canplaythrough", () => {
+      // Use 'canplay' instead of 'canplaythrough' - fires much sooner
+      // canplaythrough waits until entire file can play without buffering (30+ seconds)
+      // canplay fires when enough data is loaded to start playing
+      musicAudio.addEventListener("canplay", () => {
         // Sync to server time when loaded
+        syncMusicToServer();
+      });
+      // Also try on loadeddata as backup
+      musicAudio.addEventListener("loadeddata", () => {
         syncMusicToServer();
       });
     }
@@ -376,6 +384,7 @@
     showMusicPermissionPrompt = false;
     // Try to play immediately after user interaction
     if (musicAudio && musicState.trackName) {
+      loadMusicTrack(musicState.trackName);
       musicAudio.play().catch(() => {});
     }
   }
@@ -409,6 +418,10 @@
     if (!musicAudio.src.endsWith(encodeURIComponent(trackName))) {
       musicAudio.src = url;
       musicAudio.load();
+      // Try to play immediately if we have permission (don't wait for canplay)
+      if (musicPermissionGranted && musicState.playing) {
+        musicAudio.play().catch(() => {});
+      }
     }
   }
   
@@ -1301,9 +1314,15 @@
         // Load and sync the track
         if (msg.trackName && musicPermissionGranted) {
           loadMusicTrack(msg.trackName);
-          // Resume playback if in playing or lobby phase (not gameover)
-          if ((phase === "playing" || phase === "lobby") && musicAudio && musicAudio.paused) {
-            musicAudio.play().catch(() => {});
+          // Try to play immediately - don't wait for load events
+          if ((phase === "playing" || phase === "lobby") && musicAudio) {
+            syncMusicToServer();
+            // Also set a short timeout to retry in case audio wasn't ready
+            setTimeout(() => {
+              if (musicAudio && musicAudio.paused && musicPermissionGranted) {
+                syncMusicToServer();
+              }
+            }, 500);
           }
         }
         break;
