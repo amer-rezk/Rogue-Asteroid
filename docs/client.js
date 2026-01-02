@@ -318,6 +318,10 @@
   // Buy additional upgrade
   let buyUpgradeCost = 30;
   let hoveredBuyUpgrade = false;
+  
+  // GAME MODIFIERS
+  let activeGameModifier = null; // Current game's modifier { id, name, icon, color, desc, flavor }
+  let gameModifierCard = null; // Card animation state { modifier, animTime, phase }
 
   // Visual
   let stars = [];
@@ -967,6 +971,47 @@
           }
           break;
           
+        case "elusiveTeleport":
+          // Quantum Drift teleport visual effect
+          if (!skipVisualEffects) {
+            // Ghost trail at old position
+            for (let i = 0; i < 8; i++) {
+              const angle = (i / 8) * Math.PI * 2;
+              clientParticles.push({
+                x: ev.oldX,
+                y: ev.oldY,
+                vx: Math.cos(angle) * 30,
+                vy: Math.sin(angle) * 30,
+                life: 0.4,
+                maxLife: 0.4,
+                color: "#aa88ff",
+                size: 4 + Math.random() * 3
+              });
+            }
+            // Arrival effect at new position
+            for (let i = 0; i < 8; i++) {
+              const angle = (i / 8) * Math.PI * 2;
+              clientParticles.push({
+                x: ev.newX,
+                y: ev.newY,
+                vx: Math.cos(angle) * 50,
+                vy: Math.sin(angle) * 50,
+                life: 0.5,
+                maxLife: 0.5,
+                color: "#ff88ff",
+                size: 5 + Math.random() * 3
+              });
+            }
+            // Connecting line tracer
+            pendingTracers.push({
+              x1: ev.oldX, y1: ev.oldY,
+              x2: ev.newX, y2: ev.newY,
+              color: "#aa88ff",
+              life: 0.3
+            });
+          }
+          break;
+          
         case "bulletSpawn":
           // Create local bullet from server event
           // PERFORMANCE: Cap client bullets to prevent overwhelming rendering
@@ -1345,12 +1390,29 @@
           banishedCount = 0;
           banishFeedback = null;
           banishError = null;
+          // Reset game modifier state
+          activeGameModifier = null;
+          gameModifierCard = null;
           showMenu();
         }
         phase = "lobby";
         lobbyEl.style.display = "block";
         updateLobbyUI();
         // Music only plays during game, not in lobby
+        break;
+      
+      case "gameModifier":
+        // Game modifier card reveal - show animated card before game starts
+        activeGameModifier = msg.modifier;
+        gameModifierCard = {
+          modifier: msg.modifier,
+          animTime: 0,
+          phase: "entering" // entering -> display -> exiting
+        };
+        // Show a transitional screen with the card
+        lobbyEl.style.display = "none";
+        gameEl.style.display = "block";
+        phase = "modifier_reveal";
         break;
 
       case "started":
@@ -1361,6 +1423,11 @@
         upgradePicked = false;
         buildMenuOpen = null;
         incomingAttacks = [];
+        // Store game modifier if provided
+        if (msg.gameModifier) {
+          // Keep the modifier info but clear the card animation
+          gameModifierCard = null;
+        }
         // Reset upgrade costs
         currentRerollCost = 10;
         buyUpgradeCost = 30;
@@ -2995,6 +3062,137 @@
         drawNeonText("PvP", canvas.width / 2, 85, "#f44", 18, "center");
         return;
       }
+      
+      // GAME MODIFIER CARD REVEAL ANIMATION
+      if (phase === "modifier_reveal" && gameModifierCard) {
+        const card = gameModifierCard;
+        const mod = card.modifier;
+        card.animTime += dt;
+        
+        // Animation phases
+        const enterDuration = 0.8;
+        const displayDuration = 2.5;
+        const exitDuration = 0.5;
+        
+        let cardAlpha = 1;
+        let cardScale = 1;
+        let cardY = canvas.height / 2;
+        
+        if (card.animTime < enterDuration) {
+          // Entering: slide up from bottom with scale
+          const t = card.animTime / enterDuration;
+          const easeOut = 1 - Math.pow(1 - t, 3); // Ease out cubic
+          cardY = canvas.height + 150 - (canvas.height / 2 + 150) * easeOut;
+          cardScale = 0.5 + 0.5 * easeOut;
+          cardAlpha = easeOut;
+        } else if (card.animTime < enterDuration + displayDuration) {
+          // Display: slight floating animation
+          const displayT = card.animTime - enterDuration;
+          cardY = canvas.height / 2 + Math.sin(displayT * 2) * 5;
+        } else {
+          // Exiting: fade out and scale down
+          const t = (card.animTime - enterDuration - displayDuration) / exitDuration;
+          cardAlpha = 1 - t;
+          cardScale = 1 - t * 0.3;
+        }
+        
+        // Draw dark overlay
+        ctx.fillStyle = `rgba(5, 5, 16, ${0.9 * cardAlpha})`;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Card dimensions
+        const cardW = 320 * cardScale;
+        const cardH = 420 * cardScale;
+        const cardX = canvas.width / 2 - cardW / 2;
+        const cardTopY = cardY - cardH / 2;
+        
+        ctx.save();
+        ctx.globalAlpha = cardAlpha;
+        
+        // Card background with glow
+        const glowColor = mod.color || "#ffffff";
+        ctx.shadowColor = glowColor;
+        ctx.shadowBlur = 30 * cardScale;
+        
+        // Card border (gradient)
+        const grad = ctx.createLinearGradient(cardX, cardTopY, cardX, cardTopY + cardH);
+        grad.addColorStop(0, mod.color || "#888");
+        grad.addColorStop(0.5, "#ffffff");
+        grad.addColorStop(1, mod.color || "#888");
+        
+        // Outer border
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        const borderR = 15 * cardScale;
+        ctx.roundRect(cardX - 4, cardTopY - 4, cardW + 8, cardH + 8, borderR);
+        ctx.fill();
+        
+        // Inner card
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "rgba(15, 15, 30, 0.98)";
+        ctx.beginPath();
+        ctx.roundRect(cardX, cardTopY, cardW, cardH, borderR - 2);
+        ctx.fill();
+        
+        // Header bar
+        ctx.fillStyle = mod.color || "#666";
+        ctx.globalAlpha = cardAlpha * 0.3;
+        ctx.fillRect(cardX, cardTopY, cardW, 60 * cardScale);
+        ctx.globalAlpha = cardAlpha;
+        
+        // "GAME MODIFIER" label
+        ctx.font = `bold ${14 * cardScale}px monospace`;
+        ctx.fillStyle = "#888";
+        ctx.textAlign = "center";
+        ctx.fillText("⚙️ GAME MODIFIER ⚙️", canvas.width / 2, cardTopY + 25 * cardScale);
+        
+        // Icon (large, centered)
+        ctx.font = `${80 * cardScale}px serif`;
+        ctx.fillText(mod.icon, canvas.width / 2, cardTopY + 150 * cardScale);
+        
+        // Name
+        ctx.font = `bold ${26 * cardScale}px monospace`;
+        ctx.fillStyle = mod.color || "#fff";
+        ctx.fillText(mod.name, canvas.width / 2, cardTopY + 210 * cardScale);
+        
+        // Description (word wrap)
+        ctx.font = `${15 * cardScale}px monospace`;
+        ctx.fillStyle = "#ddd";
+        const words = mod.desc.split(' ');
+        let line = '';
+        let lineY = cardTopY + 260 * cardScale;
+        const maxWidth = cardW - 40 * cardScale;
+        
+        for (const word of words) {
+          const testLine = line + word + ' ';
+          if (ctx.measureText(testLine).width > maxWidth && line !== '') {
+            ctx.fillText(line.trim(), canvas.width / 2, lineY);
+            line = word + ' ';
+            lineY += 22 * cardScale;
+          } else {
+            line = testLine;
+          }
+        }
+        ctx.fillText(line.trim(), canvas.width / 2, lineY);
+        
+        // Flavor text
+        ctx.font = `italic ${12 * cardScale}px serif`;
+        ctx.fillStyle = "#888";
+        ctx.fillText(mod.flavor, canvas.width / 2, cardTopY + 370 * cardScale);
+        
+        // "Starting soon..." text
+        if (card.animTime > enterDuration) {
+          const countdown = Math.ceil(displayDuration - (card.animTime - enterDuration));
+          if (countdown > 0) {
+            ctx.font = `${16 * cardScale}px monospace`;
+            ctx.fillStyle = "#aaa";
+            ctx.fillText(`Game starting in ${countdown}...`, canvas.width / 2, cardTopY + cardH + 30 * cardScale);
+          }
+        }
+        
+        ctx.restore();
+        return;
+      }
 
       if (!lastSnap) return;
 
@@ -4180,6 +4378,16 @@
       ctx.fillRect(0, 0, canvas.width, 50);
       drawNeonText(`WAVE ${wave}`, 20, 25, "#ff0", 18, "left");
       
+      // Game modifier indicator (small icon + name)
+      if (activeGameModifier && activeGameModifier.id !== "standard") {
+        const modX = 200;
+        const modY = 25;
+        ctx.font = "14px monospace";
+        ctx.textAlign = "left";
+        ctx.fillStyle = activeGameModifier.color || "#888";
+        ctx.fillText(`${activeGameModifier.icon} ${activeGameModifier.name}`, modX, modY);
+      }
+      
       // Pause button in HUD bar (for non-spectators)
       if (phase === "playing" && !isSpectator) {
         const pauseBtnW = 70;
@@ -4689,7 +4897,9 @@
         }
 
         // ===== ATTACK SPAWN PANEL =====
-        if (isAlive) {
+        // GAME MODIFIER: Pacifist Protocol disables attacks
+        const attacksDisabled = activeGameModifier && activeGameModifier.id === "noMobs";
+        if (isAlive && !attacksDisabled) {
           const attackPanelH = 370; // 25% bigger (was 295)
           drawSectionPanel(panelX, currentY, panelW, attackPanelH, "rgba(255,68,68,0.5)", "⚔️ SEND ATTACKS", "#ff6666");
           
@@ -4796,6 +5006,21 @@
 
           ctx.textAlign = "left";
           currentY += attackPanelH + 10;
+        } else if (isAlive && attacksDisabled) {
+          // Show disabled message for Pacifist Protocol
+          const disabledH = 80;
+          drawSectionPanel(panelX, currentY, panelW, disabledH, "rgba(100,100,100,0.3)", "⚔️ ATTACKS", "#666");
+          
+          ctx.font = "14px 'Courier New', monospace";
+          ctx.textAlign = "center";
+          ctx.fillStyle = "#888";
+          ctx.fillText("🕊️ DISABLED", panelX + panelW / 2, currentY + 45);
+          ctx.font = "11px 'Courier New', monospace";
+          ctx.fillStyle = "#666";
+          ctx.fillText("Pacifist Protocol active", panelX + panelW / 2, currentY + 62);
+          
+          ctx.textAlign = "left";
+          currentY += disabledH + 10;
         }
 
         // ===== TOTAL RUN DPS PANEL =====

@@ -293,6 +293,46 @@ let activeDeathMods = {
   speedDemon: { active: false, endTime: 0 }
 };
 
+// ===== GAME MODIFIERS SYSTEM =====
+// Random game-altering rules selected at the start of each game
+const GAME_MODIFIERS = {
+  noMobs: {
+    id: "noMobs",
+    name: "Pacifist Protocol",
+    icon: "🕊️",
+    color: "#88ffaa",
+    desc: "Attack units are DISABLED this game. Focus on defense!",
+    flavor: "\"Sometimes the best offense is no offense at all.\""
+  },
+  sideswiped: {
+    id: "sideswiped",
+    name: "Sideswiped",
+    icon: "↔️",
+    color: "#ff8844",
+    desc: "Enemies spawn from the SIDES in diagonal trajectories!",
+    flavor: "\"They're coming from... everywhere?!\""
+  },
+  elusiveness: {
+    id: "elusiveness",
+    name: "Quantum Drift",
+    icon: "👻",
+    color: "#aa88ff",
+    desc: "After 5s alive, enemies have 15%/s chance to teleport sideways!",
+    flavor: "\"Now you see me, now you don't.\""
+  },
+  standard: {
+    id: "standard",
+    name: "Standard Rules",
+    icon: "📋",
+    color: "#aaaaaa",
+    desc: "No modifiers active. Classic gameplay!",
+    flavor: "\"Just like the good old days.\""
+  }
+};
+
+const GAME_MODIFIER_IDS = Object.keys(GAME_MODIFIERS).filter(id => id !== "standard");
+let activeGameModifier = null; // Current game's modifier
+
 // ===== Server state =====
 const app = express();
 app.use(express.static(path.join(__dirname, "docs")));
@@ -829,9 +869,36 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
   if (wave >= 20) {
     waveSpeedBonus += (wave - 19) * 0.033;  // -30% speed scaling (was 0.047)
   }
-  const baseVy = rand(25, 40) * speedMult;
-  const vy = baseVy * waveSpeedBonus;
-  const vx = rand(-15, 15);
+  
+  // GAME MODIFIER: Sideswiped - spawn from sides with diagonal trajectory
+  let finalX = x;
+  let finalY = y;
+  let vx, vy;
+  
+  if (activeGameModifier === "sideswiped" && type !== "boss" && type !== "miniboss") {
+    // Spawn from left or right side, in upper 50% of screen
+    const { x0, x1 } = segmentBounds(targetSlot);
+    const spawnFromLeft = Math.random() < 0.5;
+    
+    if (spawnFromLeft) {
+      finalX = x0 - r - 10; // Just off left edge
+      vx = rand(30, 50) * waveSpeedBonus; // Moving right
+    } else {
+      finalX = x1 + r + 10; // Just off right edge
+      vx = rand(-50, -30) * waveSpeedBonus; // Moving left
+    }
+    
+    // Spawn in upper 50% of screen (never below GROUND_Y * 0.5)
+    finalY = rand(0, GROUND_Y * 0.45);
+    
+    // Diagonal downward trajectory
+    const baseVy = rand(20, 35) * speedMult;
+    vy = baseVy * waveSpeedBonus;
+  } else {
+    const baseVy = rand(25, 40) * speedMult;
+    vy = baseVy * waveSpeedBonus;
+    vx = rand(-15, 15);
+  }
 
   const ftlThreshold = GROUND_Y * 0.1;
   const id = uid();
@@ -848,7 +915,7 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
   // OPTIMIZED: Send spawn event with ALL static data so client can cache
   // This allows us to strip static data from broadcast updates (saves ~60% bandwidth)
   queueEvent("spawn", { 
-    id, x, y, r, type, attackType, vertices, rotSpeed, color, vx, vy, 
+    id, x: finalX, y: finalY, r, type, attackType, vertices, rotSpeed, color, vx, vy, 
     hp, // maxHp at spawn time
     targetSlot, // For client collision prediction
     isBoss, isBossAd, bossAdVariant, isMiniBoss: isMiniBossType, isMiniBossAd 
@@ -856,7 +923,7 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
 
   return {
     id,
-    x, y, vx, vy, r, type,
+    x: finalX, y: finalY, vx, vy, r, type,
     hp: hp,
     maxHp: hp,
     lastSpawnHp: hp, // Track HP for boss spawns
@@ -879,10 +946,13 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
     isMiniBoss: isMiniBossType,
     isMiniBossAd: isMiniBossAd,
     noGold: noGold, // Only spawned minions from splitter/carrier give no gold
-    inFTL: true,
+    inFTL: activeGameModifier === "sideswiped" ? false : true, // No FTL entry for sideswiped
     ftlThreshold: ftlThreshold,
     ftlTrail: [],
     gravityExposure: 0, // Track time spent in gravity wells for diminishing returns
+    // GAME MODIFIER: Elusiveness tracking
+    aliveTime: 0, // Track how long asteroid has been alive
+    lastTeleportTime: 0, // Track last teleport for cooldown
   };
 }
 
@@ -1070,49 +1140,109 @@ function startGame(solo = false) {
   lockedSlots = ids.slice(0, MAX_PLAYERS);
   recomputeWorld();
 
-  phase = "playing";
-  wave = 1;
-
-  upgradePicks = new Map();
-  attackQueue = new Map();
-  pendingUpgrades = new Map();
-  eventQueue = [];
+  // Select random game modifier (80% chance for special modifier, 20% for standard)
+  if (Math.random() < 0.8 && GAME_MODIFIER_IDS.length > 0) {
+    const randomIndex = Math.floor(Math.random() * GAME_MODIFIER_IDS.length);
+    activeGameModifier = GAME_MODIFIER_IDS[randomIndex];
+  } else {
+    activeGameModifier = "standard";
+  }
   
-  // Reset pause state
-  gamePaused = false;
-  pauseCountdown = 0;
-  pausedBy = null;
-
-  for (const id of lockedSlots) {
-    const p = players.get(id);
-    if (p) {
-      p.upgrades = {};
-      p.towers = [null, null, null, null];
-      p.gold = 0;
-      p.cooldown = 0;
-      p.targetX = null;
-      p.targetY = null;
-      p.manualShooting = false;
-      p.turretAngle = -Math.PI / 2;
-      p.score = 0;
-      p.kills = 0;
-      p.damageDealt = 0;
-      p.waveDamage = 0;
-      p.hp = solo ? 10 : BASE_HP_PER_PLAYER;
-      p.maxHp = solo ? 10 : BASE_HP_PER_PLAYER;
-      p.ready = false;
-      p.lastInterest = 0;
-	  p.incomeFromAttacks = 0; // Track income from minions
+  const modifier = GAME_MODIFIERS[activeGameModifier];
+  
+  // Set transitional phase to prevent lobby actions during card reveal
+  phase = "starting";
+  
+  // Broadcast game modifier card reveal
+  broadcast({ 
+    t: "gameModifier", 
+    modifier: {
+      id: modifier.id,
+      name: modifier.name,
+      icon: modifier.icon,
+      color: modifier.color,
+      desc: modifier.desc,
+      flavor: modifier.flavor
     }
+  });
+  
+  // Also notify spectators
+  for (const ws of spectators) {
+    safeSend(ws, { 
+      t: "gameModifier", 
+      modifier: {
+        id: modifier.id,
+        name: modifier.name,
+        icon: modifier.icon,
+        color: modifier.color,
+        desc: modifier.desc,
+        flavor: modifier.flavor
+      },
+      isSpectator: true
+    });
   }
 
-  updateSlotSpeedMultipliers();
-  spawnWave();
-  broadcast({ t: "started", world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, wave, solo: soloMode });
-  // Also notify spectators that game started
-  for (const ws of spectators) {
-    safeSend(ws, { t: "started", world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, wave, solo: soloMode, isSpectator: true });
-  }
+  // Delay game start to allow card animation
+  setTimeout(() => {
+    if (phase !== "starting") return; // Already cancelled or changed
+    
+    phase = "playing";
+    wave = 1;
+
+    upgradePicks = new Map();
+    attackQueue = new Map();
+    pendingUpgrades = new Map();
+    eventQueue = [];
+    
+    // Reset pause state
+    gamePaused = false;
+    pauseCountdown = 0;
+    pausedBy = null;
+
+    for (const id of lockedSlots) {
+      const p = players.get(id);
+      if (p) {
+        p.upgrades = {};
+        p.towers = [null, null, null, null];
+        p.gold = 0;
+        p.cooldown = 0;
+        p.targetX = null;
+        p.targetY = null;
+        p.manualShooting = false;
+        p.turretAngle = -Math.PI / 2;
+        p.score = 0;
+        p.kills = 0;
+        p.damageDealt = 0;
+        p.waveDamage = 0;
+        p.hp = solo ? 10 : BASE_HP_PER_PLAYER;
+        p.maxHp = solo ? 10 : BASE_HP_PER_PLAYER;
+        p.ready = false;
+        p.lastInterest = 0;
+        p.incomeFromAttacks = 0; // Track income from minions
+      }
+    }
+
+    updateSlotSpeedMultipliers();
+    spawnWave();
+    broadcast({ 
+      t: "started", 
+      world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, 
+      wave, 
+      solo: soloMode,
+      gameModifier: activeGameModifier
+    });
+    // Also notify spectators that game started
+    for (const ws of spectators) {
+      safeSend(ws, { 
+        t: "started", 
+        world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, 
+        wave, 
+        solo: soloMode, 
+        isSpectator: true,
+        gameModifier: activeGameModifier
+      });
+    }
+  }, 4000); // 4 second delay for card animation
 }
 
 function queueUpgradesAndNextWave() {
@@ -1303,6 +1433,7 @@ function resetToLobby() {
     pendingUpgrades = new Map();
     eventQueue = [];
     wave = 0;
+    activeGameModifier = null; // Reset game modifier
 
     // Notify spectators that game ended and they should reconnect to join lobby
     for (const ws of spectators) {
@@ -2177,6 +2308,47 @@ function tick() {
       // Death Mod: Speed Demon makes enemies 50% faster
       if (activeDeathMods.speedDemon.active) {
         speedMult *= 1.5;
+      }
+      
+      // Track alive time for elusiveness modifier
+      m.aliveTime = (m.aliveTime || 0) + DT;
+      
+      // GAME MODIFIER: Quantum Drift (Elusiveness) - teleport sideways after 5s
+      if (activeGameModifier === "elusiveness" && !m.isBoss && !m.isMiniBoss) {
+        const timeSinceLastTeleport = m.aliveTime - (m.lastTeleportTime || 0);
+        
+        // After 5 seconds since spawn/last teleport, 15% chance per second to teleport
+        if (timeSinceLastTeleport >= 5) {
+          const teleportChance = 0.15 * DT; // 15% per second
+          if (Math.random() < teleportChance) {
+            // Get segment bounds for this asteroid's lane
+            const { x0, x1 } = segmentBounds(m.targetSlot);
+            const margin = m.r + 10;
+            
+            // Teleport left or right (stay within bounds)
+            const teleportDist = 40 + Math.random() * 60; // 40-100px
+            const goLeft = Math.random() < 0.5;
+            
+            const oldX = m.x;
+            if (goLeft) {
+              m.x = Math.max(x0 + margin, m.x - teleportDist);
+            } else {
+              m.x = Math.min(x1 - margin, m.x + teleportDist);
+            }
+            
+            // Only trigger effect if we actually moved
+            if (Math.abs(m.x - oldX) > 10) {
+              m.lastTeleportTime = m.aliveTime; // Reset 5s cooldown
+              queueEvent("elusiveTeleport", { 
+                id: m.id, 
+                oldX: oldX, 
+                oldY: m.y, 
+                newX: m.x, 
+                newY: m.y 
+              });
+            }
+          }
+        }
       }
       
       m.x += m.vx * DT * speedMult;
@@ -4078,6 +4250,12 @@ wss.on("connection", (ws) => {
     }
 
     if (msg.t === "buyAttack" && (phase === "playing" || phase === "upgrades")) {
+      // GAME MODIFIER: Pacifist Protocol - no attacks allowed
+      if (activeGameModifier === "noMobs") {
+        safeSend(ws, { t: "attackFailed", reason: "Attacks are disabled this game! (Pacifist Protocol)" });
+        return;
+      }
+      
       const { attackType, quantity } = msg;
       if (!ATTACK_TYPES[attackType]) return;
       
