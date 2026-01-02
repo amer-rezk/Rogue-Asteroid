@@ -1610,6 +1610,10 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     hitSet: new Set(), // O(1) hit tracking
     modules: modules, // Store modules for hit effects
     bulletColor: bulletColor, // Custom color for confetti
+    // Homing properties for missile tower
+    isHoming: bulletType === "missile",
+    targetId: overrideProps?.targetId || null,
+    homingSpeed: speed, // Store base speed for homing calculations
   };
   bullets.push(bullet);
   
@@ -1635,7 +1639,9 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
       ricochet: bullet.ricochet,
       pierce: bullet.pierce, // For client-side pierce prediction
       r: bullet.r,
-      lifespan: bullet.lifespan // DESYNC FIX: Send lifespan so client can expire bullets correctly
+      lifespan: bullet.lifespan, // DESYNC FIX: Send lifespan so client can expire bullets correctly
+      isHoming: bullet.isHoming, // For homing missile rendering
+      targetId: bullet.targetId, // Target asteroid ID for homing
     });
   }
   // If throttled, bullet still exists on server - client just won't see it immediately
@@ -2101,6 +2107,7 @@ function tick() {
                   inheritedUpgrades: true,
                   modules: activeModules, // Tower modules
                   ownerGold: p.gold, // For Midas Capacitor
+                  targetId: target.id, // For homing missiles
                 };
                 fireBullet(p, towerPos.x, towerPos.y, aim.x, aim.y, 0, towerProps);
               }
@@ -2325,6 +2332,75 @@ function tick() {
       const b = bullets[bi];
       // Clear skipThisTick flag - bullets created last tick can now be processed
       b.skipThisTick = false;
+      
+      // HOMING MISSILES: Track and follow targets
+      if (b.isHoming && !b.dead) {
+        const slotMissiles = missilesBySlot[b.ownerSlot];
+        let target = null;
+        
+        // Try to find current target
+        if (b.targetId && slotMissiles) {
+          for (let i = 0; i < slotMissiles.length; i++) {
+            if (slotMissiles[i].id === b.targetId && slotMissiles[i].hp > 0) {
+              target = slotMissiles[i];
+              break;
+            }
+          }
+        }
+        
+        // If target dead or missing, find closest new target
+        if (!target && slotMissiles && slotMissiles.length > 0) {
+          let closestDist = Infinity;
+          for (let i = 0; i < slotMissiles.length; i++) {
+            const m = slotMissiles[i];
+            if (m.hp <= 0) continue;
+            const dx = m.x - b.x;
+            const dy = m.y - b.y;
+            const dist = dx * dx + dy * dy;
+            if (dist < closestDist) {
+              closestDist = dist;
+              target = m;
+            }
+          }
+          if (target) {
+            b.targetId = target.id;
+            // Send retarget event to client for sync
+            eventQueue.push({
+              t: "homingRetarget",
+              bulletId: b.id,
+              targetId: target.id,
+              x: b.x,
+              y: b.y,
+              vx: b.vx,
+              vy: b.vy
+            });
+          }
+        }
+        
+        // Steer toward target
+        if (target) {
+          const dx = target.x - b.x;
+          const dy = target.y - b.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist > 0) {
+            // Calculate desired velocity toward target
+            const desiredVx = (dx / dist) * b.homingSpeed;
+            const desiredVy = (dy / dist) * b.homingSpeed;
+            
+            // Smooth turning - missiles turn toward target over time
+            const turnRate = 8; // Higher = tighter turning
+            b.vx += (desiredVx - b.vx) * turnRate * DT;
+            b.vy += (desiredVy - b.vy) * turnRate * DT;
+            
+            // Normalize to maintain consistent speed
+            const currentSpeed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
+            if (currentSpeed > 0) {
+              b.vx = (b.vx / currentSpeed) * b.homingSpeed;
+              b.vy = (b.vy / currentSpeed) * b.homingSpeed;
+            }
+          }
+        }
+      }
       
       b.x += b.vx * DT;
       b.y += b.vy * DT;

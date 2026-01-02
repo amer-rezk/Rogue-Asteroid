@@ -628,6 +628,59 @@
     let bulletWriteIdx = 0;
     for (let i = 0; i < clientBullets.length; i++) {
       const b = clientBullets[i];
+      
+      // CLIENT-SIDE HOMING: Predict missile tracking between server updates
+      if (b.isHoming) {
+        const slotMissiles = missilesBySlot[b.slot];
+        let target = null;
+        
+        // Try to find current target
+        if (b.targetId && slotMissiles) {
+          for (let mi = 0; mi < slotMissiles.length; mi++) {
+            if (slotMissiles[mi].id === b.targetId) {
+              target = slotMissiles[mi];
+              break;
+            }
+          }
+        }
+        
+        // If target dead or missing, find closest new target
+        if (!target && slotMissiles && slotMissiles.length > 0) {
+          let closestDist = Infinity;
+          for (let mi = 0; mi < slotMissiles.length; mi++) {
+            const m = slotMissiles[mi];
+            const dx = m.x - b.x;
+            const dy = m.y - b.y;
+            const dist = dx * dx + dy * dy;
+            if (dist < closestDist) {
+              closestDist = dist;
+              target = m;
+            }
+          }
+          if (target) b.targetId = target.id;
+        }
+        
+        // Steer toward target
+        if (target) {
+          const dx = target.x - b.x;
+          const dy = target.y - b.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist > 0) {
+            const desiredVx = (dx / dist) * b.homingSpeed;
+            const desiredVy = (dy / dist) * b.homingSpeed;
+            const turnRate = 8;
+            b.vx += (desiredVx - b.vx) * turnRate * dt;
+            b.vy += (desiredVy - b.vy) * turnRate * dt;
+            // Normalize speed
+            const currentSpeed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
+            if (currentSpeed > 0) {
+              b.vx = (b.vx / currentSpeed) * b.homingSpeed;
+              b.vy = (b.vy / currentSpeed) * b.homingSpeed;
+            }
+          }
+        }
+      }
+      
       b.x += b.vx * dt;
       b.y += b.vy * dt;
       
@@ -929,7 +982,10 @@
             ricochet: ev.ricochet || 0,
             pierce: ev.pierce || 0, // For client-side pierce prediction
             hitSet: new Set(), // Track which enemies this bullet has hit
-            lifespan: ev.lifespan || 3.0 // Match server BULLET_LIFESPAN
+            lifespan: ev.lifespan || 3.0, // Match server BULLET_LIFESPAN
+            isHoming: ev.isHoming || false, // Homing missile
+            targetId: ev.targetId || null, // Target asteroid ID
+            homingSpeed: Math.sqrt(ev.vx * ev.vx + ev.vy * ev.vy) // Store initial speed for homing
           });
           break;
 
@@ -971,6 +1027,22 @@
               color: "#ff6600",
               life: 0.3
             });
+          }
+          break;
+          
+        case "homingRetarget":
+          // Homing missile retargeted to new enemy
+          if (ev.bulletId) {
+            for (let i = 0; i < clientBullets.length; i++) {
+              if (clientBullets[i].id === ev.bulletId) {
+                clientBullets[i].targetId = ev.targetId;
+                clientBullets[i].x = ev.x;
+                clientBullets[i].y = ev.y;
+                clientBullets[i].vx = ev.vx;
+                clientBullets[i].vy = ev.vy;
+                break;
+              }
+            }
           }
           break;
           
