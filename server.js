@@ -1550,6 +1550,9 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
   let bulletR = bulletType === "sniper" ? 4 : bulletType === "missile" ? 5 : BULLET_R;
   let bulletColor = null;
   
+  // Save original type before modules modify it (for homing check)
+  const originalBulletType = bulletType;
+  
   // Apply module effects on bullet creation
   
   // Confetti Cannon: PARTY MODE! 🎉
@@ -1627,8 +1630,8 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     hitSet: new Set(), // O(1) hit tracking
     modules: modules, // Store modules for hit effects
     bulletColor: bulletColor, // Custom color for confetti
-    // Homing properties for missile tower
-    isHoming: bulletType === "missile",
+    // Homing properties for missile tower (use original type before confetti changes it)
+    isHoming: originalBulletType === "missile",
     targetId: overrideProps?.targetId || null,
     homingSpeed: speed, // Store base speed for homing calculations
   };

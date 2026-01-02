@@ -722,6 +722,9 @@
             b.hitSet.add(m.id);
             
             // ORDER: Ricochet is used FIRST (if there's a target), then pierce
+            // NOTE: Don't remove bullet on ricochet hit - let server handle it
+            // Server will send bulletDeaths for old bullet and bulletSpawn for new one
+            // This prevents desync when server's ricochet safety checks fail
             if (b.ricochet > 0) {
               // Check if there's another enemy to bounce to
               let hasBounceTarget = false;
@@ -738,9 +741,11 @@
               }
               
               if (hasBounceTarget) {
-                // Ricochet will trigger - bullet dies, server spawns new one
-                shouldRemove = true;
-                break;
+                // Ricochet will trigger - but DON'T remove bullet yet!
+                // Server will send bulletDeaths event when it actually spawns the ricochet
+                // Just decrement ricochet count locally so we don't keep triggering
+                b.ricochet--;
+                break; // Stop checking for more hits this frame
               }
               // No bounce target - fall through to pierce
             }
