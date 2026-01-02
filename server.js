@@ -180,7 +180,7 @@ const TOWER_MODULES = {
     name: "Vampiric Nanobots",
     icon: "🩸",
     color: "#cc0000",
-    desc: "-50% damage, heal 1 HP per 100 damage dealt",
+    desc: "-50% damage, heal 1 HP per 200 damage dealt",
     effect: "lifesteal"
   },
   feedbackLoop: {
@@ -882,6 +882,7 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
     inFTL: true,
     ftlThreshold: ftlThreshold,
     ftlTrail: [],
+    gravityExposure: 0, // Track time spent in gravity wells for diminishing returns
   };
 }
 
@@ -2656,13 +2657,13 @@ function tick() {
           
           // Vampiric Nanobots: Accumulate damage for healing
           // SYNERGY: All child bullets (shards, ricochets) contribute to healing pool!
-          // NERFED: Now requires 200 accumulated damage (was 100) to heal 1 HP
+          // NERFED: Now requires 400 accumulated damage (was 200) to heal 1 HP
           if (bulletModules.includes("vampiricNanobots") && owner) {
             owner.lifestealAccum = (owner.lifestealAccum || 0) + b.dmg * 2; // x2 because we halved damage
-            if (owner.lifestealAccum >= 200) {
-              const heals = Math.floor(owner.lifestealAccum / 200);
+            if (owner.lifestealAccum >= 400) {
+              const heals = Math.floor(owner.lifestealAccum / 400);
               owner.hp = Math.min(owner.maxHp, owner.hp + heals);
-              owner.lifestealAccum = owner.lifestealAccum % 200;
+              owner.lifestealAccum = owner.lifestealAccum % 400;
               queueEvent("lifesteal", { slot: owner.slot, amount: heals });
             }
           }
@@ -3228,6 +3229,7 @@ function tick() {
     
     // Gravity Well update - pull nearby enemies
     // PERFORMANCE: Added quick bounding box rejection before distance check
+    // DIMINISHING RETURNS: Asteroids become resistant to gravity the longer they're exposed
     for (const well of gravityWells) {
       well.life -= DT;
       const radius = well.radius;
@@ -3250,9 +3252,20 @@ function tick() {
           // Quick squared distance check before expensive sqrt
           if (distSq < radiusSq && distSq > 25) { // 25 = 5*5
             const dist = Math.sqrt(distSq);
-            const pullStrength = (well.strength / dist) * DT;
+            
+            // DIMINISHING RETURNS: effectiveness = 1 / sqrt(1 + exposure/threshold)
+            // After 1 second: ~71% effectiveness
+            // After 2 seconds: ~58% effectiveness
+            // After 4 seconds: ~45% effectiveness
+            const exposureThreshold = 1.0; // Seconds before diminishing kicks in hard
+            const diminishFactor = 1 / Math.sqrt(1 + m.gravityExposure / exposureThreshold);
+            
+            const pullStrength = (well.strength / dist) * DT * diminishFactor;
             m.x += (dx / dist) * pullStrength;
             m.y += (dy / dist) * pullStrength;
+            
+            // Track exposure time
+            m.gravityExposure += DT;
           }
         }
       }
