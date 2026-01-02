@@ -689,7 +689,7 @@ const UPGRADE_DEFS = [
   { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "{val}% chance for Lightning", stat: "chainChance", base: 0.02, type: "add_cap", cap: 0.30 },
   { id: "shield", name: "Shield Gen", cat: "defense", icon: "🛡️", desc: "+{val} Shield (one-time)", stat: "shield", base: 1, type: "add" },
   { id: "slow", name: "Grav Field", cat: "defense", icon: "🌀", desc: "Gravity Power +{val}", stat: "slowfield", base: 15, type: "add" },
-  { id: "income", name: "War Profiteer", cat: "economy", icon: "💰", desc: "+{val}% Gold (Kills & Income)", stat: "goldMult", base: 0.12, type: "mult" },
+  { id: "income", name: "War Profiteer", cat: "economy", icon: "💰", desc: "+{val}% Gold (Kills & Income)", stat: "goldBonus", base: 0.12, type: "add" },
 ];
 
 function rollRarity() {
@@ -1130,7 +1130,7 @@ function queueUpgradesAndNextWave() {
     // Formula: effectiveIncome = rawIncome / sqrt(1 + rawIncome / threshold)
     // This means early income is nearly full, but high income grows much slower
     // threshold of 7 means: 10 raw → 6.4 effective, 30 raw → 13, 60 raw → 19.4
-    const goldMult = p.upgrades?.goldMult ?? 1;
+    const goldMult = 1 + (p.upgrades?.goldBonus || 0); // Additive gold bonus
     const rawAttackIncome = p.incomeFromAttacks || 0;
     const INCOME_THRESHOLD = 7; // Diminishing returns kick in early (was 15)
     const effectiveAttackIncome = rawAttackIncome / Math.sqrt(1 + rawAttackIncome / INCOME_THRESHOLD);
@@ -2941,7 +2941,7 @@ function tick() {
               }
               // No gold for attack asteroids OR spawned minions (splitter/carrier)
               else if (!m.attackType && !m.noGold) {
-                const goldMult = owner.upgrades?.goldMult ?? 1;
+                const goldMult = 1 + (owner.upgrades?.goldBonus || 0); // Additive gold bonus
                 const goldReward = m.type === "large" ? 4 : m.type === "medium" ? 2 : 1;
                 owner.gold = (owner.gold || 0) + Math.round(goldReward * goldMult);
               }
@@ -3540,7 +3540,7 @@ function broadcastGameState() {
 	obj.upgrades.slowfield = u.slowfield || 0;
     obj.upgrades.ricochet = u.ricochet || 0;
     obj.upgrades.chainChance = u.chainChance || 0;
-    obj.upgrades.goldMult = u.goldMult || 1;
+    obj.upgrades.goldBonus = u.goldBonus || 0; // Additive gold bonus (0 = no bonus, 0.12 = +12%)
   }
   broadcastState.players.length = playerCount;
   
