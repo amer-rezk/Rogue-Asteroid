@@ -897,6 +897,9 @@ function spawnWave() {
   // NEW: BOSS ROUND CHECK (Every 10 waves)
   if (wave % 10 === 0) {
     const playerCount = lockedSlots.length;
+    // Use same extreme scaling as normal asteroids for consistency
+    const extremeScaleMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
+    
     for (let playerIdx = 0; playerIdx < playerCount; playerIdx++) {
       const playerId = lockedSlots[playerIdx];
       const player = players.get(playerId);
@@ -905,12 +908,14 @@ function spawnWave() {
       const targetSlot = playerIdx;
       const { x0 } = segmentBounds(targetSlot);
       
-      // Boss HP Calculation - wave 10 is baseline, scales harder after
-      // Wave 10: 55 HP, Wave 20: ~135 HP, Wave 30: ~280 HP
-      let bossHp = 25 + (wave * 3);
+      // Boss HP Calculation - base HP that scales with extremeScaleMult
+      // Base: 25 + wave*3 + polynomial, then exponential after wave 20
+      let baseBossHp = 25 + (wave * 3);
       if (wave > 10) {
-        bossHp += Math.floor(Math.pow(wave - 10, 1.5) * 3);
-      } 
+        baseBossHp += Math.floor(Math.pow(wave - 10, 1.5) * 3);
+      }
+      // Apply extreme scaling multiplier (same as normal asteroids)
+      const bossHp = Math.ceil(baseBossHp * extremeScaleMult);
       
       spawnQueue.push({ 
         x: x0 + SEGMENT_W / 2, 
@@ -964,12 +969,13 @@ function spawnWave() {
       if (wave > 10 && Math.random() < 0.05) {
         const x = rand(x0 + 30, x1 - 30);
         const y = rand(-30, -20);
-        // Mini-boss has 20% of what a boss would have at this wave
-        let miniBossHp = 25 + (wave * 3);
+        // Mini-boss has 20% of what a boss would have at this wave (with extremeScaleMult)
+        let baseMiniBossHp = 25 + (wave * 3);
         if (wave > 10) {
-          miniBossHp += Math.floor(Math.pow(wave - 10, 1.5) * 3);
+          baseMiniBossHp += Math.floor(Math.pow(wave - 10, 1.5) * 3);
         }
-        miniBossHp = Math.ceil(miniBossHp * 0.2); // 80% less HP
+        // Apply extreme scaling, then 20% for mini-boss size
+        const miniBossHp = Math.ceil(baseMiniBossHp * extremeScaleMult * 0.2);
         spawnQueue.push({ x, y, type: "miniboss", hp: miniBossHp, targetSlot, attackType: null, isMiniBoss: true });
         continue; // Skip normal asteroid
       }
@@ -1409,16 +1415,20 @@ function applyDeathMod(modId, deadPlayer) {
       
     case "chaosRift":
       // Summon a mini-boss for each living player
+      // Use same extreme scaling as normal asteroids
+      const chaosExtremeMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
       for (let playerIdx = 0; playerIdx < playerCount; playerIdx++) {
         const playerId = lockedSlots[playerIdx];
         const player = players.get(playerId);
         if (!player || player.hp <= 0) continue;
         
         const { x0 } = segmentBounds(playerIdx);
-        let miniBossHp = 15 + (wave * 2);
+        let baseMiniBossHp = 15 + (wave * 2);
         if (wave > 10) {
-          miniBossHp += Math.floor(Math.pow(wave - 10, 1.3) * 2);
+          baseMiniBossHp += Math.floor(Math.pow(wave - 10, 1.3) * 2);
         }
+        // Apply extreme scaling for late game
+        const miniBossHp = Math.ceil(baseMiniBossHp * chaosExtremeMult);
         
         spawnQueue.push({ 
           x: x0 + SEGMENT_W / 2, 
