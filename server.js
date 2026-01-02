@@ -1135,6 +1135,77 @@ function spawnWave() {
 }
 
 // ===== Game phases =====
+let modifierSkips = new Set(); // Track players who skipped the modifier intro
+let modifierStartTimer = null; // Timer for auto-starting after 15 seconds
+
+function actuallyStartGame(solo) {
+  if (phase !== "starting") return; // Already started or cancelled
+  
+  // Clear the timer if it's still running
+  if (modifierStartTimer) {
+    clearTimeout(modifierStartTimer);
+    modifierStartTimer = null;
+  }
+  modifierSkips.clear();
+  
+  phase = "playing";
+  wave = 1;
+
+  upgradePicks = new Map();
+  attackQueue = new Map();
+  pendingUpgrades = new Map();
+  eventQueue = [];
+  
+  // Reset pause state
+  gamePaused = false;
+  pauseCountdown = 0;
+  pausedBy = null;
+
+  for (const id of lockedSlots) {
+    const p = players.get(id);
+    if (p) {
+      p.upgrades = {};
+      p.towers = [null, null, null, null];
+      p.gold = 0;
+      p.cooldown = 0;
+      p.targetX = null;
+      p.targetY = null;
+      p.manualShooting = false;
+      p.turretAngle = -Math.PI / 2;
+      p.score = 0;
+      p.kills = 0;
+      p.damageDealt = 0;
+      p.waveDamage = 0;
+      p.hp = solo ? 10 : BASE_HP_PER_PLAYER;
+      p.maxHp = solo ? 10 : BASE_HP_PER_PLAYER;
+      p.ready = false;
+      p.lastInterest = 0;
+      p.incomeFromAttacks = 0; // Track income from minions
+    }
+  }
+
+  updateSlotSpeedMultipliers();
+  spawnWave();
+  broadcast({ 
+    t: "started", 
+    world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, 
+    wave, 
+    solo: soloMode,
+    gameModifier: activeGameModifier
+  });
+  // Also notify spectators that game started
+  for (const ws of spectators) {
+    safeSend(ws, { 
+      t: "started", 
+      world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, 
+      wave, 
+      solo: soloMode, 
+      isSpectator: true,
+      gameModifier: activeGameModifier
+    });
+  }
+}
+
 function startGame(solo = false) {
   if (phase !== "lobby") return;
 
@@ -1157,6 +1228,7 @@ function startGame(solo = false) {
   
   // Set transitional phase to prevent lobby actions during card reveal
   phase = "starting";
+  modifierSkips.clear();
   
   // Broadcast game modifier card reveal
   broadcast({ 
@@ -1168,7 +1240,9 @@ function startGame(solo = false) {
       color: modifier.color,
       desc: modifier.desc,
       flavor: modifier.flavor
-    }
+    },
+    totalPlayers: lockedSlots.length,
+    skippedCount: 0
   });
   
   // Also notify spectators
@@ -1183,71 +1257,16 @@ function startGame(solo = false) {
         desc: modifier.desc,
         flavor: modifier.flavor
       },
-      isSpectator: true
+      isSpectator: true,
+      totalPlayers: lockedSlots.length,
+      skippedCount: 0
     });
   }
 
-  // Delay game start to allow card animation
-  setTimeout(() => {
-    if (phase !== "starting") return; // Already cancelled or changed
-    
-    phase = "playing";
-    wave = 1;
-
-    upgradePicks = new Map();
-    attackQueue = new Map();
-    pendingUpgrades = new Map();
-    eventQueue = [];
-    
-    // Reset pause state
-    gamePaused = false;
-    pauseCountdown = 0;
-    pausedBy = null;
-
-    for (const id of lockedSlots) {
-      const p = players.get(id);
-      if (p) {
-        p.upgrades = {};
-        p.towers = [null, null, null, null];
-        p.gold = 0;
-        p.cooldown = 0;
-        p.targetX = null;
-        p.targetY = null;
-        p.manualShooting = false;
-        p.turretAngle = -Math.PI / 2;
-        p.score = 0;
-        p.kills = 0;
-        p.damageDealt = 0;
-        p.waveDamage = 0;
-        p.hp = solo ? 10 : BASE_HP_PER_PLAYER;
-        p.maxHp = solo ? 10 : BASE_HP_PER_PLAYER;
-        p.ready = false;
-        p.lastInterest = 0;
-        p.incomeFromAttacks = 0; // Track income from minions
-      }
-    }
-
-    updateSlotSpeedMultipliers();
-    spawnWave();
-    broadcast({ 
-      t: "started", 
-      world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, 
-      wave, 
-      solo: soloMode,
-      gameModifier: activeGameModifier
-    });
-    // Also notify spectators that game started
-    for (const ws of spectators) {
-      safeSend(ws, { 
-        t: "started", 
-        world: { width: worldW, height: WORLD_H, segmentWidth: SEGMENT_W }, 
-        wave, 
-        solo: soloMode, 
-        isSpectator: true,
-        gameModifier: activeGameModifier
-      });
-    }
-  }, 4000); // 4 second delay for card animation
+  // Delay game start to allow card animation (15 seconds, skippable)
+  modifierStartTimer = setTimeout(() => {
+    actuallyStartGame(solo);
+  }, 15000);
 }
 
 function queueUpgradesAndNextWave() {
@@ -1439,6 +1458,11 @@ function resetToLobby() {
     eventQueue = [];
     wave = 0;
     activeGameModifier = null; // Reset game modifier
+    modifierSkips.clear(); // Reset skip tracking
+    if (modifierStartTimer) {
+      clearTimeout(modifierStartTimer);
+      modifierStartTimer = null;
+    }
 
     // Notify spectators that game ended and they should reconnect to join lobby
     for (const ws of spectators) {
@@ -3954,6 +3978,27 @@ wss.on("connection", (ws) => {
       broadcastLobby();
       return;
     }
+    
+    // Skip modifier intro
+    if (msg.t === "skipModifier" && phase === "starting") {
+      if (!modifierSkips.has(id)) {
+        modifierSkips.add(id);
+        
+        // Broadcast updated skip count
+        broadcast({
+          t: "modifierSkipUpdate",
+          skippedCount: modifierSkips.size,
+          totalPlayers: lockedSlots.length
+        });
+        
+        // If all players have skipped, start immediately
+        if (modifierSkips.size >= lockedSlots.length) {
+          actuallyStartGame(soloMode);
+        }
+      }
+      return;
+    }
+    
     if (msg.t === "becomeSpectator" && phase === "lobby") {
       // Player wants to become a spectator, freeing their slot
       const playerWs = p.ws;

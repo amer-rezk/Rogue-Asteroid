@@ -1407,7 +1407,10 @@
         gameModifierCard = {
           modifier: msg.modifier,
           animTime: 0,
-          phase: "entering" // entering -> display -> exiting
+          phase: "entering", // entering -> display -> exiting
+          hasSkipped: false,
+          skippedCount: msg.skippedCount || 0,
+          totalPlayers: msg.totalPlayers || 1
         };
         // Show a transitional screen with the card (same as showGame but different phase)
         menuScreen.style.display = "none";
@@ -1415,6 +1418,14 @@
         gameScreen.style.display = "block";
         resizeCanvas();
         phase = "modifier_reveal";
+        break;
+      
+      case "modifierSkipUpdate":
+        // Update skip count during modifier reveal
+        if (gameModifierCard) {
+          gameModifierCard.skippedCount = msg.skippedCount;
+          gameModifierCard.totalPlayers = msg.totalPlayers;
+        }
         break;
 
       case "started":
@@ -2119,6 +2130,18 @@
     const rect = canvas.getBoundingClientRect();
     const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
     const my = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+    // Handle modifier skip button click
+    if (phase === "modifier_reveal" && gameModifierCard && !gameModifierCard.hasSkipped && !isSpectator) {
+      if (window.modifierSkipBtnBounds) {
+        const btn = window.modifierSkipBtnBounds;
+        if (mx >= btn.x && mx <= btn.x + btn.w && my >= btn.y && my <= btn.y + btn.h) {
+          gameModifierCard.hasSkipped = true;
+          send({ t: "skipModifier" });
+          return;
+        }
+      }
+    }
 
     // Handle music permission popup click (highest priority)
     if (showMusicPermissionPrompt && window.musicPermissionBtnBounds) {
@@ -3175,18 +3198,61 @@
         ctx.fillStyle = "#888";
         ctx.fillText(mod.flavor, canvas.width / 2, cardTopY + 370 * cardScale);
         
-        // "Starting soon..." countdown (server waits 4 seconds total)
+        // Skip button and countdown (server waits 15 seconds total)
         if (card.animTime > enterDuration) {
-          const timeRemaining = 4 - card.animTime; // 4 second total delay
+          const timeRemaining = 15 - card.animTime; // 15 second total delay
           const countdown = Math.ceil(timeRemaining);
-          if (countdown > 0) {
-            ctx.font = `${16 * cardScale}px monospace`;
-            ctx.fillStyle = "#aaa";
-            ctx.fillText(`Game starting in ${countdown}...`, canvas.width / 2, cardTopY + cardH + 30 * cardScale);
-          } else {
-            ctx.font = `${16 * cardScale}px monospace`;
+          
+          // Skip button
+          const skipBtnW = 120;
+          const skipBtnH = 40;
+          const skipBtnX = canvas.width / 2 - skipBtnW / 2;
+          const skipBtnY = cardTopY + cardH + 20;
+          
+          // Store button bounds for click detection
+          window.modifierSkipBtnBounds = { x: skipBtnX, y: skipBtnY, w: skipBtnW, h: skipBtnH };
+          
+          const isHovered = mouseX >= skipBtnX && mouseX <= skipBtnX + skipBtnW &&
+                           mouseY >= skipBtnY && mouseY <= skipBtnY + skipBtnH;
+          
+          if (!card.hasSkipped && !isSpectator) {
+            // Draw skip button
+            ctx.fillStyle = isHovered ? "rgba(100, 200, 100, 0.4)" : "rgba(60, 120, 60, 0.3)";
+            ctx.strokeStyle = isHovered ? "#8f8" : "#6a6";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.roundRect(skipBtnX, skipBtnY, skipBtnW, skipBtnH, 8);
+            ctx.fill();
+            ctx.stroke();
+            
+            ctx.font = "bold 16px monospace";
+            ctx.fillStyle = isHovered ? "#fff" : "#cfc";
+            ctx.fillText("⏩ SKIP", canvas.width / 2, skipBtnY + 26);
+          } else if (card.hasSkipped) {
+            // Show "Skipped" status
+            ctx.font = "bold 14px monospace";
             ctx.fillStyle = "#8f8";
-            ctx.fillText("Starting...", canvas.width / 2, cardTopY + cardH + 30 * cardScale);
+            ctx.fillText("✓ Skipped", canvas.width / 2, skipBtnY + 26);
+          }
+          
+          // Show skip count and countdown
+          const statusY = skipBtnY + skipBtnH + 25;
+          ctx.font = "14px monospace";
+          ctx.fillStyle = "#aaa";
+          
+          if (card.totalPlayers > 1) {
+            ctx.fillText(`${card.skippedCount}/${card.totalPlayers} players ready`, canvas.width / 2, statusY);
+          }
+          
+          // Countdown
+          if (countdown > 0) {
+            ctx.font = "12px monospace";
+            ctx.fillStyle = "#666";
+            ctx.fillText(`Auto-start in ${countdown}s`, canvas.width / 2, statusY + 20);
+          } else {
+            ctx.font = "14px monospace";
+            ctx.fillStyle = "#8f8";
+            ctx.fillText("Starting...", canvas.width / 2, statusY + 20);
           }
         }
         
