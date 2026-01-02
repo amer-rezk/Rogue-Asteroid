@@ -3311,7 +3311,7 @@
       
       // Pause button (in HUD bar)
       if (phase === "playing" && !isSpectator) {
-        const pauseBtnX = 110, pauseBtnY = 10, pauseBtnW = 70, pauseBtnH = 30;
+        const pauseBtnX = 115, pauseBtnY = 11, pauseBtnW = 36, pauseBtnH = 28;
         if (mouseX >= pauseBtnX && mouseX <= pauseBtnX + pauseBtnW && mouseY >= pauseBtnY && mouseY <= pauseBtnY + pauseBtnH) {
           uiHovered = true;
         }
@@ -4444,42 +4444,32 @@
       ctx.fillRect(0, 0, canvas.width, 50);
       drawNeonText(`WAVE ${wave}`, 20, 25, "#ff0", 18, "left");
       
-      // Gravity indicator (shows when > 1.0x)
+      // Gravity indicator (shows when > 1.0x) - below wave text
       const gravityMult = lastSnap.gravityMult || 1;
       if (gravityMult > 1.05) {
-        ctx.font = "12px monospace";
+        ctx.font = "10px monospace";
         ctx.textAlign = "left";
         // Color from green to red based on gravity (1.0 = green, 2.0+ = red)
         const gravityIntensity = Math.min((gravityMult - 1) / 1.0, 1); // 0 to 1
         const r = Math.floor(100 + 155 * gravityIntensity);
         const g = Math.floor(200 * (1 - gravityIntensity));
         ctx.fillStyle = `rgb(${r}, ${g}, 100)`;
-        ctx.fillText(`⬇${gravityMult.toFixed(2)}x`, 20, 42);
-      }
-      
-      // Game modifier indicator (small icon + name)
-      if (activeGameModifier && activeGameModifier.id !== "standard") {
-        const modX = 200;
-        const modY = 25;
-        ctx.font = "14px monospace";
-        ctx.textAlign = "left";
-        ctx.fillStyle = activeGameModifier.color || "#888";
-        ctx.fillText(`${activeGameModifier.icon} ${activeGameModifier.name}`, modX, modY);
+        ctx.fillText(`⬇${gravityMult.toFixed(2)}x`, 22, 42);
       }
       
       // Pause button in HUD bar (for non-spectators)
       if (phase === "playing" && !isSpectator) {
-        const pauseBtnW = 70;
-        const pauseBtnH = 30;
-        const pauseBtnX = 110;
-        const pauseBtnY = 10;
+        const pauseBtnW = 36;
+        const pauseBtnH = 28;
+        const pauseBtnX = 115;
+        const pauseBtnY = 11;
         
         hoveredPauseButton = mouseX >= pauseBtnX && mouseX <= pauseBtnX + pauseBtnW && 
                              mouseY >= pauseBtnY && mouseY <= pauseBtnY + pauseBtnH;
         
         const isPaused = gamePaused || pauseCountdown > 0;
         const btnColor = isPaused ? "#ff6600" : "#555";
-        const btnText = isPaused ? (pauseCountdown > 0 ? `▶ ${Math.ceil(pauseCountdown)}` : "▶ PLAY") : "❚❚";
+        const btnText = isPaused ? (pauseCountdown > 0 ? `▶${Math.ceil(pauseCountdown)}` : "▶") : "❚❚";
         
         ctx.fillStyle = hoveredPauseButton ? (isPaused ? "rgba(255,102,0,0.3)" : "rgba(100,100,100,0.3)") : "rgba(40,40,60,0.5)";
         ctx.strokeStyle = hoveredPauseButton ? (isPaused ? "#ff6600" : "#888") : btnColor;
@@ -4496,6 +4486,16 @@
         ctx.fillText(btnText, pauseBtnX + pauseBtnW / 2, pauseBtnY + pauseBtnH / 2);
         ctx.textBaseline = "alphabetic";
         ctx.textAlign = "left";
+      }
+      
+      // Game modifier indicator (after pause button, on main line)
+      let hudNextX = 160; // After pause button
+      if (activeGameModifier && activeGameModifier.id !== "standard") {
+        ctx.font = "12px monospace";
+        ctx.textAlign = "left";
+        ctx.fillStyle = activeGameModifier.color || "#888";
+        ctx.fillText(`${activeGameModifier.icon} ${activeGameModifier.name}`, hudNextX, 25);
+        hudNextX += ctx.measureText(`${activeGameModifier.icon} ${activeGameModifier.name}`).width + 15;
       }
       
       // Spectator indicator
@@ -4518,17 +4518,19 @@
       
       const myPlayer = lastSnap.players.find(p => p.id === myId);
       if (myPlayer) {
-        // Gold display (moved right to make room for pause button)
-        drawNeonText(`${myPlayer.gold} 🟡`, 200, 25, "#fd0", 18, "left");
+        // Gold display (positioned after modifier or at base position)
+        const goldX = Math.max(hudNextX, 160);
+        drawNeonText(`${myPlayer.gold} 🟡`, goldX, 25, "#fd0", 14, "left");
         // Show last interest gained (if any)
+        const goldWidth = ctx.measureText(`${myPlayer.gold} 🟡`).width;
         if (myPlayer.lastInterest > 0) {
-          ctx.font = "bold 12px 'Courier New', monospace";
+          ctx.font = "bold 10px 'Courier New', monospace";
           ctx.fillStyle = "#0f0";
           ctx.textAlign = "left";
-          ctx.fillText(`+${myPlayer.lastInterest}`, 275, 25);
+          ctx.fillText(`+${myPlayer.lastInterest}`, goldX + goldWidth + 5, 25);
         }
         // Kills further right
-        drawNeonText(`${myPlayer.kills} 💀`, 330, 25, "#f44", 14, "left");
+        drawNeonText(`${myPlayer.kills} 💀`, goldX + goldWidth + 50, 25, "#f44", 14, "left");
       }
       
       // Latency display (top right, before scoreboard)
