@@ -1411,7 +1411,7 @@
         };
         // Show a transitional screen with the card
         lobbyEl.style.display = "none";
-        gameEl.style.display = "block";
+        gameScreen.style.display = "block";
         phase = "modifier_reveal";
         break;
 
