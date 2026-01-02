@@ -51,6 +51,7 @@ const broadcastState = {
   ts: 0,
   phase: "",
   wave: 0,
+  gravityMult: 1, // Per-wave gravity increase
   spectatorCount: 0,
   world: { width: 0, height: WORLD_H, segmentWidth: 0 },
   missiles: [],
@@ -451,6 +452,10 @@ let attackQueue = new Map();
 let pendingUpgrades = new Map();
 let waveClearedTime = 0;
 const WAVE_CLEAR_DELAY = 500;
+
+// Per-wave gravity increase to prevent waves from taking forever
+let waveElapsedTime = 0; // Time since current wave started (in seconds)
+const GRAVITY_INCREASE_RATE = 0.01; // +1% gravity per second (60% per minute)
 
 // Module card selection after boss waves
 let moduleCardPhase = false;
@@ -969,6 +974,7 @@ function spawnWave() {
   gravityWells = [];
   spawnQueue = [];
   spawnTimer = 0;
+  waveElapsedTime = 0; // Reset gravity timer for new wave
 
   // NEW: BOSS ROUND CHECK (Every 10 waves)
   if (wave % 10 === 0) {
@@ -1860,7 +1866,10 @@ function fireWithMultishot(owner, originX, originY, targetX, targetY, isManual =
   // Fire each bullet at a different target (or cycle through if fewer targets)
   for (let i = 0; i < shots; i++) {
     const target = targets[i % targets.length];
-    const speedMult = slotSpeedMultipliers[owner.slot] || 1; // <--- ADDED
+    let speedMult = slotSpeedMultipliers[owner.slot] || 1;
+    // Include gravity increase in prediction
+    const gravityMult = 1 + waveElapsedTime * GRAVITY_INCREASE_RATE;
+    speedMult *= gravityMult;
     const intercept = calculateInterceptPoint(originX, originY, bulletSpeed, target, speedMult);
     
     // Small spread between bullets aimed at same target
@@ -2076,6 +2085,9 @@ function tick() {
       broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: "Speed Demon effect has ended!", timestamp: Date.now() });
     }
     
+    // Track wave elapsed time for gravity increase
+    waveElapsedTime += DT;
+    
     // Module card pick timer
     if (moduleCardPhase) {
       modulePickTimer -= DT;
@@ -2183,7 +2195,10 @@ function tick() {
         mainTarget = findBestTarget(x0, x1, pos.main.x, pos.main.y, 1.0, p.slot);
         if (mainTarget) {
           // Calculate intercept point for turret visual
-          const speedMult = slotSpeedMultipliers[p.slot] || 1; // <--- ADDED
+          let speedMult = slotSpeedMultipliers[p.slot] || 1;
+          // Include gravity increase in prediction
+          const gravityMult = 1 + waveElapsedTime * GRAVITY_INCREASE_RATE;
+          speedMult *= gravityMult;
           const intercept = calculateInterceptPoint(pos.main.x, pos.main.y, bulletSpeed, mainTarget, speedMult);
           clamped = clampAimAngle(pos.main.x, pos.main.y, intercept.x, intercept.y);
         } else {
@@ -2220,7 +2235,10 @@ function tick() {
             const towerBulletSpeed = BULLET_SPEED * (1 + ((u.bulletSpeedMult ?? 1) - 1) * 0.5) * (stats.bulletType === "sniper" ? 1.5 : 1);
             
             // Calculate intercept point for tower
-            const speedMult = slotSpeedMultipliers[p.slot] || 1;
+            let speedMult = slotSpeedMultipliers[p.slot] || 1;
+            // Include gravity increase in prediction
+            const gravityMult = 1 + waveElapsedTime * GRAVITY_INCREASE_RATE;
+            speedMult *= gravityMult;
             const intercept = calculateInterceptPoint(towerPos.x, towerPos.y, towerBulletSpeed, target, speedMult);
             const aim = clampAimAngle(towerPos.x, towerPos.y, intercept.x, intercept.y);
             tower.angle = aim.angle;
@@ -2338,6 +2356,11 @@ function tick() {
       if (activeDeathMods.speedDemon.active) {
         speedMult *= 1.5;
       }
+      
+      // Per-wave gravity increase: +1% per second to prevent infinite waves
+      // This stacks multiplicatively with slow effects (slow still works proportionally)
+      const gravityMult = 1 + waveElapsedTime * GRAVITY_INCREASE_RATE;
+      speedMult *= gravityMult;
       
       // Track alive time for elusiveness modifier
       m.aliveTime = (m.aliveTime || 0) + DT;
@@ -2914,7 +2937,10 @@ function tick() {
               if (bulletSpeed < 1) {
                 // Fall through to pierce logic
               } else {
-                const speedMult = slotSpeedMultipliers[b.ownerSlot] || 1;
+                let speedMult = slotSpeedMultipliers[b.ownerSlot] || 1;
+                // Include gravity increase in prediction
+                const gravityMult = 1 + waveElapsedTime * GRAVITY_INCREASE_RATE;
+                speedMult *= gravityMult;
                 const intercept = calculateInterceptPoint(m.x, m.y, bulletSpeed, nearestTarget, speedMult);
                 
                 // Calculate direction to intercept point
@@ -3675,6 +3701,7 @@ function broadcastGameState() {
   broadcastState.ts = Date.now();
   broadcastState.phase = phase;
   broadcastState.wave = wave;
+  broadcastState.gravityMult = 1 + waveElapsedTime * GRAVITY_INCREASE_RATE; // Per-wave gravity increase
   broadcastState.spectatorCount = spectators.size;
   broadcastState.world.width = worldW;
   broadcastState.world.segmentWidth = SEGMENT_W;

@@ -4444,6 +4444,19 @@
       ctx.fillRect(0, 0, canvas.width, 50);
       drawNeonText(`WAVE ${wave}`, 20, 25, "#ff0", 18, "left");
       
+      // Gravity indicator (shows when > 1.0x)
+      const gravityMult = lastSnap.gravityMult || 1;
+      if (gravityMult > 1.05) {
+        ctx.font = "12px monospace";
+        ctx.textAlign = "left";
+        // Color from green to red based on gravity (1.0 = green, 2.0+ = red)
+        const gravityIntensity = Math.min((gravityMult - 1) / 1.0, 1); // 0 to 1
+        const r = Math.floor(100 + 155 * gravityIntensity);
+        const g = Math.floor(200 * (1 - gravityIntensity));
+        ctx.fillStyle = `rgb(${r}, ${g}, 100)`;
+        ctx.fillText(`⬇${gravityMult.toFixed(2)}x`, 20, 42);
+      }
+      
       // Game modifier indicator (small icon + name)
       if (activeGameModifier && activeGameModifier.id !== "standard") {
         const modX = 200;
