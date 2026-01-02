@@ -871,11 +871,15 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
   }
   
   // GAME MODIFIER: Sideswiped - spawn from sides with diagonal trajectory
+  // Exclude: bosses, minibosses, boss ads, miniboss ads, and spawned minions (noGold=true)
   let finalX = x;
   let finalY = y;
   let vx, vy;
   
-  if (activeGameModifier === "sideswiped" && type !== "boss" && type !== "miniboss") {
+  const isBossType = type === "boss" || type === "miniboss" || type === "minibossAd" || bossAdVariant !== null || isMiniBoss;
+  const isSpawnedMinion = noGold === true; // Spawned from carrier, splitter, or boss
+  
+  if (activeGameModifier === "sideswiped" && !isBossType && !isSpawnedMinion) {
     // Spawn from left or right side, in upper 50% of screen
     const { x0, x1 } = segmentBounds(targetSlot);
     const spawnFromLeft = Math.random() < 0.5;
@@ -946,7 +950,8 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
     isMiniBoss: isMiniBossType,
     isMiniBossAd: isMiniBossAd,
     noGold: noGold, // Only spawned minions from splitter/carrier give no gold
-    inFTL: activeGameModifier === "sideswiped" ? false : true, // No FTL entry for sideswiped
+    // No FTL for sideswiped regular asteroids (bosses/spawned minions still use FTL)
+    inFTL: (activeGameModifier === "sideswiped" && !isBossType && !isSpawnedMinion) ? false : true,
     ftlThreshold: ftlThreshold,
     ftlTrail: [],
     gravityExposure: 0, // Track time spent in gravity wells for diminishing returns

@@ -1409,9 +1409,11 @@
           animTime: 0,
           phase: "entering" // entering -> display -> exiting
         };
-        // Show a transitional screen with the card
+        // Show a transitional screen with the card (same as showGame but different phase)
+        menuScreen.style.display = "none";
         lobbyEl.style.display = "none";
         gameScreen.style.display = "block";
+        resizeCanvas();
         phase = "modifier_reveal";
         break;
 
@@ -3071,8 +3073,6 @@
         
         // Animation phases
         const enterDuration = 0.8;
-        const displayDuration = 2.5;
-        const exitDuration = 0.5;
         
         let cardAlpha = 1;
         let cardScale = 1;
@@ -3085,15 +3085,10 @@
           cardY = canvas.height + 150 - (canvas.height / 2 + 150) * easeOut;
           cardScale = 0.5 + 0.5 * easeOut;
           cardAlpha = easeOut;
-        } else if (card.animTime < enterDuration + displayDuration) {
-          // Display: slight floating animation
+        } else {
+          // Display: slight floating animation (stays until game starts)
           const displayT = card.animTime - enterDuration;
           cardY = canvas.height / 2 + Math.sin(displayT * 2) * 5;
-        } else {
-          // Exiting: fade out and scale down
-          const t = (card.animTime - enterDuration - displayDuration) / exitDuration;
-          cardAlpha = 1 - t;
-          cardScale = 1 - t * 0.3;
         }
         
         // Draw dark overlay
@@ -3180,13 +3175,18 @@
         ctx.fillStyle = "#888";
         ctx.fillText(mod.flavor, canvas.width / 2, cardTopY + 370 * cardScale);
         
-        // "Starting soon..." text
+        // "Starting soon..." countdown (server waits 4 seconds total)
         if (card.animTime > enterDuration) {
-          const countdown = Math.ceil(displayDuration - (card.animTime - enterDuration));
+          const timeRemaining = 4 - card.animTime; // 4 second total delay
+          const countdown = Math.ceil(timeRemaining);
           if (countdown > 0) {
             ctx.font = `${16 * cardScale}px monospace`;
             ctx.fillStyle = "#aaa";
             ctx.fillText(`Game starting in ${countdown}...`, canvas.width / 2, cardTopY + cardH + 30 * cardScale);
+          } else {
+            ctx.font = `${16 * cardScale}px monospace`;
+            ctx.fillStyle = "#8f8";
+            ctx.fillText("Starting...", canvas.width / 2, cardTopY + cardH + 30 * cardScale);
           }
         }
         
