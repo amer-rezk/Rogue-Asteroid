@@ -183,13 +183,13 @@ const TOWER_MODULES = {
     desc: "-50% damage, heal 1 HP per 100 damage dealt",
     effect: "lifesteal"
   },
-  matterCompressor: {
-    id: "matterCompressor",
-    name: "Matter Compressor",
-    icon: "🤏",
-    color: "#00ff88",
-    desc: "Shrinks enemies 10% per hit. <5px = instakill",
-    effect: "shrink"
+  feedbackLoop: {
+    id: "feedbackLoop",
+    name: "Feedback Loop",
+    icon: "🔄",
+    color: "#00ffcc",
+    desc: "+15% fire rate per module on this tower",
+    effect: "feedbackLoop"
   },
   chainReaction: {
     id: "chainReaction",
@@ -1316,6 +1316,13 @@ function resetToLobby() {
       p.towers = [null, null, null, null];
       p.gold = 0;
       p.hp = BASE_HP_PER_PLAYER;
+      p.banishedUpgrades = []; // Reset banish for new game
+      p.upgrades = {}; // Reset upgrades too
+      p.inventory = []; // Reset module inventory
+      p.score = 0; // Reset score
+      p.kills = 0; // Reset kills
+      p.spite = 0; // Reset spite
+      p.incomeFromAttacks = 0; // Reset attack income
     });
 
     hostId = players.size ? Array.from(players.keys())[0] : null;
@@ -2056,8 +2063,7 @@ function tick() {
             
             if (tower.cd <= 0) {
               const levelBonus = 1 + (tower.level - 1) * 0.15;
-              const fireRateBonus = ((p.upgrades?.fireRateMult ?? 1) - 1) * 0.5 + 1;
-              tower.cd = stats.cooldown / levelBonus / fireRateBonus;
+              let fireRateBonus = ((p.upgrades?.fireRateMult ?? 1) - 1) * 0.5 + 1;
               
               // Collect active modules on this tower (simple loop instead of filter)
               const activeModules = [];
@@ -2066,6 +2072,14 @@ function tick() {
                   if (tower.modules[mi] !== null) activeModules.push(tower.modules[mi]);
                 }
               }
+              
+              // FEEDBACK LOOP: +15% fire rate per module on this tower
+              if (activeModules.includes("feedbackLoop")) {
+                const moduleCount = activeModules.length;
+                fireRateBonus *= 1 + (moduleCount * 0.15); // +15% per module (including feedbackLoop itself)
+              }
+              
+              tower.cd = stats.cooldown / levelBonus / fireRateBonus;
               
               // COPYCAT MODULE: Becomes an exact 75% copy of main turret
               if (activeModules.includes("copycat")) {
@@ -2647,16 +2661,6 @@ function tick() {
               owner.hp = Math.min(owner.maxHp, owner.hp + heals);
               owner.lifestealAccum = owner.lifestealAccum % 200;
               queueEvent("lifesteal", { slot: owner.slot, amount: heals });
-            }
-          }
-          
-          // Matter Compressor: Shrink enemy
-          // SYNERGY: Shards can shrink multiple enemies, ricochets shrink each target they hit!
-          if (bulletModules.includes("matterCompressor") && m.hp > 0) {
-            m.r *= 0.9; // Shrink 10%
-            if (m.r < 5) {
-              m.hp = 0; // Instakill if too small
-              queueEvent("compressed", { x: m.x, y: m.y });
             }
           }
           
@@ -3941,12 +3945,27 @@ wss.on("connection", (ws) => {
         return;
       }
       
-      // Add to banished list
+      // Add to banished list FIRST
       p.banishedUpgrades.push(defId);
       
       // Generate new options without the banished type
       const current = queue[0];
-      const newOptions = makeUpgradeOptions(p);
+      let newOptions = makeUpgradeOptions(p);
+      
+      // Safety check: filter out any options that somehow still have the banished defId
+      newOptions = newOptions.filter(opt => opt.defId !== defId);
+      
+      // If we filtered out too many (shouldn't happen), regenerate
+      while (newOptions.length < 3) {
+        const extraOpts = makeUpgradeOptions(p);
+        for (const opt of extraOpts) {
+          if (opt.defId !== defId && !newOptions.find(o => o.defId === opt.defId)) {
+            newOptions.push(opt);
+            if (newOptions.length >= 3) break;
+          }
+        }
+      }
+      
       current.options = newOptions;
       
       const rerollCost = getRerollCost(current.rerollCount);

@@ -906,7 +906,7 @@
         case "confettiExplosion":
           // 🎉🎊 CONFETTI PARTY EXPLOSION!!! 🎊🎉
           if (!skipVisualEffects) {
-            const numParticles = 12 + Math.floor(ev.size || 5);
+            const numParticles = 6 + Math.floor((ev.size || 5) / 2); // 50% fewer particles
             for (let i = 0; i < numParticles; i++) {
               const hue = (i / numParticles) * 360; // Rainbow distribution!
               const angle = (i / numParticles) * Math.PI * 2 + Math.random() * 0.5;
@@ -931,8 +931,8 @@
               });
             }
             
-            // Extra sparkle burst
-            for (let i = 0; i < 8; i++) {
+            // Extra sparkle burst (reduced by 50%)
+            for (let i = 0; i < 4; i++) {
               const sparkAngle = Math.random() * Math.PI * 2;
               const sparkDist = 5 + Math.random() * 15;
               clientParticles.push({
