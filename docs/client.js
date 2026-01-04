@@ -1781,6 +1781,17 @@
         wave = msg.wave;
         world = msg.world;
         
+        // Safety: Clear interaction states if player is dead
+        if (msg.players) {
+          const myP = msg.players.find(p => p.id === myId);
+          if (myP && myP.hp <= 0) {
+            // Player is dead - clear any stuck interaction states
+            selectedInventoryIndex = -1;
+            selectedInventoryModule = null;
+            buildMenuOpen = null;
+          }
+        }
+        
         if (msg.spectatorCount !== undefined) spectatorCount = msg.spectatorCount;
         if (msg.moduleCardPhase !== undefined) moduleCardPhase = msg.moduleCardPhase;
         if (msg.modulePickTimer !== undefined) modulePickTimeLeft = msg.modulePickTimer;
@@ -2153,10 +2164,23 @@
     }
 
     // 1. Handle Inventory Clicks (Select Module)
-    if (window.invBounds && lastSnap) {
-      const myP = lastSnap.players.find(p => p.id === myId);
+    // Safety: Only process if player is alive and has inventory visible
+    const myP = lastSnap ? lastSnap.players.find(p => p.id === myId) : null;
+    const playerAlive = myP && myP.hp > 0;
+    const hasInventory = myP && myP.inventory && myP.inventory.length > 0;
+    
+    // Clear selection if player died or no longer has inventory
+    if (selectedInventoryIndex !== -1 && (!playerAlive || !hasInventory)) {
+      selectedInventoryIndex = -1;
+    }
+    if (selectedInventoryModule && !playerAlive) {
+      selectedInventoryModule = null;
+    }
+    
+    if (window.invBounds && window.invBounds.length > 0 && lastSnap && playerAlive && hasInventory) {
       for (let i = 0; i < window.invBounds.length; i++) {
         const b = window.invBounds[i];
+        if (!b) continue; // Safety check
         if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
           // Toggle selection - if already selected, deselect
           if (selectedInventoryIndex === i) {
@@ -2193,7 +2217,7 @@
     }
 
     // 2. Handle Module Slot Popup Clicks (when module selected)
-    if (selectedInventoryIndex !== -1 && window.moduleSlotPopups && window.moduleSlotPopups.length > 0) {
+    if (selectedInventoryIndex !== -1 && playerAlive && window.moduleSlotPopups && window.moduleSlotPopups.length > 0) {
       for (const slot of window.moduleSlotPopups) {
         if (mx >= slot.x && mx <= slot.x + slot.w && my >= slot.y && my <= slot.y + slot.h) {
           // Slot the module!
@@ -2210,8 +2234,8 @@
     }
 
     // 3. Handle Tower Clicks (Drop Module) - when module is selected (fallback for clicking tower directly)
-    if (selectedInventoryIndex !== -1 && lastSnap && !buildMenuOpen) {
-      const myP = lastSnap.players.find(p => p.id === myId);
+    // Note: selectedInventoryIndex should already be cleared if player is dead (from check above)
+    if (selectedInventoryIndex !== -1 && lastSnap && !buildMenuOpen && playerAlive) {
       if (myP) {
         // Get scale to convert world to screen coords
         const sw = canvas.width;
@@ -2620,7 +2644,8 @@
       const { sx, sy, offsetX, offsetY } = getScale();
       const me = lastSnap.players.find(p => p.id === myId);
 
-      if (me && me.towers) {
+      // Only allow tower interaction if player is alive
+      if (me && me.hp > 0 && me.towers) {
         const segX0 = me.slot * world.segmentWidth;
         const cx = (segX0 + world.segmentWidth / 2) * sx + offsetX;
         const cy = 560 * sy + offsetY;
