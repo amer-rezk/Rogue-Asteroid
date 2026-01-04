@@ -3487,9 +3487,16 @@ function tick() {
             const exposureThreshold = 1.0; // Seconds before diminishing kicks in hard
             const diminishFactor = 1 / Math.sqrt(1 + m.gravityExposure / exposureThreshold);
             
-            const pullStrength = (well.strength / dist) * DT * diminishFactor;
-            m.x += (dx / dist) * pullStrength;
-            m.y += (dy / dist) * pullStrength;
+            // FIX: Apply pull to VELOCITY instead of position
+            // This makes gravity wells actually slow down fast-moving asteroids (like sideswiped)
+            const pullAccel = (well.strength / dist) * diminishFactor * 2; // Acceleration toward well center
+            m.vx += (dx / dist) * pullAccel * DT;
+            m.vy += (dy / dist) * pullAccel * DT;
+            
+            // Also apply a small direct position pull for immediate visual feedback
+            const posPull = (well.strength / dist) * DT * diminishFactor * 0.3;
+            m.x += (dx / dist) * posPull;
+            m.y += (dy / dist) * posPull;
             
             // Track exposure time
             m.gravityExposure += DT;
