@@ -216,10 +216,10 @@
   // Battleship turret positions (relative to center, normalized to ship size 240x330)
   // These match the 4 red dots on the ship sprite
   const BATTLESHIP_TURRET_OFFSETS = [
-    { x: -65, y: -45 },   // Top-left
-    { x: 65, y: -45 },    // Top-right  
-    { x: -90, y: 60 },    // Bottom-left
-    { x: 90, y: 60 }      // Bottom-right
+    { x: -65, y: -50 },   // Top-left red dot
+    { x: 65, y: -50 },    // Top-right red dot
+    { x: -85, y: 30 },    // Bottom-left red dot
+    { x: 85, y: 30 }      // Bottom-right red dot
   ];
 
   // ===== Main Turret Sprites =====
@@ -1029,19 +1029,35 @@
               y: ev.y,
               vx: ev.vx,
               vy: ev.vy,
-              life: 5.0
+              life: 2.0
             });
           }
           break;
         
+        case "bulletDestroyed":
+          // Visual effect when battleship bullet destroys a player bullet
+          if (!skipVisualEffects) {
+            // Spark burst effect
+            for (let i = 0; i < 6; i++) {
+              const angle = (i / 6) * Math.PI * 2;
+              clientParticles.push({
+                x: ev.x,
+                y: ev.y,
+                vx: Math.cos(angle) * 60 + (Math.random() - 0.5) * 30,
+                vy: Math.sin(angle) * 60 + (Math.random() - 0.5) * 30,
+                life: 0.3 + Math.random() * 0.2,
+                maxLife: 0.5,
+                color: '#ffaa44',
+                size: 2 + Math.random() * 2
+              });
+            }
+          }
+          break;
+        
         case "battleshipHit":
-          // Visual effect when battleship bullet hits player
+          // Visual effect when battleship bullet hits player (no longer used but kept for safety)
           if (!skipVisualEffects) {
             createClientParticle(ev.x, ev.y, "#ff0000", 8, 1.2);
-            // Screen shake for the affected player
-            if (ev.slot === mySlot) {
-              screenShake = Math.min((screenShake || 0) + 3, 10);
-            }
           }
           break;
           
@@ -4028,26 +4044,29 @@
           const imagesReady = hullImg.complete && hullImg.naturalWidth > 0;
           
           if (imagesReady) {
-            // Calculate scale based on radius (ship is 240x330, we want it to fit radius)
-            const shipScale = (r * 2.2) / 240; // Scale to fit the radius
+            // Calculate scale based on radius (ship is 240x330, 50% smaller than before)
+            const shipScale = (r * 1.1) / 240; // 50% smaller (was 2.2, now 1.1)
             
-            // FTL effect for battleship
+            // FTL effect for battleship - blurry and stretched
             if (m.inFTL) {
               // Draw FTL streaks
-              ctx.strokeStyle = "rgba(100, 180, 255, 0.6)";
-              ctx.lineWidth = 3;
-              const streakLength = 120 * sy;
-              for (let i = 0; i < 6; i++) {
-                const offsetX = (i - 2.5) * 20 * shipScale;
+              ctx.strokeStyle = "rgba(100, 180, 255, 0.7)";
+              ctx.lineWidth = 4;
+              const streakLength = 150 * sy;
+              for (let i = 0; i < 8; i++) {
+                const offsetX = (i - 3.5) * 15 * shipScale;
                 ctx.beginPath();
                 ctx.moveTo(offsetX, -streakLength);
                 ctx.lineTo(offsetX, 0);
                 ctx.stroke();
               }
               
+              // Apply blur filter for FTL (creates motion blur effect)
+              ctx.filter = 'blur(4px)';
+              
               // Draw stretched ship
-              ctx.scale(1, 1.5);
-              ctx.globalAlpha = 0.8;
+              ctx.scale(1, 2.0); // More stretched
+              ctx.globalAlpha = 0.6; // More transparent
             }
             
             // Draw flames (flickering between frame 1 and 2)
@@ -4064,7 +4083,12 @@
             const hullH = 330 * shipScale;
             ctx.drawImage(hullImg, -hullW/2, -hullH/2, hullW, hullH);
             
-            // Draw turrets
+            // Reset filter after FTL ship drawing
+            if (m.inFTL) {
+              ctx.filter = 'none';
+            }
+            
+            // Draw turrets (only when not in FTL)
             if (turretImg.complete && turretImg.naturalWidth > 0 && !m.inFTL) {
               const turretAngles = m.turretAngles || cached?.turretAngles || [Math.PI/2, Math.PI/2, Math.PI/2, Math.PI/2];
               const turretOffsets = BATTLESHIP_TURRET_OFFSETS;
@@ -4079,7 +4103,7 @@
                 ctx.rotate(turretAngles[t] - Math.PI/2); // Adjust for turret sprite orientation
                 
                 // Draw turret (35x46 original size)
-                const turretScale = shipScale * 1.2;
+                const turretScale = shipScale * 1.0;
                 const tw = 35 * turretScale;
                 const th = 46 * turretScale;
                 ctx.drawImage(turretImg, -tw/2, -th/2, tw, th);

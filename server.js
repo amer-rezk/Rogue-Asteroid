@@ -121,17 +121,18 @@ const BATTLESHIP_CONFIG = {
   baseHp: 20,
   hpPerWave: 3,
   speed: 0.25, // Slow moving
-  size: 45, // Radius for collision
+  size: 28, // Radius for collision (was 45, now ~50% smaller)
   turretCount: 4,
   turretCooldown: 1.5, // Seconds between shots
-  turretDamage: 2, // Damage per turret shot
-  bulletSpeed: 120,
+  turretDamage: 0, // Turrets don't deal damage, they destroy bullets
+  bulletSpeed: 150, // Faster bullets for intercepting
+  bulletLifespan: 2.0, // Shorter lifespan
   // Turret positions relative to center (normalized, will be scaled by size)
   turretOffsets: [
-    { x: -0.54, y: -0.27 },  // Top-left
-    { x: 0.54, y: -0.27 },   // Top-right
-    { x: -0.75, y: 0.36 },   // Bottom-left
-    { x: 0.75, y: 0.36 }     // Bottom-right
+    { x: -0.54, y: -0.30 },  // Top-left red dot
+    { x: 0.54, y: -0.30 },   // Top-right red dot
+    { x: -0.71, y: 0.18 },   // Bottom-left red dot
+    { x: 0.71, y: 0.18 }     // Bottom-right red dot
   ]
 };
 
@@ -1099,9 +1100,9 @@ function createBattleship(x, y, targetSlot) {
     // Turret state
     turretAngles,
     turretCooldowns,
-    // Movement
+    // Movement - faster FTL exit
     inFTL: true,
-    ftlThreshold: GROUND_Y * 0.15,
+    ftlThreshold: GROUND_Y * 0.25, // Exit FTL earlier (was 0.15)
     // No gold for now (or add gold reward)
     noGold: false
   };
@@ -3226,102 +3227,113 @@ function tick() {
       if (m.isBattleship && !m.inFTL && !m.dead) {
         const config = BATTLESHIP_CONFIG;
         const targetSlot = m.targetSlot;
-        const playerId = lockedSlots[targetSlot];
-        const targetPlayer = playerId ? players.get(playerId) : null;
         
-        if (targetPlayer && targetPlayer.hp > 0) {
-          // Find the player's main turret position to aim at
-          const playerCenterX = targetSlot * SEGMENT_W + SEGMENT_W / 2;
-          const playerCenterY = GROUND_Y;
+        // Find nearest player bullet to aim at
+        let nearestBullet = null;
+        let nearestDist = Infinity;
+        
+        for (const b of bullets) {
+          // Only target bullets in this battleship's lane
+          if (b.ownerSlot !== targetSlot) continue;
+          const dx = b.x - m.x;
+          const dy = b.y - m.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < nearestDist && dist < 300) { // Only target bullets within range
+            nearestDist = dist;
+            nearestBullet = b;
+          }
+        }
+        
+        // Update each turret
+        for (let t = 0; t < 4; t++) {
+          // Calculate turret world position
+          const offset = config.turretOffsets[t];
+          const turretX = m.x + offset.x * m.r * 2.2; // Scale with ship size
+          const turretY = m.y + offset.y * m.r * 2.2;
           
-          // Update each turret
-          for (let t = 0; t < 4; t++) {
-            // Calculate turret world position
-            const offset = config.turretOffsets[t];
-            const turretX = m.x + offset.x * m.r;
-            const turretY = m.y + offset.y * m.r;
-            
-            // Calculate angle to player
-            const dx = playerCenterX - turretX;
-            const dy = playerCenterY - turretY;
-            const targetAngle = Math.atan2(dy, dx);
-            
-            // Smoothly rotate turret towards target
-            let currentAngle = m.turretAngles[t];
-            let angleDiff = targetAngle - currentAngle;
-            // Normalize angle difference
-            while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-            while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-            // Rotate at 2 radians per second
-            const rotateSpeed = 2.0;
-            if (Math.abs(angleDiff) < rotateSpeed * DT) {
-              m.turretAngles[t] = targetAngle;
-            } else {
-              m.turretAngles[t] += Math.sign(angleDiff) * rotateSpeed * DT;
-            }
-            
-            // Update cooldown and fire
-            m.turretCooldowns[t] -= DT;
-            if (m.turretCooldowns[t] <= 0) {
-              m.turretCooldowns[t] = config.turretCooldown;
-              
-              // Fire a bullet towards player
-              const bulletAngle = m.turretAngles[t];
-              const bulletSpeed = config.bulletSpeed;
-              
-              // Create enemy bullet (reuse bullet system but mark as enemy)
-              queueEvent("battleshipShot", {
-                x: turretX,
-                y: turretY,
-                vx: Math.cos(bulletAngle) * bulletSpeed,
-                vy: Math.sin(bulletAngle) * bulletSpeed,
-                damage: config.turretDamage,
-                targetSlot: targetSlot,
-                shipId: m.id,
-                turretIndex: t
-              });
-              
-              // Add to enemy bullets array (we'll need to track these)
-              if (!m.enemyBullets) m.enemyBullets = [];
-              m.enemyBullets.push({
-                id: uid(),
-                x: turretX,
-                y: turretY,
-                vx: Math.cos(bulletAngle) * bulletSpeed,
-                vy: Math.sin(bulletAngle) * bulletSpeed,
-                damage: config.turretDamage,
-                targetSlot: targetSlot,
-                life: 5.0 // 5 second lifespan
-              });
-            }
+          // Calculate angle to nearest bullet (or default to pointing down)
+          let targetAngle = Math.PI / 2; // Default: point down
+          if (nearestBullet) {
+            const dx = nearestBullet.x - turretX;
+            const dy = nearestBullet.y - turretY;
+            targetAngle = Math.atan2(dy, dx);
           }
           
-          // Update enemy bullets
-          if (m.enemyBullets) {
-            for (let bi = m.enemyBullets.length - 1; bi >= 0; bi--) {
-              const eb = m.enemyBullets[bi];
-              eb.x += eb.vx * DT;
-              eb.y += eb.vy * DT;
-              eb.life -= DT;
+          // Smoothly rotate turret towards target
+          let currentAngle = m.turretAngles[t];
+          let angleDiff = targetAngle - currentAngle;
+          // Normalize angle difference
+          while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+          while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+          // Rotate at 3 radians per second (faster tracking)
+          const rotateSpeed = 3.0;
+          if (Math.abs(angleDiff) < rotateSpeed * DT) {
+            m.turretAngles[t] = targetAngle;
+          } else {
+            m.turretAngles[t] += Math.sign(angleDiff) * rotateSpeed * DT;
+          }
+          
+          // Update cooldown and fire
+          m.turretCooldowns[t] -= DT;
+          if (m.turretCooldowns[t] <= 0 && nearestBullet) {
+            m.turretCooldowns[t] = config.turretCooldown;
+            
+            // Fire a bullet towards the player bullet
+            const bulletAngle = m.turretAngles[t];
+            const bulletSpeed = config.bulletSpeed;
+            
+            // Create enemy bullet event for visuals
+            queueEvent("battleshipShot", {
+              x: turretX,
+              y: turretY,
+              vx: Math.cos(bulletAngle) * bulletSpeed,
+              vy: Math.sin(bulletAngle) * bulletSpeed,
+              shipId: m.id,
+              turretIndex: t
+            });
+            
+            // Add to enemy bullets array - these destroy player bullets
+            if (!m.enemyBullets) m.enemyBullets = [];
+            m.enemyBullets.push({
+              id: uid(),
+              x: turretX,
+              y: turretY,
+              vx: Math.cos(bulletAngle) * bulletSpeed,
+              vy: Math.sin(bulletAngle) * bulletSpeed,
+              r: 6, // Collision radius
+              life: config.bulletLifespan
+            });
+          }
+        }
+        
+        // Update enemy bullets - check collision with player bullets
+        if (m.enemyBullets) {
+          for (let bi = m.enemyBullets.length - 1; bi >= 0; bi--) {
+            const eb = m.enemyBullets[bi];
+            eb.x += eb.vx * DT;
+            eb.y += eb.vy * DT;
+            eb.life -= DT;
+            
+            // Check collision with player bullets
+            for (let pi = bullets.length - 1; pi >= 0; pi--) {
+              const pb = bullets[pi];
+              const dx = eb.x - pb.x;
+              const dy = eb.y - pb.y;
+              const dist = Math.sqrt(dx * dx + dy * dy);
               
-              // Check if bullet hit player's base
-              if (eb.y >= GROUND_Y - 10) {
-                const hitSlot = Math.floor(eb.x / SEGMENT_W);
-                if (hitSlot === eb.targetSlot && isSlotAlive(hitSlot)) {
-                  const hitPlayerId = lockedSlots[hitSlot];
-                  const hitPlayer = players.get(hitPlayerId);
-                  if (hitPlayer && hitPlayer.hp > 0) {
-                    hitPlayer.hp -= eb.damage;
-                    if (hitPlayer.hp < 0) hitPlayer.hp = 0;
-                    queueEvent("battleshipHit", { x: eb.x, y: eb.y, damage: eb.damage, slot: hitSlot });
-                  }
-                }
+              if (dist < eb.r + 4) { // 4 = approximate player bullet radius
+                // Destroy both bullets
+                bullets.splice(pi, 1);
                 m.enemyBullets.splice(bi, 1);
-                continue;
+                queueEvent("bulletDestroyed", { x: eb.x, y: eb.y });
+                break;
               }
-              
-              // Remove if expired or off screen
-              if (eb.life <= 0 || eb.y > WORLD_H + 50 || eb.x < -50 || eb.x > worldW + 50) {
+            }
+            
+            // Remove if expired or off screen
+            if (bi < m.enemyBullets.length) {
+              const ebCheck = m.enemyBullets[bi];
+              if (ebCheck && (ebCheck.life <= 0 || ebCheck.y > WORLD_H + 50 || ebCheck.y < -50 || ebCheck.x < -50 || ebCheck.x > worldW + 50)) {
                 m.enemyBullets.splice(bi, 1);
               }
             }
