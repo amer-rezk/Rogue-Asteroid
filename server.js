@@ -584,8 +584,10 @@ function addChatMessage(fromName, text) {
 }
 
 // ===== Utilities =====
+// PERF: Use incrementing counter instead of expensive string operations
+let uidCounter = 0;
 function uid() {
-  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(2);
+  return (++uidCounter).toString(36);
 }
 function clamp(v, a, b) {
   return Math.max(a, Math.min(b, v));
@@ -626,8 +628,10 @@ function broadcastLobby() {
 const spectators = new Set();
 
 // OPTIMIZED: Queue an event for client-side visual effects
+// PERF: Directly assign type property instead of spread operator
 function queueEvent(type, data) {
-  eventQueue.push({ t: type, ...data });
+  data.t = type;
+  eventQueue.push(data);
 }
 
 function getActivePlayerIds() {
@@ -744,18 +748,27 @@ function redistributeAsteroids(deadSlot) {
   }
 }
 
+// PERF: Pre-compute turret positions for all 4 slots (they never change during gameplay)
+const TURRET_POSITIONS_CACHE = [];
+function initTurretPositionsCache() {
+  for (let slot = 0; slot < 4; slot++) {
+    const bounds = SEGMENT_BOUNDS[slot] || { x0: slot * SEGMENT_W, x1: (slot + 1) * SEGMENT_W };
+    const cx = bounds.x0 + SEGMENT_W / 2;
+    TURRET_POSITIONS_CACHE[slot] = {
+      main: { x: cx, y: GROUND_Y },
+      slots: [
+        { x: cx - 110, y: GROUND_Y },
+        { x: cx - 50, y: GROUND_Y },
+        { x: cx + 50, y: GROUND_Y },
+        { x: cx + 110, y: GROUND_Y }
+      ]
+    };
+  }
+}
+initTurretPositionsCache();
+
 function turretPositions(slot) {
-  const { x0 } = segmentBounds(slot);
-  const cx = x0 + SEGMENT_W / 2;
-  return {
-    main: { x: cx, y: GROUND_Y },
-    slots: [
-      { x: cx - 110, y: GROUND_Y },
-      { x: cx - 50, y: GROUND_Y },
-      { x: cx + 50, y: GROUND_Y },
-      { x: cx + 110, y: GROUND_Y }
-    ]
-  };
+  return TURRET_POSITIONS_CACHE[slot] || TURRET_POSITIONS_CACHE[0];
 }
 
 function lobbySnapshot() {
@@ -1577,21 +1590,29 @@ function resetToLobby() {
 }
 
 function checkGameOver() {
-  const alivePlayers = lockedSlots.filter(id => {
+  // PERF: Count alive players without creating an array
+  let aliveCount = 0;
+  let lastAliveId = null;
+  
+  for (let i = 0; i < lockedSlots.length; i++) {
+    const id = lockedSlots[i];
     const p = players.get(id);
-    return p && p.hp > 0;
-  });
+    if (p && p.hp > 0) {
+      aliveCount++;
+      lastAliveId = id;
+    }
+  }
 
   if (soloMode || lockedSlots.length === 1) {
-    if (alivePlayers.length === 0) {
+    if (aliveCount === 0) {
       endGame(null);
       return true;
     }
     return false;
   }
 
-  if (alivePlayers.length <= 1) {
-    endGame(alivePlayers[0] || null);
+  if (aliveCount <= 1) {
+    endGame(lastAliveId);
     return true;
   }
   return false;
@@ -1970,7 +1991,8 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
 
   let dx = targetX - originX;
   let dy = targetY - originY;
-  let len = Math.hypot(dx, dy) || 1;
+  // PERF: Use sqrt instead of hypot
+  let len = Math.sqrt(dx * dx + dy * dy) || 1;
 
   if (angleOffset !== 0) {
     const angle = Math.atan2(dy, dx) + angleOffset;
@@ -2027,6 +2049,8 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
   if (bulletSpawnEventCount < maxBulletEvents) {
     bulletSpawnEventCount++;
     // Emit spawn event for immediate client prediction
+    // PERF: Check modules.length before includes()
+    const hasBoomerang = modules && modules.length > 0 && modules.includes("temporalBoomerang");
     eventQueue.push({
       t: "bulletSpawn",
       id: bullet.id,
@@ -2045,7 +2069,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
       isHoming: bullet.isHoming, // For homing missile rendering
       targetId: bullet.targetId, // Target asteroid ID for homing
       // OPTIMIZED: Send a simple flag instead of the full list to prevent LAG
-      isBoomerang: bullet.modules && bullet.modules.includes("temporalBoomerang"),
+      isBoomerang: hasBoomerang,
     });
   }
   // If throttled, bullet still exists on server - client just won't see it immediately
@@ -2060,7 +2084,8 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
   // Calculate initial beam direction
   const dx = targetX - originX;
   const dy = targetY - originY;
-  const dist = Math.hypot(dx, dy);
+  // PERF: Use sqrt instead of hypot
+  const dist = Math.sqrt(dx * dx + dy * dy);
   if (dist < 1) return;
   
   let dirX = dx / dist;
@@ -2229,8 +2254,10 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
     for (const seg of beamSegments) {
       const segDx = seg.x2 - seg.x1;
       const segDy = seg.y2 - seg.y1;
-      const segLen = Math.hypot(segDx, segDy);
-      if (segLen < 1) continue;
+      // PERF: Use sqrt instead of hypot
+      const segLenSq = segDx * segDx + segDy * segDy;
+      if (segLenSq < 1) continue;
+      const segLen = Math.sqrt(segLenSq);
       
       const segDirX = segDx / segLen;
       const segDirY = segDy / segLen;
@@ -2247,20 +2274,24 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
       const closestX = seg.x1 + segDirX * projection;
       const closestY = seg.y1 + segDirY * projection;
       
-      // Distance from asteroid to beam
-      const distToBeam = Math.hypot(m.x - closestX, m.y - closestY);
+      // Distance from asteroid to beam - PERF: use squared distance first
+      const dbX = m.x - closestX;
+      const dbY = m.y - closestY;
+      const distToBeamSq = dbX * dbX + dbY * dbY;
+      const hitRadius = beamWidth + m.r;
       
-      if (distToBeam <= beamWidth + m.r) {
+      if (distToBeamSq <= hitRadius * hitRadius) {
         hitEnemiesSet.add(m.id);
-        hitEnemies.push({ missile: m });
+        hitEnemies.push(m); // PERF: Just push the missile, not a wrapper object
         break; // Don't check more segments for this enemy
       }
     }
   }
   
   // Apply damage to all hit enemies
-  for (const hit of hitEnemies) {
-    const m = hit.missile;
+  // PERF: hitEnemies now contains missiles directly, not wrapper objects
+  for (let hi = 0; hi < hitEnemies.length; hi++) {
+    const m = hitEnemies[hi];
     
     // Apply on-hit damage modifiers (Executioner's Sight)
     // Note: Railgun doesn't track distance, so no Momentum Lens
@@ -2553,7 +2584,8 @@ function clampAimAngle(turretX, turretY, targetX, targetY) {
   const fromVertical = angle - (-Math.PI / 2);
   const clampedFromVertical = clamp(fromVertical, -MAX_AIM_ANGLE, MAX_AIM_ANGLE);
   const clampedAngle = -Math.PI / 2 + clampedFromVertical;
-  const dist = Math.hypot(dx, dy);
+  // PERF: Use sqrt of squared instead of hypot
+  const dist = Math.sqrt(dx * dx + dy * dy);
   return {
     x: turretX + Math.cos(clampedAngle) * dist,
     y: turretY + Math.sin(clampedAngle) * dist,
@@ -2720,7 +2752,10 @@ function tick() {
     }
 
     // Player shooting
-    for (const id of lockedSlots) {
+    // PERF: Traditional for loop
+    const lockedLen = lockedSlots.length;
+    for (let pi = 0; pi < lockedLen; pi++) {
+      const id = lockedSlots[pi];
       const p = players.get(id);
       if (!p || p.hp <= 0) continue;
 
@@ -2974,7 +3009,10 @@ function tick() {
     }
 
     // Update missiles
-    for (const m of missiles) {
+    // PERF: Use traditional for loop instead of for...of for better performance
+    const missileLen = missiles.length;
+    for (let mi = 0; mi < missileLen; mi++) {
+      const m = missiles[mi];
       if (m.phaseTimer !== null) {
         m.phaseTimer += DT;
         m.isPhased = Math.sin(m.phaseTimer * 4) > 0.5;
@@ -3091,12 +3129,13 @@ function tick() {
       bounceOffWalls(m);
       
       // Shield sphere collision check (dome above ground)
-      if (!m.dead && m.targetSlot !== undefined) {
+      // PERF: Direct slot lookup instead of iterating all players
+      if (!m.dead && m.targetSlot !== undefined && m.targetSlot >= 0 && m.targetSlot < lockedSlots.length) {
         const targetSlot = m.targetSlot;
-        for (const id of lockedSlots) {
-          const p = players.get(id);
-          if (!p || p.slot !== targetSlot || !p.upgrades?.shieldActive || p.upgrades.shieldActive <= 0) continue;
-          
+        const playerId = lockedSlots[targetSlot];
+        const p = playerId ? players.get(playerId) : null;
+        
+        if (p && p.upgrades?.shieldActive > 0) {
           // Shield dome center is at bottom center of segment
           const shieldCenterX = targetSlot * SEGMENT_W + SEGMENT_W / 2;
           const shieldCenterY = GROUND_Y;
@@ -3132,7 +3171,6 @@ function tick() {
             // Visual explosion
             createExplosion(m.x, m.y, 40, PLAYER_COLORS[targetSlot]?.main || "#0ff");
             queueEvent("shieldHit", { x: m.x, y: m.y, slot: targetSlot });
-            break;
           }
         }
       }
@@ -3150,75 +3188,67 @@ function tick() {
           } 
           // Boss deals 10 damage, reduced by shield
           else if (m.type === "boss") {
-            for (const id of lockedSlots) {
-              const p = players.get(id);
-              if (p && p.slot === targetSlot) {
-                let bossDamage = 10;
-                const shieldCount = p.upgrades?.shieldActive || 0;
+            // PERF: Direct slot lookup instead of iterating
+            const playerId = lockedSlots[targetSlot];
+            const p = playerId ? players.get(playerId) : null;
+            if (p) {
+              let bossDamage = 10;
+              const shieldCount = p.upgrades?.shieldActive || 0;
+              
+              // Shield reduces boss damage (each shield absorbs 1 damage)
+              if (shieldCount > 0) {
+                const absorbed = Math.min(shieldCount, bossDamage);
+                p.upgrades.shieldActive -= absorbed;
+                bossDamage -= absorbed;
+                createExplosion(m.x, GROUND_Y - 5, 40, "#0ff");
+              }
+              
+              if (bossDamage > 0) {
+                const wasAlive = p.hp > 0;
+                p.hp = Math.max(0, p.hp - bossDamage);
+                createExplosion(m.x, GROUND_Y - 5, 60, "#ff0000");
                 
-                // Shield reduces boss damage (each shield absorbs 1 damage)
-                if (shieldCount > 0) {
-                  const absorbed = Math.min(shieldCount, bossDamage);
-                  p.upgrades.shieldActive -= absorbed;
-                  bossDamage -= absorbed;
-                  createExplosion(m.x, GROUND_Y - 5, 40, "#0ff");
-                }
+                // Track that this player got hit by boss (last pick priority)
+                bossHitPlayers.add(p.id);
                 
-                if (bossDamage > 0) {
-                  const wasAlive = p.hp > 0;
-                  p.hp = Math.max(0, p.hp - bossDamage);
-                  createExplosion(m.x, GROUND_Y - 5, 60, "#ff0000");
-                  
-                  // Track that this player got hit by boss (last pick priority)
-                  bossHitPlayers.add(p.id);
-                  
-                  if (wasAlive && p.hp <= 0) {
-                    p.spite = 0; // Reset spite on death - starts accumulating next wave
-                    redistributeAsteroids(targetSlot);
-                  }
+                if (wasAlive && p.hp <= 0) {
+                  p.spite = 0; // Reset spite on death - starts accumulating next wave
+                  redistributeAsteroids(targetSlot);
                 }
-                break;
               }
             }
           }
           // Normal asteroids deal 1 damage, shield blocks entirely
           else {
+            // PERF: Direct slot lookup instead of iterating
+            const playerId = lockedSlots[targetSlot];
+            const p = playerId ? players.get(playerId) : null;
             let blocked = false;
-            for (const id of lockedSlots) {
-              const p = players.get(id);
-              if (!p?.upgrades?.shieldActive || p.slot !== targetSlot) continue;
-              if (p.upgrades.shieldActive > 0) {
-                p.upgrades.shieldActive--;
-                blocked = true;
-                createExplosion(m.x, GROUND_Y - 5, 30, "#0ff");
-                break;
-              }
+            
+            if (p?.upgrades?.shieldActive > 0) {
+              p.upgrades.shieldActive--;
+              blocked = true;
+              createExplosion(m.x, GROUND_Y - 5, 30, "#0ff");
             }
             
-            if (!blocked) {
-              for (const id of lockedSlots) {
-                const p = players.get(id);
-                if (p && p.slot === targetSlot) {
-                  const damage = 1;
-                  const wasAlive = p.hp > 0;
-                  p.hp = Math.max(0, p.hp - damage);
-                  createExplosion(m.x, GROUND_Y - 5, 40, "#f44");
-                  
-                  if (wasAlive && p.hp <= 0) {
-                    p.spite = 0; // Reset spite on death - starts accumulating next wave
-                    redistributeAsteroids(targetSlot);
-                  }
-                  
-                  // Gold reward for attacker if this was a player-sent attack
-                  if (m.senderId && m.attackType) {
-                    const sender = players.get(m.senderId);
-                    if (sender && sender.hp > 0) {
-                      const goldReward = Math.ceil(5 + wave * 0.5);
-                      sender.gold += goldReward;
-                      safeSend(sender.ws, { t: "attackHit", gold: goldReward, target: p.name });
-                    }
-                  }
-                  break;
+            if (!blocked && p) {
+              const damage = 1;
+              const wasAlive = p.hp > 0;
+              p.hp = Math.max(0, p.hp - damage);
+              createExplosion(m.x, GROUND_Y - 5, 40, "#f44");
+              
+              if (wasAlive && p.hp <= 0) {
+                p.spite = 0; // Reset spite on death - starts accumulating next wave
+                redistributeAsteroids(targetSlot);
+              }
+              
+              // Gold reward for attacker if this was a player-sent attack
+              if (m.senderId && m.attackType) {
+                const sender = players.get(m.senderId);
+                if (sender && sender.hp > 0) {
+                  const goldReward = Math.ceil(5 + wave * 0.5);
+                  sender.gold += goldReward;
+                  safeSend(sender.ws, { t: "attackHit", gold: goldReward, target: p.name });
                 }
               }
             }
@@ -4142,7 +4172,9 @@ function tick() {
     }
 
     // Shield explosion update - expanding damage zones
-    for (const exp of shieldExplosions) {
+    // PERF: Traditional for loop
+    for (let sei = 0; sei < shieldExplosions.length; sei++) {
+      const exp = shieldExplosions[sei];
       exp.life -= DT;
       
       // Expand radius over first 0.5 seconds
@@ -4185,7 +4217,9 @@ function tick() {
     shieldExplosions.length = seWriteIdx;
 
     // Ghost Ally update - fly upward and damage enemies
-    for (const ghost of ghostAllies) {
+    // PERF: Traditional for loop
+    for (let ghi = 0; ghi < ghostAllies.length; ghi++) {
+      const ghost = ghostAllies[ghi];
       ghost.y += ghost.vy * DT;
       ghost.life -= DT;
       
@@ -4230,7 +4264,9 @@ function tick() {
     // Gravity Well update - pull nearby enemies
     // PERFORMANCE: Added quick bounding box rejection before distance check
     // DIMINISHING RETURNS: Asteroids become resistant to gravity the longer they're exposed
-    for (const well of gravityWells) {
+    // PERF: Traditional for loop
+    for (let gwi = 0; gwi < gravityWells.length; gwi++) {
+      const well = gravityWells[gwi];
       well.life -= DT;
       const radius = well.radius;
       const radiusSq = radius * radius;
@@ -4532,35 +4568,24 @@ function broadcastGameState() {
     obj.vy = Math.round(m.vy * 10) / 10;
     
     // Only send HP if damaged (saves bandwidth when at full health)
-    if (m.hp < m.maxHp) {
-      obj.hp = Math.round(m.hp * 10) / 10;
-    } else {
-      delete obj.hp;
-    }
+    // PERF: Use undefined instead of delete - faster and still excluded from JSON
+    obj.hp = m.hp < m.maxHp ? Math.round(m.hp * 10) / 10 : undefined;
     
     // REMOVED FROM BROADCAST (client gets from spawn event cache):
-    // - r (radius)
-    // - type
-    // - maxHp
-    // - targetSlot
-    delete obj.r;
-    delete obj.type;
-    delete obj.maxHp;
-    delete obj.targetSlot;
+    // - r (radius), type, maxHp, targetSlot - never set, so never need to delete
     
-    // Boolean flags - only send if true
-    if (m.inFTL) obj.inFTL = true; else delete obj.inFTL;
-    // Optional fields - set or delete
-    if (m.attackType) obj.attackType = m.attackType; else delete obj.attackType;
-    if (m.isPhased) obj.isPhased = true; else delete obj.isPhased;
-    if (m.isBoss) obj.isBoss = true; else delete obj.isBoss;
-    if (m.isBossAd) { obj.isBossAd = true; obj.bossAdVariant = m.bossAdVariant; } 
-    else { delete obj.isBossAd; delete obj.bossAdVariant; }
-    if (m.isMiniBoss) obj.isMiniBoss = true; else delete obj.isMiniBoss;
-    if (m.isMiniBossAd) obj.isMiniBossAd = true; else delete obj.isMiniBossAd;
-    if (m.isBerserker) obj.isBerserker = true; else delete obj.isBerserker;
-    if (m.staticCharge > 0) obj.staticCharge = m.staticCharge; else delete obj.staticCharge;
-    if (m.infected) obj.infected = true; else delete obj.infected;
+    // Boolean flags - use undefined instead of delete for speed
+    obj.inFTL = m.inFTL || undefined;
+    obj.attackType = m.attackType || undefined;
+    obj.isPhased = m.isPhased || undefined;
+    obj.isBoss = m.isBoss || undefined;
+    obj.isBossAd = m.isBossAd || undefined;
+    obj.bossAdVariant = m.isBossAd ? m.bossAdVariant : undefined;
+    obj.isMiniBoss = m.isMiniBoss || undefined;
+    obj.isMiniBossAd = m.isMiniBossAd || undefined;
+    obj.isBerserker = m.isBerserker || undefined;
+    obj.staticCharge = m.staticCharge > 0 ? m.staticCharge : undefined;
+    obj.infected = m.infected || undefined;
   }
   // Truncate array to actual size (JSON.stringify respects .length)
   broadcastState.missiles.length = missileCount;
