@@ -5501,7 +5501,22 @@ wss.on("connection", (ws) => {
   });
 });
 
-setInterval(tick, 1000 / TICK_RATE);
+// Replace the last line: setInterval(tick, 1000 / TICK_RATE);
+// With this advanced loop that detects lag:
+
+let lastTick = Date.now();
+setInterval(() => {
+  const now = Date.now();
+  const delta = now - lastTick;
+  
+  // If a tick takes more than 100ms (normal is ~16ms), the server FROZE.
+  if (delta > 100) {
+    console.log(`⚠️ LAG SPIKE: Server froze for ${delta}ms! (CPU overloaded?)`);
+  }
+  
+  lastTick = now;
+  tick();
+}, 1000 / TICK_RATE);
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => { console.log(`Rogue Asteroid PvP (OPTIMIZED v2 - 15Hz): http://localhost:${PORT}`); });
