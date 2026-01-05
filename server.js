@@ -378,7 +378,9 @@ let activeGameModifier = null; // Current game's modifier
 const app = express();
 app.use(express.static(path.join(__dirname, "docs")));
 // Music folder is inside docs/ for GitHub Pages compatibility
-app.use("/Music", express.static(path.join(__dirname, "docs", "Music")));
+// Cache music for 1 day (86400000 ms) to save bandwidth/CPU
+const oneDay = 86400000;
+app.use("/Music", express.static(path.join(__dirname, "docs", "Music"), { maxAge: oneDay }));
 app.get("/health", (_, res) => res.json({ ok: true }));
 
 const server = http.createServer(app);

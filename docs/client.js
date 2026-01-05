@@ -362,7 +362,9 @@
     if (!musicAudio) {
       musicAudio = new Audio();
       musicAudio.volume = musicState.muted ? 0 : musicState.volume;
-      musicAudio.preload = "auto"; // Hint to browser to load quickly
+      // "metadata" only downloads the length/title, not the full file until needed.
+      // This prevents the download from clogging the network during the game start.
+      musicAudio.preload = "metadata";
       musicAudio.addEventListener("ended", () => {
         // Report to server that track ended
         send({ t: "musicTrackEnded", track: musicState.track });
@@ -2739,7 +2741,6 @@
       
       if (hoveredBuildOption === "upgrade") {
         send({ t: "upgradeTower", slotIndex: buildMenuOpen.slotIndex });
-        buildMenuOpen = null;
         mouseDown = false;
         return;
       } else if (hoveredBuildOption === "sell") {
