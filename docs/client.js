@@ -72,7 +72,7 @@
   // Tower Config (must match server)
   const TOWER_TYPES = {
     0: { name: "Gatling", cost: 50, color: "#ffff00", desc: "Fast Fire", upgradeCost: 40, icon: "⚡" },
-    1: { name: "Railgun", cost: 120, color: "#00ff00", desc: "Piercing Beam", upgradeCost: 80, icon: "⚡" },
+    1: { name: "Railgun", cost: 120, color: "#00ff00", desc: "Bouncing Beam", upgradeCost: 80, icon: "⚡" },
     2: { name: "Missile", cost: 250, color: "#ff0000", desc: "Splash Dmg", upgradeCost: 150, icon: "🚀" }
   };
   const MAX_TOWER_LEVEL = 5;
@@ -1025,26 +1025,31 @@
           break;
         
         case "railgun":
-          // Railgun instant beam effect
-          if (!skipVisualEffects) {
+          // Railgun bouncing beam effect
+          if (!skipVisualEffects && ev.segments && ev.segments.length > 0) {
             const beamColor = ev.isCrit ? "#ffff00" : "#00ff00";
-            railgunBeams.push({
-              x1: ev.x1, y1: ev.y1,
-              x2: ev.x2, y2: ev.y2,
-              slot: ev.slot,
-              isCrit: ev.isCrit,
-              hitCount: ev.hitCount,
-              life: 0.25,
-              maxLife: 0.25,
-              color: beamColor
-            });
             
-            // Muzzle flash particles at origin
+            // Create beam for each segment
+            for (const seg of ev.segments) {
+              railgunBeams.push({
+                x1: seg.x1, y1: seg.y1,
+                x2: seg.x2, y2: seg.y2,
+                slot: ev.slot,
+                isCrit: ev.isCrit,
+                life: 0.25,
+                maxLife: 0.25,
+                color: beamColor
+              });
+            }
+            
+            // Muzzle flash at origin
+            const firstSeg = ev.segments[0];
+            const firstAngle = Math.atan2(firstSeg.y2 - firstSeg.y1, firstSeg.x2 - firstSeg.x1);
             for (let i = 0; i < 6; i++) {
-              const angle = Math.atan2(ev.y2 - ev.y1, ev.x2 - ev.x1) + (Math.random() - 0.5) * 0.5;
+              const angle = firstAngle + (Math.random() - 0.5) * 0.5;
               clientParticles.push({
-                x: ev.x1,
-                y: ev.y1,
+                x: firstSeg.x1,
+                y: firstSeg.y1,
                 vx: Math.cos(angle) * (60 + Math.random() * 40),
                 vy: Math.sin(angle) * (60 + Math.random() * 40),
                 life: 0.15 + Math.random() * 0.1,
@@ -1052,6 +1057,25 @@
                 color: beamColor,
                 size: 3 + Math.random() * 3
               });
+            }
+            
+            // Spark particles at each bounce point
+            for (let i = 0; i < ev.segments.length - 1; i++) {
+              const seg = ev.segments[i];
+              // Bounce point is at end of segment
+              for (let j = 0; j < 4; j++) {
+                const sparkAngle = Math.random() * Math.PI * 2;
+                clientParticles.push({
+                  x: seg.x2,
+                  y: seg.y2,
+                  vx: Math.cos(sparkAngle) * (40 + Math.random() * 30),
+                  vy: Math.sin(sparkAngle) * (40 + Math.random() * 30),
+                  life: 0.2 + Math.random() * 0.1,
+                  maxLife: 0.3,
+                  color: "#ffffff",
+                  size: 2 + Math.random() * 2
+                });
+              }
             }
           }
           break;
@@ -3066,6 +3090,23 @@
         ctx.fill();
         ctx.restore();
         break;
+      
+      case "drone":
+        // Drone bullet: Small cyan energy bolt
+        const droneBulletR = r * 0.6;
+        ctx.fillStyle = hexToRgba("#44aaff", alpha);
+        ctx.beginPath();
+        ctx.arc(x, y, droneBulletR, 0, Math.PI * 2);
+        ctx.fill();
+        // Small trail
+        ctx.strokeStyle = hexToRgba("#88ccff", 0.5 * alpha);
+        ctx.lineWidth = droneBulletR;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - Math.cos(angle) * 8 * sx, y - Math.sin(angle) * 8 * sx);
+        ctx.stroke();
+        break;
 
       default:
         // Main turret: Player-colored energy bolt
@@ -4219,6 +4260,42 @@
           ctx.fillRect(-2.5 * sx, -22 * sy, 5 * sx, 22 * sy);
           ctx.restore();
           clearShadow(ctx);
+        }
+        
+        // Drone Command: Render orbiting drone
+        if (p.dronePos && p.inventory && p.inventory.includes("droneCommand")) {
+          const droneX = p.dronePos.x * sx;
+          const droneY = p.dronePos.y * sy;
+          const droneSize = 8 * sx;
+          
+          ctx.save();
+          ctx.translate(droneX, droneY);
+          
+          // Drone glow
+          ctx.shadowColor = "#44aaff";
+          ctx.shadowBlur = 10;
+          
+          // Drone body (UFO shape)
+          ctx.fillStyle = hexToRgba("#44aaff", isDead ? 0.3 : 0.9);
+          ctx.beginPath();
+          ctx.ellipse(0, 0, droneSize, droneSize * 0.5, 0, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // Drone dome
+          ctx.fillStyle = hexToRgba("#88ccff", isDead ? 0.3 : 0.8);
+          ctx.beginPath();
+          ctx.arc(0, -droneSize * 0.2, droneSize * 0.4, Math.PI, 0);
+          ctx.fill();
+          
+          // Drone lights (pulsing)
+          const pulse = Math.sin(Date.now() / 100) * 0.3 + 0.7;
+          ctx.fillStyle = `rgba(255, 255, 100, ${pulse * (isDead ? 0.3 : 1)})`;
+          ctx.beginPath();
+          ctx.arc(-droneSize * 0.6, 0, 2 * sx, 0, Math.PI * 2);
+          ctx.arc(droneSize * 0.6, 0, 2 * sx, 0, Math.PI * 2);
+          ctx.fill();
+          
+          ctx.restore();
         }
 
         // Tower slots

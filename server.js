@@ -239,6 +239,46 @@ const TOWER_MODULES = {
     color: "#aaaaff",
     desc: "Mirrors main turret at 75% effectiveness",
     effect: "mirror"
+  },
+  executionerSight: {
+    id: "executionerSight",
+    name: "Executioner's Sight",
+    icon: "⚖️",
+    color: "#880000",
+    desc: "Enemies below 30% HP take 300% damage",
+    effect: "execute"
+  },
+  bloodthirster: {
+    id: "bloodthirster",
+    name: "Bloodthirster Engine",
+    icon: "🩸",
+    color: "#cc0044",
+    desc: "+1% fire rate per 1% HP missing",
+    effect: "berserker"
+  },
+  temporalBoomerang: {
+    id: "temporalBoomerang",
+    name: "Temporal Boomerang",
+    icon: "🪃",
+    color: "#8844cc",
+    desc: "Bullets reverse direction at max range",
+    effect: "boomerang"
+  },
+  droneCommand: {
+    id: "droneCommand",
+    name: "Drone Command",
+    icon: "🛸",
+    color: "#44aaff",
+    desc: "Attack drone orbits and fires at enemies",
+    effect: "drone"
+  },
+  momentumLens: {
+    id: "momentumLens",
+    name: "Momentum Lens",
+    icon: "🔭",
+    color: "#ffaa00",
+    desc: "+10% damage per 100 pixels traveled",
+    effect: "momentum"
   }
 };
 
@@ -466,6 +506,7 @@ let currentModulePicker = 0;
 let modulePickTimer = 0;
 const MODULE_PICK_TIME = 10; // 10 seconds per pick
 let bossKillOrder = []; // Track order in which players killed their boss
+let bossHitPlayers = new Set(); // Players who got hit by boss (last pick, randomized)
 
 // PERFORMANCE: Cached arrays for broadcast (avoid allocations every tick)
 let cachedModuleCards = []; // Cached { id, ...TOWER_MODULES[id] } objects
@@ -1370,9 +1411,9 @@ function startModuleCardPhase() {
   // Track which players have picked
   modulePlayersPicked = new Set();
   
-  // Determine pick order: based on who killed their boss first
-  // Players who killed their boss are ordered by kill time (first kill = first pick)
-  // Any alive players who didn't kill their boss go at the end (by slot order)
+  // Determine pick order:
+  // 1. Players who weren't hit by boss, sorted by kills (highest first)
+  // 2. Players who were hit by boss, randomized (last pick)
   const alivePlayerIds = new Set(
     lockedSlots
       .map(id => players.get(id))
@@ -1380,18 +1421,23 @@ function startModuleCardPhase() {
       .map(p => p.id)
   );
   
-  // Start with boss kill order (filtered to only alive players)
-  const orderedIds = bossKillOrder.filter(id => alivePlayerIds.has(id));
-  
-  // Add any alive players who didn't kill their boss (sorted by slot)
-  const remainingPlayers = lockedSlots
+  // Get alive players who weren't hit by boss, sorted by kills
+  const normalPlayers = lockedSlots
     .map(id => players.get(id))
-    .filter(p => p && p.hp > 0 && !bossKillOrder.includes(p.id))
-    .sort((a, b) => (a.slot || 0) - (b.slot || 0));
+    .filter(p => p && p.hp > 0 && !bossHitPlayers.has(p.id))
+    .sort((a, b) => (b.kills || 0) - (a.kills || 0)); // Highest kills first
   
-  for (const p of remainingPlayers) {
-    orderedIds.push(p.id);
-  }
+  // Get alive players who were hit by boss, randomized
+  const hitPlayers = lockedSlots
+    .map(id => players.get(id))
+    .filter(p => p && p.hp > 0 && bossHitPlayers.has(p.id))
+    .sort(() => Math.random() - 0.5); // Randomize
+  
+  // Combine: normal players first (by kills), then hit players (randomized, last)
+  const orderedIds = [
+    ...normalPlayers.map(p => p.id),
+    ...hitPlayers.map(p => p.id)
+  ];
   
   modulePickOrder = orderedIds;
   currentModulePicker = 0;
@@ -1420,6 +1466,7 @@ function endModuleCardPhase() {
   modulePickOrder = [];
   modulePlayersPicked = new Set();
   bossKillOrder = []; // Reset for next boss wave
+  bossHitPlayers = new Set(); // Reset for next boss wave
   
   // PERFORMANCE: Clear cached arrays
   cachedModuleCards = [];
@@ -1465,6 +1512,8 @@ function resetToLobby() {
     wave = 0;
     activeGameModifier = null; // Reset game modifier
     modifierSkips.clear(); // Reset skip tracking
+    bossKillOrder = []; // Reset boss tracking
+    bossHitPlayers = new Set(); // Reset boss hit tracking
     if (modifierStartTimer) {
       clearTimeout(modifierStartTimer);
       modifierStartTimer = null;
@@ -1490,6 +1539,9 @@ function resetToLobby() {
       p.kills = 0; // Reset kills
       p.spite = 0; // Reset spite
       p.incomeFromAttacks = 0; // Reset attack income
+      p.dronePos = null; // Reset drone state
+      p.droneAngle = 0;
+      p.droneCd = 0;
     });
 
     hostId = players.size ? Array.from(players.keys())[0] : null;
@@ -1710,7 +1762,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     pierce = owner.upgrades?.pierce || 0;
     chainChance = owner.upgrades?.chainChance || 0;
     ownerGold = owner.gold || 0;
-    modules = owner.modules || []; // Support modules on owner (for Copycat)
+    modules = owner.inventory || owner.modules || []; // Use inventory for player, modules for copycat
   }
 
   let finalDmg = isCrit ? dmg * 3 : dmg;
@@ -1789,6 +1841,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     isCrit,
     explosive: explosive,
     lifespan: lifespan,
+    maxLifespan: lifespan, // For Temporal Boomerang
     isTowerBullet: !isPlayerBullet,
     bulletType: bulletType,
     chainChance: chainChance,
@@ -1801,6 +1854,12 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     isHoming: originalBulletType === "missile",
     targetId: overrideProps?.targetId || null,
     homingSpeed: speed, // Store base speed for homing calculations
+    // Momentum Lens tracking
+    totalDistance: 0,
+    lastX: originX,
+    lastY: originY - 6,
+    // Temporal Boomerang tracking
+    returning: false,
   };
   bullets.push(bullet);
   
@@ -1835,24 +1894,19 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
   // Next state update will sync positions anyway
 }
 
-// RAILGUN: Instant hitscan beam that pierces all enemies in path
+// RAILGUN: Instant hitscan beam that bounces off walls until it exits the top
 function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
   const ownerSlot = owner.slot;
   const { x0, x1 } = segmentBounds(ownerSlot);
   
-  // Calculate beam direction
+  // Calculate initial beam direction
   const dx = targetX - originX;
   const dy = targetY - originY;
   const dist = Math.hypot(dx, dy);
   if (dist < 1) return;
   
-  const dirX = dx / dist;
-  const dirY = dy / dist;
-  
-  // Beam extends far beyond screen
-  const beamLength = 1500;
-  const endX = originX + dirX * beamLength;
-  const endY = originY + dirY * beamLength;
+  let dirX = dx / dist;
+  let dirY = dy / dist;
   
   // Calculate damage
   let baseDmg = props.damage || 5;
@@ -1893,70 +1947,182 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
     finalDmg *= 0.5;
   }
   
-  // Find all enemies in path using line-circle intersection
-  const beamWidth = 6; // Beam has some thickness for hit detection
-  const hitEnemies = [];
+  // Trace bouncing beam path
+  const beamSegments = [];
+  let currentX = originX;
+  let currentY = originY;
+  const maxBounces = 50; // Safety limit
+  let bounces = 0;
   
-  // Get missiles in this slot
-  const slotMissiles = missilesBySlot[ownerSlot] || [];
+  // Wall margins (slightly inside walls for clean bounces)
+  const wallMargin = 2;
+  const leftWall = x0 + wallMargin;
+  const rightWall = x1 - wallMargin;
   
-  for (const m of slotMissiles) {
-    if (m.dead || m.inFTL) continue;
+  while (currentY > 0 && bounces < maxBounces) {
+    // Calculate where beam exits top or hits a wall
+    let nextX, nextY;
+    let hitWall = false;
     
-    // Ghost phasing check - skip if currently phased
-    if (m.phasing) {
-      const cycleTime = 2.0;
-      const phase = ((m.phaseOffset || 0) + (Date.now() / 1000)) % cycleTime;
-      if (phase > cycleTime * 0.5) continue; // Currently phased
+    if (dirY < 0) {
+      // Beam going upward - calculate where it exits top (y=0)
+      const tToTop = -currentY / dirY;
+      const xAtTop = currentX + dirX * tToTop;
+      
+      // Check if it hits a wall before reaching top
+      let tToWall = Infinity;
+      
+      if (dirX < 0) {
+        // Moving left - check left wall
+        const tLeft = (leftWall - currentX) / dirX;
+        if (tLeft > 0 && tLeft < tToTop) {
+          tToWall = tLeft;
+          hitWall = true;
+        }
+      } else if (dirX > 0) {
+        // Moving right - check right wall
+        const tRight = (rightWall - currentX) / dirX;
+        if (tRight > 0 && tRight < tToTop) {
+          tToWall = tRight;
+          hitWall = true;
+        }
+      }
+      
+      if (hitWall) {
+        nextX = currentX + dirX * tToWall;
+        nextY = currentY + dirY * tToWall;
+      } else {
+        nextX = xAtTop;
+        nextY = 0;
+      }
+    } else {
+      // Beam going downward - it will hit ground or wall eventually
+      // For simplicity, extend a bit and let it hit walls
+      const tToGround = (GROUND_Y - currentY) / dirY;
+      const xAtGround = currentX + dirX * tToGround;
+      
+      let tToWall = Infinity;
+      
+      if (dirX < 0) {
+        const tLeft = (leftWall - currentX) / dirX;
+        if (tLeft > 0 && tLeft < tToGround) {
+          tToWall = tLeft;
+          hitWall = true;
+        }
+      } else if (dirX > 0) {
+        const tRight = (rightWall - currentX) / dirX;
+        if (tRight > 0 && tRight < tToGround) {
+          tToWall = tRight;
+          hitWall = true;
+        }
+      }
+      
+      if (hitWall) {
+        nextX = currentX + dirX * tToWall;
+        nextY = currentY + dirY * tToWall;
+      } else {
+        // Hit ground - end beam
+        nextX = xAtGround;
+        nextY = GROUND_Y;
+        beamSegments.push({ x1: currentX, y1: currentY, x2: nextX, y2: nextY });
+        break;
+      }
     }
     
-    // Line-circle intersection test
-    // Project asteroid center onto the beam line
-    const apX = m.x - originX;
-    const apY = m.y - originY;
-    const projection = apX * dirX + apY * dirY;
+    // Store this segment
+    beamSegments.push({ x1: currentX, y1: currentY, x2: nextX, y2: nextY });
     
-    // Skip if behind the origin or too far
-    if (projection < 0 || projection > beamLength) continue;
+    // If we hit the top, we're done
+    if (nextY <= 0) break;
     
-    // Find closest point on beam to asteroid
-    const closestX = originX + dirX * projection;
-    const closestY = originY + dirY * projection;
-    
-    // Distance from asteroid to beam
-    const distToBeam = Math.hypot(m.x - closestX, m.y - closestY);
-    
-    // Hit if within beam width + asteroid radius
-    if (distToBeam <= beamWidth + m.r) {
-      hitEnemies.push({ missile: m, dist: projection });
+    // If we hit a wall, bounce (reflect X direction)
+    if (hitWall) {
+      currentX = nextX;
+      currentY = nextY;
+      dirX = -dirX; // Reflect horizontally
+      bounces++;
+    } else {
+      break;
     }
   }
   
-  // Sort by distance (closest first) for visual ordering
-  hitEnemies.sort((a, b) => a.dist - b.dist);
+  // Find all enemies hit by any beam segment
+  const beamWidth = 6;
+  const hitEnemiesSet = new Set(); // Track by ID to avoid double-hits
+  const hitEnemies = [];
   
-  // Apply damage to all hit enemies - NO FALLOFF
-  const hitData = [];
+  const slotMissiles = missilesBySlot[ownerSlot] || [];
+  
+  for (const m of slotMissiles) {
+    if (m.dead || m.inFTL || hitEnemiesSet.has(m.id)) continue;
+    
+    // Ghost phasing check
+    if (m.phasing) {
+      const cycleTime = 2.0;
+      const phase = ((m.phaseOffset || 0) + (Date.now() / 1000)) % cycleTime;
+      if (phase > cycleTime * 0.5) continue;
+    }
+    
+    // Check against each beam segment
+    for (const seg of beamSegments) {
+      const segDx = seg.x2 - seg.x1;
+      const segDy = seg.y2 - seg.y1;
+      const segLen = Math.hypot(segDx, segDy);
+      if (segLen < 1) continue;
+      
+      const segDirX = segDx / segLen;
+      const segDirY = segDy / segLen;
+      
+      // Project asteroid onto segment
+      const apX = m.x - seg.x1;
+      const apY = m.y - seg.y1;
+      const projection = apX * segDirX + apY * segDirY;
+      
+      // Skip if outside segment
+      if (projection < 0 || projection > segLen) continue;
+      
+      // Find closest point on segment
+      const closestX = seg.x1 + segDirX * projection;
+      const closestY = seg.y1 + segDirY * projection;
+      
+      // Distance from asteroid to beam
+      const distToBeam = Math.hypot(m.x - closestX, m.y - closestY);
+      
+      if (distToBeam <= beamWidth + m.r) {
+        hitEnemiesSet.add(m.id);
+        hitEnemies.push({ missile: m });
+        break; // Don't check more segments for this enemy
+      }
+    }
+  }
+  
+  // Apply damage to all hit enemies
   for (const hit of hitEnemies) {
     const m = hit.missile;
     
-    m.hp -= finalDmg;
-    vampiricDamageDealt += finalDmg;
+    // Calculate final damage with module effects
+    let hitDamage = finalDmg;
     
-    // Track damage for player stats
-    const p = players.get(owner.id);
-    if (p) {
-      p.damageDealt = (p.damageDealt || 0) + finalDmg;
-      p.waveDamage = (p.waveDamage || 0) + finalDmg;
+    // Executioner's Sight: 300% damage to enemies below 30% HP
+    if (modules.includes("executionerSight")) {
+      if (m.hp / m.maxHp < 0.3) {
+        hitDamage *= 3;
+      }
     }
     
-    hitData.push({ id: m.id, x: m.x, y: m.y, dmg: finalDmg });
+    m.hp -= hitDamage;
+    vampiricDamageDealt += hitDamage;
+    
+    const p = players.get(owner.id);
+    if (p) {
+      p.damageDealt = (p.damageDealt || 0) + hitDamage;
+      p.waveDamage = (p.waveDamage || 0) + hitDamage;
+    }
     
     // Check for kill
     if (m.hp <= 0 && !m.dead) {
       m.dead = true;
       
-      // Gold reward
       if (!m.noGold && p) {
         let goldReward = m.gold || 1;
         const goldBonus = p.upgrades?.goldBonus ?? 0;
@@ -1966,7 +2132,7 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
         p.score = (p.score || 0) + Math.ceil(m.maxHp);
       }
       
-      // Splitter: spawn children with noGold flag
+      // Splitter
       if (m.splits > 0) {
         const availableSlots = MAX_MISSILES - missiles.length;
         const splitsToSpawn = Math.min(m.splits, availableSlots, 8);
@@ -1982,10 +2148,8 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
         }
       }
       
-      // Explosion effect
       queueEvent("explosion", { x: m.x, y: m.y, color: "#0f0", radius: 20 });
       
-      // Gravity Well on kill
       if (modules.includes("gravityWell")) {
         gravityWells.push({
           x: m.x, y: m.y,
@@ -1997,11 +2161,10 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
       }
     }
     
-    // Hit visual
     queueEvent("hit", { 
       x: m.x, y: m.y, 
       isCrit, 
-      dmg: Math.round(finalDmg * 10) / 10,
+      dmg: Math.round(hitDamage * 10) / 10,
       isRailgun: true
     });
   }
@@ -2022,12 +2185,9 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
     }
   }
   
-  // Send railgun beam visual event
+  // Send railgun beam visual event with all segments
   queueEvent("railgun", {
-    x1: originX,
-    y1: originY,
-    x2: endX,
-    y2: endY,
+    segments: beamSegments,
     slot: ownerSlot,
     isCrit,
     hitCount: hitEnemies.length
@@ -2380,7 +2540,17 @@ function tick() {
       const slot = p.slot;
       const { x0, x1 } = segmentBounds(slot);
       const pos = turretPositions(slot);
-      const baseCooldown = BULLET_COOLDOWN / (p.upgrades?.fireRateMult ?? 1);
+      
+      // Calculate fire rate with Bloodthirster Engine bonus
+      let fireRateMult = p.upgrades?.fireRateMult ?? 1;
+      
+      // Bloodthirster Engine: +1% fire rate per 1% HP missing
+      if (p.inventory && p.inventory.includes("bloodthirster")) {
+        const missingHpPercent = (p.maxHp - p.hp) / p.maxHp;
+        fireRateMult *= 1 + missingHpPercent; // +100% fire rate at 0 HP (capped by death)
+      }
+      
+      const baseCooldown = BULLET_COOLDOWN / fireRateMult;
 
       let targetX, targetY, clamped;
       const bulletSpeed = BULLET_SPEED * (p.upgrades?.bulletSpeedMult ?? 1);
@@ -2536,6 +2706,52 @@ function tick() {
           }
           
           tower.cd = Math.max(0, (tower.cd || 0) - DT);
+        }
+      }
+      
+      // Drone Command: Update and fire attack drones
+      if (p.inventory && p.inventory.includes("droneCommand")) {
+        // Initialize drone state if needed
+        if (!p.droneAngle) p.droneAngle = 0;
+        if (!p.droneCd) p.droneCd = 0;
+        
+        // Update drone orbit angle
+        p.droneAngle += DT * 2; // 2 radians per second orbit speed
+        
+        // Calculate drone position (orbits around main turret)
+        const orbitRadius = 40;
+        const droneX = pos.main.x + Math.cos(p.droneAngle) * orbitRadius;
+        const droneY = pos.main.y - 30 + Math.sin(p.droneAngle) * orbitRadius * 0.5; // Elliptical orbit
+        
+        // Store drone position for client rendering
+        p.dronePos = { x: droneX, y: droneY, angle: p.droneAngle };
+        
+        // Drone firing
+        p.droneCd = Math.max(0, p.droneCd - DT);
+        
+        if (p.droneCd <= 0) {
+          // Find target for drone
+          const droneTarget = findBestTarget(x0, x1, droneX, droneY, 0.8, p.slot);
+          
+          if (droneTarget) {
+            // Fire drone bullet (weaker than main, but free DPS)
+            const droneDamage = 1 + (p.upgrades?.damageAdd ?? 0) * 0.3; // 30% of damage upgrades
+            
+            // Calculate intercept point
+            let speedMult = slotSpeedMultipliers[p.slot] || 1;
+            const gravityMult = 1 + waveElapsedTime * GRAVITY_INCREASE_RATE;
+            speedMult *= gravityMult;
+            const intercept = calculateInterceptPoint(droneX, droneY, BULLET_SPEED * 0.8, droneTarget, speedMult);
+            
+            fireBullet(p, droneX, droneY, intercept.x, intercept.y, 0, {
+              damage: droneDamage,
+              bulletType: "drone",
+              inheritedUpgrades: false,
+              modules: [], // Drones don't get module effects
+            });
+            
+            p.droneCd = 0.5; // Drone fires every 0.5 seconds
+          }
         }
       }
     }
@@ -2735,6 +2951,9 @@ function tick() {
                   p.hp = Math.max(0, p.hp - bossDamage);
                   createExplosion(m.x, GROUND_Y - 5, 60, "#ff0000");
                   
+                  // Track that this player got hit by boss (last pick priority)
+                  bossHitPlayers.add(p.id);
+                  
                   if (wasAlive && p.hp <= 0) {
                     p.spite = 0; // Reset spite on death - starts accumulating next wave
                     redistributeAsteroids(targetSlot);
@@ -2872,6 +3091,25 @@ function tick() {
 
       b.lifespan -= DT;
       if (b.lifespan <= 0) { b.dead = true; continue; }
+      
+      // Momentum Lens: Track distance traveled
+      if (b.modules && b.modules.includes("momentumLens")) {
+        const distThisTick = Math.hypot(b.x - b.lastX, b.y - b.lastY);
+        b.totalDistance += distThisTick;
+      }
+      b.lastX = b.x;
+      b.lastY = b.y;
+      
+      // Temporal Boomerang: Reverse direction at half lifespan
+      if (b.modules && b.modules.includes("temporalBoomerang") && !b.returning) {
+        if (b.lifespan < b.maxLifespan / 2) {
+          b.vx *= -1;
+          b.vy *= -1;
+          b.returning = true;
+          // Clear hit set so it can hit enemies again on return trip
+          b.hitSet.clear();
+        }
+      }
 
       // Ricochet now chains between enemies, not walls - bullets die at boundaries
       const { x0: ownerX0, x1: ownerX1 } = segmentBounds(b.ownerSlot);
@@ -2905,7 +3143,23 @@ function tick() {
         if (dy > rr || dy < -rr) continue; // Quick Y reject
         
         if (dx * dx + dy * dy <= rr * rr) {
-          m.hp -= b.dmg;
+          // Calculate final damage with module effects
+          let hitDamage = b.dmg;
+          
+          // Executioner's Sight: 300% damage to enemies below 30% HP
+          if (b.modules && b.modules.includes("executionerSight")) {
+            if (m.hp / m.maxHp < 0.3) {
+              hitDamage *= 3;
+            }
+          }
+          
+          // Momentum Lens: +10% damage per 100 pixels traveled
+          if (b.modules && b.modules.includes("momentumLens")) {
+            const distanceBonus = 1 + (b.totalDistance / 100) * 0.1;
+            hitDamage *= distanceBonus;
+          }
+          
+          m.hp -= hitDamage;
 
           // BOSS MECHANIC: Spawn 5 minions at 75%, 50%, 25% HP (3 times total)
           if (m.type === "boss" && m.bossSpawnCount < 3) {
@@ -4095,6 +4349,7 @@ function broadcastGameState() {
     obj.upgrades.ricochet = u.ricochet || 0;
     obj.upgrades.chainChance = u.chainChance || 0;
     obj.upgrades.goldBonus = u.goldBonus || 0; // Additive gold bonus (0 = no bonus, 0.12 = +12%)
+    obj.dronePos = p.dronePos || null; // Drone Command position
   }
   broadcastState.players.length = playerCount;
   
