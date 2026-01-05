@@ -4045,8 +4045,10 @@
           const imagesReady = hullImg.complete && hullImg.naturalWidth > 0;
           
           if (imagesReady) {
-            // NO SCALING - Draw ship at 1:1 scale (240x330 original size)
-            // Ship images are already the correct size
+            // Calculate proper scale to match world coordinates
+            // Ship collision radius is 28, diameter is 56 world units
+            // Ship image is 240px wide, so scale = (diameter / width) = 56/240
+            const shipScale = (r * 2) / 240;
             
             // FTL effect for battleship - phasing in effect
             if (m.inFTL) {
@@ -4055,7 +4057,7 @@
               ctx.lineWidth = 3;
               const streakLength = 100 * sy;
               for (let i = 0; i < 6; i++) {
-                const offsetX = (i - 2.5) * 18;
+                const offsetX = (i - 2.5) * 18 * shipScale;
                 ctx.beginPath();
                 ctx.moveTo(offsetX, -streakLength);
                 ctx.lineTo(offsetX, 0);
@@ -4071,14 +4073,14 @@
             const flameFrame = Math.floor(Date.now() / 100) % 2; // Switch every 100ms
             const flameImg = flameFrame === 0 ? flame1Img : flame2Img;
             if (flameImg.complete && flameImg.naturalWidth > 0) {
-              const flameW = 240;
-              const flameH = 330;
+              const flameW = 240 * shipScale;
+              const flameH = 330 * shipScale;
               ctx.drawImage(flameImg, -flameW/2, -flameH/2, flameW, flameH);
             }
             
-            // Draw hull at 1:1 scale
-            const hullW = 240;
-            const hullH = 330;
+            // Draw hull
+            const hullW = 240 * shipScale;
+            const hullH = 330 * shipScale;
             ctx.drawImage(hullImg, -hullW/2, -hullH/2, hullW, hullH);
             
             ctx.globalAlpha = 1;
@@ -4086,24 +4088,24 @@
             // Draw turrets (only when not in FTL)
             if (turretImg.complete && turretImg.naturalWidth > 0 && !m.inFTL) {
               const turretAngles = m.turretAngles || cached?.turretAngles || [Math.PI/2, Math.PI/2, Math.PI/2, Math.PI/2];
-              const turretOffsets = BATTLESHIP_TURRET_OFFSETS;
               
               for (let t = 0; t < 4; t++) {
-                const offset = turretOffsets[t];
-                const turretX = offset.x;
-                const turretY = offset.y;
+                // Get turret offset in pixels (relative to ship center)
+                const offset = BATTLESHIP_TURRET_OFFSETS[t];
+                // Scale to match ship scale
+                const turretX = offset.x * shipScale;
+                const turretY = offset.y * shipScale;
                 
                 ctx.save();
                 ctx.translate(turretX, turretY);
-                // Rotate around the turret's pivot point (18, 17)
+                // Rotate around the turret's pivot point
                 ctx.rotate(turretAngles[t] - Math.PI/2); // Adjust for turret sprite orientation
                 
-                // Draw turret at 1:1 scale (35x46 original size)
-                // Pivot point is at (18, 17), so offset the drawing
-                const tw = 35;
-                const th = 46;
-                const pivotX = 18;
-                const pivotY = 17;
+                // Draw turret with scale, pivoting at (18, 17)
+                const tw = 35 * shipScale;
+                const th = 46 * shipScale;
+                const pivotX = 18 * shipScale;
+                const pivotY = 17 * shipScale;
                 ctx.drawImage(turretImg, -pivotX, -pivotY, tw, th);
                 
                 ctx.restore();

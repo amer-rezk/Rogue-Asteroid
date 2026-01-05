@@ -127,16 +127,16 @@ const BATTLESHIP_CONFIG = {
   turretDamage: 0, // Turrets don't deal damage, they destroy bullets
   bulletSpeed: 150, // Faster bullets for intercepting
   bulletLifespan: 2.0, // Shorter lifespan
-  // Turret positions relative to center (normalized, will be scaled by size)
-  // User-specified positions: First: 60, 157 | Second: 179, 157 | Third: 71, 213 | Fourth: 167, 213
-  // Relative to center (120, 165): First: (-60, -8) | Second: (59, -8) | Third: (-49, 48) | Fourth: (47, 48)
-  // Normalized by ship size (240x330)
-  turretOffsets: [
-    { x: -0.25, y: -0.024 },   // First turret
-    { x: 0.246, y: -0.024 },   // Second turret
-    { x: -0.204, y: 0.145 },   // Third turret
-    { x: 0.196, y: 0.145 }     // Fourth turret
-  ]
+  // Turret positions in pixels relative to center (240x330 ship image)
+  // These will be scaled to world coordinates: pixel * (radius*2/240)
+  turretPixelOffsets: [
+    { x: -60, y: -8 },   // First turret
+    { x: 59, y: -8 },    // Second turret
+    { x: -49, y: 48 },   // Third turret
+    { x: 47, y: 48 }     // Fourth turret
+  ],
+  // Turret pivot point in the 35x46 turret sprite (where shots spawn from)
+  turretPivot: { x: 18, y: 17 }
 };
 
 // ===== Tower Modules (Boss Rewards) =====
@@ -3250,15 +3250,17 @@ function tick() {
         // Update each turret
         for (let t = 0; t < 4; t++) {
           // Calculate turret world position
-          const offset = config.turretOffsets[t];
-          const turretX = m.x + offset.x * m.r * 2.2; // Scale with ship size
-          const turretY = m.y + offset.y * m.r * 2.2;
+          // Scale factor: ship diameter (r*2) / ship image width (240)
+          const scale = (m.r * 2) / 240;
+          const offset = config.turretPixelOffsets[t];
+          const turretBaseX = m.x + offset.x * scale;
+          const turretBaseY = m.y + offset.y * scale;
           
           // Calculate angle to nearest bullet (or default to pointing down)
           let targetAngle = Math.PI / 2; // Default: point down
           if (nearestBullet) {
-            const dx = nearestBullet.x - turretX;
-            const dy = nearestBullet.y - turretY;
+            const dx = nearestBullet.x - turretBaseX;
+            const dy = nearestBullet.y - turretBaseY;
             targetAngle = Math.atan2(dy, dx);
           }
           
@@ -3281,14 +3283,27 @@ function tick() {
           if (m.turretCooldowns[t] <= 0 && nearestBullet) {
             m.turretCooldowns[t] = config.turretCooldown;
             
-            // Fire a bullet towards the player bullet
+            // Calculate shot spawn position from turret pivot point
+            // Pivot is at (18, 17) in the 35x46 turret sprite
+            // We need to offset from the turret base by the pivot, rotated by turret angle
             const bulletAngle = m.turretAngles[t];
+            const pivotOffsetX = config.turretPivot.x * scale;
+            const pivotOffsetY = config.turretPivot.y * scale;
+            
+            // Rotate pivot offset by turret angle (subtract PI/2 because sprite points up)
+            const adjustedAngle = bulletAngle - Math.PI/2;
+            const rotatedPivotX = pivotOffsetX * Math.cos(adjustedAngle) - pivotOffsetY * Math.sin(adjustedAngle);
+            const rotatedPivotY = pivotOffsetX * Math.sin(adjustedAngle) + pivotOffsetY * Math.cos(adjustedAngle);
+            
+            // Final shot spawn position
+            const shotX = turretBaseX + rotatedPivotX;
+            const shotY = turretBaseY + rotatedPivotY;
             const bulletSpeed = config.bulletSpeed;
             
             // Create enemy bullet event for visuals
             queueEvent("battleshipShot", {
-              x: turretX,
-              y: turretY,
+              x: shotX,
+              y: shotY,
               vx: Math.cos(bulletAngle) * bulletSpeed,
               vy: Math.sin(bulletAngle) * bulletSpeed,
               shipId: m.id,
@@ -3299,8 +3314,8 @@ function tick() {
             if (!m.enemyBullets) m.enemyBullets = [];
             m.enemyBullets.push({
               id: uid(),
-              x: turretX,
-              y: turretY,
+              x: shotX,
+              y: shotY,
               vx: Math.cos(bulletAngle) * bulletSpeed,
               vy: Math.sin(bulletAngle) * bulletSpeed,
               r: 6, // Collision radius
