@@ -128,11 +128,14 @@ const BATTLESHIP_CONFIG = {
   bulletSpeed: 150, // Faster bullets for intercepting
   bulletLifespan: 2.0, // Shorter lifespan
   // Turret positions relative to center (normalized, will be scaled by size)
+  // User-specified positions: First: 60, 157 | Second: 179, 157 | Third: 71, 213 | Fourth: 167, 213
+  // Relative to center (120, 165): First: (-60, -8) | Second: (59, -8) | Third: (-49, 48) | Fourth: (47, 48)
+  // Normalized by ship size (240x330)
   turretOffsets: [
-    { x: -0.54, y: -0.30 },  // Top-left red dot
-    { x: 0.54, y: -0.30 },   // Top-right red dot
-    { x: -0.71, y: 0.18 },   // Bottom-left red dot
-    { x: 0.71, y: 0.18 }     // Bottom-right red dot
+    { x: -0.25, y: -0.024 },   // First turret
+    { x: 0.246, y: -0.024 },   // Second turret
+    { x: -0.204, y: 0.145 },   // Third turret
+    { x: 0.196, y: 0.145 }     // Fourth turret
   ]
 };
 

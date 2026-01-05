@@ -213,13 +213,14 @@
   battleshipImages.turret.onerror = () => onBattleshipImageError("shipturret1.png");
   battleshipImages.turret.src = "images/shipturret1.png";
   
-  // Battleship turret positions (relative to center, normalized to ship size 240x330)
-  // These match the 4 red dots on the ship sprite
+  // Battleship turret positions (relative to center of 240x330 ship image)
+  // User-specified positions: First: 60, 157 | Second: 179, 157 | Third: 71, 213 | Fourth: 167, 213
+  // Converted to relative coordinates from center (120, 165)
   const BATTLESHIP_TURRET_OFFSETS = [
-    { x: -65, y: -50 },   // Top-left red dot
-    { x: 65, y: -50 },    // Top-right red dot
-    { x: -85, y: 30 },    // Bottom-left red dot
-    { x: 85, y: 30 }      // Bottom-right red dot
+    { x: -60, y: -8 },    // First turret (60, 157) -> (-60, -8)
+    { x: 59, y: -8 },     // Second turret (179, 157) -> (59, -8)
+    { x: -49, y: 48 },    // Third turret (71, 213) -> (-49, 48)
+    { x: 47, y: 48 }      // Fourth turret (167, 213) -> (47, 48)
   ];
 
   // ===== Main Turret Sprites =====
@@ -4044,8 +4045,8 @@
           const imagesReady = hullImg.complete && hullImg.naturalWidth > 0;
           
           if (imagesReady) {
-            // Calculate scale based on radius (ship is 240x330, 25% smaller than original)
-            const shipScale = (r * 1.65) / 240; // 25% smaller (was 2.2, now 1.65)
+            // NO SCALING - Draw ship at 1:1 scale (240x330 original size)
+            // Ship images are already the correct size
             
             // FTL effect for battleship - phasing in effect
             if (m.inFTL) {
@@ -4054,7 +4055,7 @@
               ctx.lineWidth = 3;
               const streakLength = 100 * sy;
               for (let i = 0; i < 6; i++) {
-                const offsetX = (i - 2.5) * 18 * shipScale;
+                const offsetX = (i - 2.5) * 18;
                 ctx.beginPath();
                 ctx.moveTo(offsetX, -streakLength);
                 ctx.lineTo(offsetX, 0);
@@ -4070,14 +4071,14 @@
             const flameFrame = Math.floor(Date.now() / 100) % 2; // Switch every 100ms
             const flameImg = flameFrame === 0 ? flame1Img : flame2Img;
             if (flameImg.complete && flameImg.naturalWidth > 0) {
-              const flameW = 240 * shipScale;
-              const flameH = 330 * shipScale;
+              const flameW = 240;
+              const flameH = 330;
               ctx.drawImage(flameImg, -flameW/2, -flameH/2, flameW, flameH);
             }
             
-            // Draw hull
-            const hullW = 240 * shipScale;
-            const hullH = 330 * shipScale;
+            // Draw hull at 1:1 scale
+            const hullW = 240;
+            const hullH = 330;
             ctx.drawImage(hullImg, -hullW/2, -hullH/2, hullW, hullH);
             
             ctx.globalAlpha = 1;
@@ -4089,18 +4090,21 @@
               
               for (let t = 0; t < 4; t++) {
                 const offset = turretOffsets[t];
-                const turretX = offset.x * shipScale;
-                const turretY = offset.y * shipScale;
+                const turretX = offset.x;
+                const turretY = offset.y;
                 
                 ctx.save();
                 ctx.translate(turretX, turretY);
+                // Rotate around the turret's pivot point (18, 17)
                 ctx.rotate(turretAngles[t] - Math.PI/2); // Adjust for turret sprite orientation
                 
-                // Draw turret (35x46 original size)
-                const turretScale = shipScale * 1.0;
-                const tw = 35 * turretScale;
-                const th = 46 * turretScale;
-                ctx.drawImage(turretImg, -tw/2, -th/2, tw, th);
+                // Draw turret at 1:1 scale (35x46 original size)
+                // Pivot point is at (18, 17), so offset the drawing
+                const tw = 35;
+                const th = 46;
+                const pivotX = 18;
+                const pivotY = 17;
+                ctx.drawImage(turretImg, -pivotX, -pivotY, tw, th);
                 
                 ctx.restore();
               }
