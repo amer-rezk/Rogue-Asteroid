@@ -1418,8 +1418,9 @@ function startModuleCardPhase() {
   modulePlayersPicked = new Set();
   
   // Determine pick order:
-  // 1. Players who weren't hit by boss, sorted by kills (highest first)
-  // 2. Players who were hit by boss, randomized (last pick)
+  // 1. Players who killed their boss (ordered by who killed first via bossKillOrder)
+  // 2. Players who didn't kill boss and weren't hit (by slot order)
+  // 3. Players who were hit by boss, randomized (LAST pick - punishment)
   const alivePlayerIds = new Set(
     lockedSlots
       .map(id => players.get(id))
@@ -1427,22 +1428,30 @@ function startModuleCardPhase() {
       .map(p => p.id)
   );
   
-  // Get alive players who weren't hit by boss, sorted by kills
-  const normalPlayers = lockedSlots
-    .map(id => players.get(id))
-    .filter(p => p && p.hp > 0 && !bossHitPlayers.has(p.id))
-    .sort((a, b) => (b.kills || 0) - (a.kills || 0)); // Highest kills first
+  // Start with boss kill order (players who killed their boss, in order they killed)
+  const bossKillers = bossKillOrder.filter(id => 
+    alivePlayerIds.has(id) && !bossHitPlayers.has(id)
+  );
   
-  // Get alive players who were hit by boss, randomized
+  // Players who didn't kill boss and weren't hit (middle priority, by slot)
+  const middlePlayers = lockedSlots
+    .map(id => players.get(id))
+    .filter(p => p && p.hp > 0 && !bossKillOrder.includes(p.id) && !bossHitPlayers.has(p.id))
+    .sort((a, b) => (a.slot || 0) - (b.slot || 0))
+    .map(p => p.id);
+  
+  // Players who were hit by boss - randomized and LAST (punishment)
   const hitPlayers = lockedSlots
     .map(id => players.get(id))
     .filter(p => p && p.hp > 0 && bossHitPlayers.has(p.id))
-    .sort(() => Math.random() - 0.5); // Randomize
+    .sort(() => Math.random() - 0.5)
+    .map(p => p.id);
   
-  // Combine: normal players first (by kills), then hit players (randomized, last)
+  // Combine: boss killers first (by kill order), then middle, then hit players last
   const orderedIds = [
-    ...normalPlayers.map(p => p.id),
-    ...hitPlayers.map(p => p.id)
+    ...bossKillers,
+    ...middlePlayers,
+    ...hitPlayers
   ];
   
   modulePickOrder = orderedIds;
@@ -1545,9 +1554,6 @@ function resetToLobby() {
       p.kills = 0; // Reset kills
       p.spite = 0; // Reset spite
       p.incomeFromAttacks = 0; // Reset attack income
-      p.dronePos = null; // Reset drone state
-      p.droneAngle = 0;
-      p.droneCd = 0;
     });
 
     hostId = players.size ? Array.from(players.keys())[0] : null;
@@ -1768,7 +1774,10 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     pierce = owner.upgrades?.pierce || 0;
     chainChance = owner.upgrades?.chainChance || 0;
     ownerGold = owner.gold || 0;
-    modules = owner.inventory || owner.modules || []; // Use inventory for player, modules for copycat
+    // Only use owner.modules if explicitly set (for Copycat's scaledOwner)
+    // Real players don't have .modules - their inventory is separate storage
+    // NEVER use owner.inventory for module effects!
+    modules = owner.modules || [];
   }
 
   let finalDmg = isCrit ? dmg * 3 : dmg;
@@ -2136,6 +2145,31 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
         p.gold += goldReward;
         p.kills = (p.kills || 0) + 1;
         p.score = (p.score || 0) + Math.ceil(m.maxHp);
+      }
+      
+      // Track boss kill order
+      if (m.type === "boss" && p && !bossKillOrder.includes(p.id)) {
+        bossKillOrder.push(p.id);
+        broadcast({ t: "bossKilled", killerId: p.id, killerName: p.name, killPosition: bossKillOrder.length });
+        
+        // Spawn remaining minion waves if boss died early
+        if (m.bossSpawnCount < 3) {
+          const remainingSpawns = 3 - m.bossSpawnCount;
+          let totalToSpawn = remainingSpawns * 5;
+          totalToSpawn = Math.min(totalToSpawn, MAX_MISSILES - missiles.length);
+          for (let k = 0; k < totalToSpawn; k++) {
+            const bossAdVariant = (k % 5) + 1;
+            missiles.push(createAsteroid(
+              m.x + rand(-50, 50),
+              m.y + rand(20, 100),
+              "medium",
+              Math.max(2, wave),
+              m.targetSlot,
+              null, null, bossAdVariant, false
+            ));
+          }
+          createExplosion(m.x, m.y, 80, "#ff0000");
+        }
       }
       
       // Splitter
@@ -2547,15 +2581,8 @@ function tick() {
       const { x0, x1 } = segmentBounds(slot);
       const pos = turretPositions(slot);
       
-      // Calculate fire rate with Bloodthirster Engine bonus
+      // Main turret fire rate (modules don't affect main turret - only slotted towers)
       let fireRateMult = p.upgrades?.fireRateMult ?? 1;
-      
-      // Bloodthirster Engine: +1% fire rate per 1% HP missing
-      if (p.inventory && p.inventory.includes("bloodthirster")) {
-        const missingHpPercent = (p.maxHp - p.hp) / p.maxHp;
-        fireRateMult *= 1 + missingHpPercent; // +100% fire rate at 0 HP (capped by death)
-      }
-      
       const baseCooldown = BULLET_COOLDOWN / fireRateMult;
 
       let targetX, targetY, clamped;
@@ -2642,6 +2669,12 @@ function tick() {
                 fireRateBonus *= 1 + (moduleCount * 0.15); // +15% per module (including feedbackLoop itself)
               }
               
+              // BLOODTHIRSTER ENGINE: +1% fire rate per 1% HP missing
+              if (activeModules.includes("bloodthirster")) {
+                const missingHpPercent = (p.maxHp - p.hp) / p.maxHp;
+                fireRateBonus *= 1 + missingHpPercent;
+              }
+              
               tower.cd = stats.cooldown / levelBonus / fireRateBonus;
               
               // COPYCAT MODULE: Becomes an exact 75% copy of main turret
@@ -2721,48 +2754,60 @@ function tick() {
         }
       }
       
-      // Drone Command: Update and fire attack drones
-      if (p.inventory && p.inventory.includes("droneCommand")) {
-        // Initialize drone state if needed
-        if (!p.droneAngle) p.droneAngle = 0;
-        if (!p.droneCd) p.droneCd = 0;
-        
-        // Update drone orbit angle
-        p.droneAngle += DT * 2; // 2 radians per second orbit speed
-        
-        // Calculate drone position (orbits around main turret)
-        const orbitRadius = 40;
-        const droneX = pos.main.x + Math.cos(p.droneAngle) * orbitRadius;
-        const droneY = pos.main.y - 30 + Math.sin(p.droneAngle) * orbitRadius * 0.5; // Elliptical orbit
-        
-        // Store drone position for client rendering
-        p.dronePos = { x: droneX, y: droneY, angle: p.droneAngle };
-        
-        // Drone firing
-        p.droneCd = Math.max(0, p.droneCd - DT);
-        
-        if (p.droneCd <= 0) {
-          // Find target for drone
-          const droneTarget = findBestTarget(x0, x1, droneX, droneY, 0.8, p.slot);
+      // Drone Command: Update and fire drones for towers with this module
+      if (p.towers) {
+        for (let tIdx = 0; tIdx < p.towers.length; tIdx++) {
+          const tower = p.towers[tIdx];
+          if (!tower) continue;
           
-          if (droneTarget) {
-            // Fire drone bullet (weaker than main, but free DPS)
-            const droneDamage = 1 + (p.upgrades?.damageAdd ?? 0) * 0.3; // 30% of damage upgrades
+          // Check if this tower has droneCommand module
+          const hasDrone = tower.modules && tower.modules.includes("droneCommand");
+          if (!hasDrone) {
+            tower.dronePos = null;
+            continue;
+          }
+          
+          const towerPos = pos.slots[tIdx];
+          if (!towerPos) continue;
+          
+          // Initialize drone state if needed
+          if (!tower.droneAngle) tower.droneAngle = Math.random() * Math.PI * 2;
+          if (!tower.droneCd) tower.droneCd = 0;
+          
+          // Update drone orbit angle
+          tower.droneAngle += DT * 2.5; // 2.5 radians per second orbit speed
+          
+          // Calculate drone position (orbits around the tower)
+          const orbitRadius = 30;
+          const droneX = towerPos.x + Math.cos(tower.droneAngle) * orbitRadius;
+          const droneY = towerPos.y - 20 + Math.sin(tower.droneAngle) * orbitRadius * 0.5;
+          
+          // Store drone position for client rendering
+          tower.dronePos = { x: droneX, y: droneY, angle: tower.droneAngle };
+          
+          // Drone firing
+          tower.droneCd = Math.max(0, tower.droneCd - DT);
+          
+          if (tower.droneCd <= 0) {
+            const droneTarget = findBestTarget(x0, x1, droneX, droneY, 0.8, p.slot);
             
-            // Calculate intercept point
-            let speedMult = slotSpeedMultipliers[p.slot] || 1;
-            const gravityMult = 1 + waveElapsedTime * GRAVITY_INCREASE_RATE;
-            speedMult *= gravityMult;
-            const intercept = calculateInterceptPoint(droneX, droneY, BULLET_SPEED * 0.8, droneTarget, speedMult);
-            
-            fireBullet(p, droneX, droneY, intercept.x, intercept.y, 0, {
-              damage: droneDamage,
-              bulletType: "drone",
-              inheritedUpgrades: false,
-              modules: [], // Drones don't get module effects
-            });
-            
-            p.droneCd = 0.5; // Drone fires every 0.5 seconds
+            if (droneTarget) {
+              const droneDamage = 1 + (p.upgrades?.damageAdd ?? 0) * 0.3;
+              
+              let speedMult = slotSpeedMultipliers[p.slot] || 1;
+              const gravityMult = 1 + waveElapsedTime * GRAVITY_INCREASE_RATE;
+              speedMult *= gravityMult;
+              const intercept = calculateInterceptPoint(droneX, droneY, BULLET_SPEED * 0.8, droneTarget, speedMult);
+              
+              fireBullet(p, droneX, droneY, intercept.x, intercept.y, 0, {
+                damage: droneDamage,
+                bulletType: "drone",
+                inheritedUpgrades: false,
+                modules: [],
+              });
+              
+              tower.droneCd = 0.5;
+            }
           }
         }
       }
@@ -3966,16 +4011,31 @@ function tick() {
             const exposureThreshold = 1.0; // Seconds before diminishing kicks in hard
             const diminishFactor = 1 / Math.sqrt(1 + m.gravityExposure / exposureThreshold);
             
-            // FIX: Apply pull to VELOCITY instead of position
-            // This makes gravity wells actually slow down fast-moving asteroids (like sideswiped)
-            const pullAccel = (well.strength / dist) * diminishFactor * 2; // Acceleration toward well center
-            m.vx += (dx / dist) * pullAccel * DT;
-            m.vy += (dy / dist) * pullAccel * DT;
+            // Calculate pull strength
+            const pullAccel = (well.strength / dist) * diminishFactor * 2;
             
-            // Also apply a small direct position pull for immediate visual feedback
+            // Apply horizontal pull (can pull left/right freely)
+            m.vx += (dx / dist) * pullAccel * DT;
+            
+            // Apply vertical pull with restrictions:
+            // - Can slow down asteroids (reduce vy magnitude toward 0)
+            // - Can speed up asteroids going down (increase positive vy)
+            // - NEVER reverse direction to go upward (vy must stay >= 0)
+            const vyPull = (dy / dist) * pullAccel * DT;
+            const newVy = m.vy + vyPull;
+            
+            // Only apply if it doesn't make asteroid go upward
+            if (newVy >= 0) {
+              m.vy = newVy;
+            } else {
+              // Clamp to 0 - asteroid stops vertically but doesn't reverse
+              m.vy = Math.max(0, m.vy * 0.95); // Slow down instead
+            }
+            
+            // Small horizontal position pull for visual feedback
             const posPull = (well.strength / dist) * DT * diminishFactor * 0.3;
             m.x += (dx / dist) * posPull;
-            m.y += (dy / dist) * posPull;
+            // No vertical position pull - let velocity handle it
             
             // Track exposure time
             m.gravityExposure += DT;
@@ -4361,7 +4421,6 @@ function broadcastGameState() {
     obj.upgrades.ricochet = u.ricochet || 0;
     obj.upgrades.chainChance = u.chainChance || 0;
     obj.upgrades.goldBonus = u.goldBonus || 0; // Additive gold bonus (0 = no bonus, 0.12 = +12%)
-    obj.dronePos = p.dronePos || null; // Drone Command position
   }
   broadcastState.players.length = playerCount;
   

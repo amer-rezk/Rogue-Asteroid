@@ -4261,42 +4261,6 @@
           ctx.restore();
           clearShadow(ctx);
         }
-        
-        // Drone Command: Render orbiting drone
-        if (p.dronePos && p.inventory && p.inventory.includes("droneCommand")) {
-          const droneX = p.dronePos.x * sx;
-          const droneY = p.dronePos.y * sy;
-          const droneSize = 8 * sx;
-          
-          ctx.save();
-          ctx.translate(droneX, droneY);
-          
-          // Drone glow
-          ctx.shadowColor = "#44aaff";
-          ctx.shadowBlur = 10;
-          
-          // Drone body (UFO shape)
-          ctx.fillStyle = hexToRgba("#44aaff", isDead ? 0.3 : 0.9);
-          ctx.beginPath();
-          ctx.ellipse(0, 0, droneSize, droneSize * 0.5, 0, 0, Math.PI * 2);
-          ctx.fill();
-          
-          // Drone dome
-          ctx.fillStyle = hexToRgba("#88ccff", isDead ? 0.3 : 0.8);
-          ctx.beginPath();
-          ctx.arc(0, -droneSize * 0.2, droneSize * 0.4, Math.PI, 0);
-          ctx.fill();
-          
-          // Drone lights (pulsing)
-          const pulse = Math.sin(Date.now() / 100) * 0.3 + 0.7;
-          ctx.fillStyle = `rgba(255, 255, 100, ${pulse * (isDead ? 0.3 : 1)})`;
-          ctx.beginPath();
-          ctx.arc(-droneSize * 0.6, 0, 2 * sx, 0, Math.PI * 2);
-          ctx.arc(droneSize * 0.6, 0, 2 * sx, 0, Math.PI * 2);
-          ctx.fill();
-          
-          ctx.restore();
-        }
 
         // Tower slots
         const offsets = [-110, -50, 50, 110];
@@ -4473,6 +4437,42 @@
                   }
                   ctx.restore();
                   clearShadow(ctx);
+                }
+                
+                // Drone Command: Render orbiting drone for this tower
+                if (t.dronePos) {
+                  const droneX = t.dronePos.x * sx;
+                  const droneY = t.dronePos.y * sy;
+                  const droneSize = 6 * sx;
+                  
+                  ctx.save();
+                  ctx.translate(droneX, droneY);
+                  
+                  // Drone glow
+                  ctx.shadowColor = "#44aaff";
+                  ctx.shadowBlur = 8;
+                  
+                  // Drone body (UFO shape)
+                  ctx.fillStyle = hexToRgba("#44aaff", isDead ? 0.3 : 0.9);
+                  ctx.beginPath();
+                  ctx.ellipse(0, 0, droneSize, droneSize * 0.5, 0, 0, Math.PI * 2);
+                  ctx.fill();
+                  
+                  // Drone dome
+                  ctx.fillStyle = hexToRgba("#88ccff", isDead ? 0.3 : 0.8);
+                  ctx.beginPath();
+                  ctx.arc(0, -droneSize * 0.2, droneSize * 0.4, Math.PI, 0);
+                  ctx.fill();
+                  
+                  // Drone lights (pulsing)
+                  const dronePulse = Math.sin(Date.now() / 100 + i) * 0.3 + 0.7;
+                  ctx.fillStyle = `rgba(255, 255, 100, ${dronePulse * (isDead ? 0.3 : 1)})`;
+                  ctx.beginPath();
+                  ctx.arc(-droneSize * 0.6, 0, 1.5 * sx, 0, Math.PI * 2);
+                  ctx.arc(droneSize * 0.6, 0, 1.5 * sx, 0, Math.PI * 2);
+                  ctx.fill();
+                  
+                  ctx.restore();
                 }
 
               // Level stars
