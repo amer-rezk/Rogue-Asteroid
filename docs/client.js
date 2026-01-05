@@ -1601,8 +1601,8 @@
 
       case "wave":
         wave = msg.wave;
-        // FIX: Comment out this line so the menu stays open!
-        // selectedTower = null; 
+        // Clear alerts when the new wave starts
+        attackPopups = [];
         break;
 
       case "upgrade":
@@ -1915,8 +1915,13 @@
         break;
 
       case "incomingAttack":
-        // Add to our popup system
-        attackPopups.push({ type: msg.attackType, from: msg.from, time: Date.now() });
+        // Save the amount (msg.count) for the UI
+        attackPopups.push({ 
+            type: msg.attackType, 
+            from: msg.from, 
+            count: msg.count || 1, // Default to 1 if missing
+            time: Date.now() 
+        });
         break;
 
       case "gameOver":
@@ -5990,102 +5995,116 @@
 
       // ===== INCOMING ATTACK ALERTS (POPUP & SLIDE) =====
       
-      // 1. Cleanup old popups (keep them for 6 seconds so they stay docked)
+      // 1. Cleanup: Only remove old ALERTS (Phase 1/2). 
+      // DOCKED items (Phase 3) stay until the 'wave' event clears them.
       const currentTime = Date.now();
-      for (let i = attackPopups.length - 1; i >= 0; i--) {
-        if (currentTime - attackPopups[i].time >= 6000) {
-          attackPopups.splice(i, 1);
-        }
-      }
+      // (No loop here anymore - we rely on the "wave" event to clear the list)
 
       // 2. Render The Animation
-      // (Using sx, sy, offsetX, offsetY from the top of draw function)
+      const { sx, sy, offsetX, offsetY } = getScale();
       
-      // Calculate where to "dock" (Top of YOUR player slot)
-      // If we are spectating or dead, default to center-ish (1.5)
       const targetSlot = (mySlot !== undefined && mySlot >= 0) ? mySlot : 1.5; 
       
-      // Destination Coordinates (Top of your specific lane)
-      const dockX = (targetSlot * world.segmentWidth + world.segmentWidth / 2) * sx + offsetX;
-      const dockY = 80 * sy + offsetY; 
+      // DOCK DESTINATION: Left side of the player's lane + 40px padding
+      const laneX = (targetSlot * world.segmentWidth) * sx + offsetX;
+      const dockX = laneX + (40 * sx); 
+      const dockY = 100 * sy + offsetY; 
 
       for (let i = 0; i < attackPopups.length; i++) {
         const popup = attackPopups[i];
-        const age = (currentTime - popup.time) / 1000; // Seconds since arrival
+        const age = (currentTime - popup.time) / 1000;
         const atkDef = ATTACK_TYPES[popup.type];
         if (!atkDef) continue;
 
-        let x, y, scale, alpha;
+        let x, y, scale, alpha, phase;
 
         // --- ANIMATION PHASES ---
-        
         if (age < 1.5) {
-          // PHASE 1: ALERT! (Big, Center Screen)
-          // Elastic pop-in effect
+          // PHASE 1: ALERT! (Center Screen)
+          phase = "alert";
           const t = Math.min(1, age / 0.4);
           const elastic = 1 + Math.sin(t * Math.PI * 0.7) * 0.3 * (1-t);
-          
           x = canvas.width / 2;
           y = canvas.height / 3;
-          scale = 1.0 * elastic; // Big size
+          scale = 1.0 * elastic;
           alpha = 1;
         
         } else if (age < 2.5) {
-          // PHASE 2: SLIDE UP (Transition to Dock)
-          const t = (age - 1.5); // 0.0 to 1.0
-          // Smooth slide curve
-          const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+          // PHASE 2: SLIDE (Center -> Left)
+          phase = "slide";
+          const t = (age - 1.5); 
+          const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; // EaseInOut
           
-          // Slide from Center -> Dock Position
           x = (canvas.width / 2) + (dockX - (canvas.width / 2)) * ease;
           y = (canvas.height / 3) + (dockY - (canvas.height / 3)) * ease;
-          scale = 1.0 - (0.6 * ease); // Shrink from 1.0 down to 0.4
+          scale = 1.0 - (0.0 * ease); // Keep size roughly same
           alpha = 1;
 
         } else {
-          // PHASE 3: DOCKED (Stay at top of lane)
+          // PHASE 3: DOCKED (Square Box)
+          phase = "docked";
+          // Stack them vertically if there are multiple
+          // (i * 70px spacing)
           x = dockX;
-          y = dockY;
-          scale = 0.4; // Small icon size
-          // Fade out at the very end
-          alpha = age > 5.5 ? (6.0 - age) / 0.5 : 1;
+          y = dockY + (i * 70 * sy); 
+          scale = 0.8; 
+          alpha = 1;
         }
 
-        // --- DRAWING ---
         ctx.save();
         ctx.translate(x, y);
         ctx.scale(scale, scale);
         ctx.globalAlpha = alpha;
 
-        // Glow Effect
-        ctx.shadowColor = atkDef.color || "#f44";
-        ctx.shadowBlur = 30;
+        if (phase === "docked") {
+            // === SQUARE BOX UI ===
+            // Background Box
+            ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+            ctx.strokeStyle = atkDef.color || "#f44";
+            ctx.lineWidth = 3;
+            // Draw box centered on X/Y
+            ctx.beginPath();
+            ctx.rect(-40, -30, 80, 60);
+            ctx.fill();
+            ctx.stroke();
 
-        // Draw Icon
-        ctx.font = "60px sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillStyle = "#fff";
-        ctx.fillText(atkDef.icon, 0, -25);
-
-        // Text handling based on phase
-        if (age < 2.0) {
-            // Big Alert Text
-            ctx.shadowBlur = 10;
-            ctx.font = "bold 28px 'Orbitron', sans-serif";
-            ctx.fillStyle = "#ff4444";
-            ctx.fillText("INCOMING!", 0, 30);
-            
-            ctx.font = "bold 16px 'Courier New', monospace";
+            // Icon (Left side of box)
+            ctx.font = "30px sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
             ctx.fillStyle = "#fff";
-            ctx.shadowBlur = 0;
-            ctx.fillText(`FROM ${popup.from.toUpperCase()}`, 0, 55);
+            ctx.fillText(atkDef.icon, -20, 0);
+
+            // Amount (Right side of box)
+            ctx.font = "bold 24px 'Orbitron', monospace";
+            ctx.fillStyle = "#fff";
+            ctx.textAlign = "center";
+            ctx.fillText(`x${popup.count}`, 20, 2);
+
         } else {
-            // Small Docked Text
-             ctx.font = "bold 24px 'Courier New', monospace";
-             ctx.fillStyle = "#fff";
-             ctx.shadowBlur = 0;
-             ctx.fillText("COMING", 0, 25);
+            // === BIG ALERT UI (Phase 1 & 2) ===
+            ctx.shadowColor = atkDef.color || "#f44";
+            ctx.shadowBlur = 30;
+
+            // Icon
+            ctx.font = "60px sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillStyle = "#fff";
+            ctx.fillText(atkDef.icon, 0, -25);
+
+            // "INCOMING" Text
+            if (phase === "alert") {
+                ctx.shadowBlur = 10;
+                ctx.font = "bold 28px 'Orbitron', sans-serif";
+                ctx.fillStyle = "#ff4444";
+                ctx.fillText("INCOMING!", 0, 30);
+                
+                ctx.font = "bold 16px 'Courier New', monospace";
+                ctx.fillStyle = "#fff";
+                ctx.shadowBlur = 0;
+                ctx.fillText(`x${popup.count} FROM ${popup.from.toUpperCase()}`, 0, 55);
+            }
         }
 
         ctx.restore();
