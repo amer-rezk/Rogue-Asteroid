@@ -165,7 +165,7 @@ const TOWER_MODULES = {
     name: "Russian Roulette",
     icon: "🎲",
     color: "#ff0000",
-    desc: "Random 0x-10x damage multiplier per shot",
+    desc: "Random 0x-3x damage multiplier per shot",
     effect: "randomDamage"
   },
   gravityWell: {
@@ -2386,12 +2386,13 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
   }
   
   // Vampiric healing per copy (STACKS)
-  // 1x = 400 dmg/heal, 2x = 300 dmg/heal, 3x = 200 dmg/heal
+  // 1x = 200 dmg/heal, 2x = 150 dmg/heal, 3x = 100 dmg/heal
   const vampiricRailgunCount = countModule(modules, "vampiricNanobots");
   if (vampiricRailgunCount > 0 && vampiricDamageDealt > 0) {
     const p = players.get(owner.id);
     if (p) {
-      const healThreshold = Math.max(200, 400 - (vampiricRailgunCount - 1) * 100);
+      // BUFFED: Base 200, -50 per extra stack (min 50)
+      const healThreshold = Math.max(50, 200 - (vampiricRailgunCount - 1) * 50);
       p.vampiricPool = (p.vampiricPool || 0) + vampiricDamageDealt * vampiricRailgunCount;
       if (p.vampiricPool >= healThreshold) {
         const heals = Math.floor(p.vampiricPool / healThreshold);
@@ -3662,10 +3663,12 @@ function tick() {
           
           // Vampiric Nanobots: Accumulate damage for healing (STACKS)
           // SYNERGY: All child bullets (shards, ricochets) contribute to healing pool!
-          // 1x = 400 dmg per heal, 2x = 300 dmg per heal, 3x = 200 dmg per heal
+          // 1x = 200 dmg per heal, 2x = 150 dmg per heal, 3x = 100 dmg per heal
           const vampiricHitCount = countModule(bulletModules, "vampiricNanobots");
           if (vampiricHitCount > 0 && owner) {
-            const healThreshold = Math.max(200, 400 - (vampiricHitCount - 1) * 100);
+            // BUFFED: Base 200, -50 per extra stack (min 50)
+            const healThreshold = Math.max(50, 200 - (vampiricHitCount - 1) * 50);
+            
             // x2 because damage was halved per copy, scale accumulation with copies
             owner.lifestealAccum = (owner.lifestealAccum || 0) + b.dmg * 2 * vampiricHitCount;
             if (owner.lifestealAccum >= healThreshold) {
