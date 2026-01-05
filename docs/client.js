@@ -5999,7 +5999,7 @@
       }
 
       // 2. Render The Animation
-      const { sx, sy, offsetX, offsetY } = getScale();
+      // (Using sx, sy, offsetX, offsetY from the top of draw function)
       
       // Calculate where to "dock" (Top of YOUR player slot)
       // If we are spectating or dead, default to center-ish (1.5)
