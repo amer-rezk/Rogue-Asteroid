@@ -1914,129 +1914,24 @@
         recentAttackSent = { type: msg.attackType, target: msg.targetName, time: Date.now() };
         break;
 
-      // ===== UNIFIED ATTACK NOTIFICATIONS =====
-      // 1. Filter out old popups (remove if idle for > 4 seconds)
-      const now = Date.now();
-      for (let i = attackPopups.length - 1; i >= 0; i--) {
-        if (now - attackPopups[i].lastUpdate > 4000) {
-          attackPopups.splice(i, 1);
-        }
-      }
-
-      // 2. Render Animation (Center Popup -> Slide -> Docked Top)
-      // Calculate docking position based on MY player slot
-      const { sx: animSx, offsetX: animOffX } = getScale(); // Rename to avoid conflict
-      const mySlotWidth = (world.segmentWidth || 360) * animSx;
-      // Center of MY specific lane
-      const myLaneX = animOffX + (mySlot * (world.segmentWidth || 360)) * animSx + mySlotWidth / 2;
-      const dockY = 90; // Top area of the lane
-
-      for (let i = 0; i < attackPopups.length; i++) {
-        const popup = attackPopups[i];
-        const atkDef = ATTACK_TYPES[popup.type];
-        if (!atkDef) continue;
-
-        const timeAlive = (now - popup.startTime) / 1000;
-        
-        // ANIMATION PHASES
-        // 0.0s - 1.2s: Phase 1 - Big Center Popup
-        // 1.2s - 1.8s: Phase 2 - Slide to Top
-        // 1.8s +     : Phase 3 - Docked Badge
-        
-        let x, y, scale, alpha = 1;
-        let isDocked = false;
-
-        if (timeAlive < 1.2) {
-          // PHASE 1: Center Popup (Elastic Entrace)
-          x = canvas.width / 2;
-          y = canvas.height / 2 - 50;
-          const t = Math.min(1, timeAlive / 0.3);
-          scale = 1 + Math.sin(t * Math.PI) * 0.2; // slight bounce
-          scale = Math.min(scale, 1.2); // Cap scale
-        } else if (timeAlive < 1.8) {
-          // PHASE 2: Slide Up
-          const t = (timeAlive - 1.2) / 0.6; // 0.0 to 1.0
-          const ease = t * t * (3 - 2 * t); // Smoothstep
-          
-          // Lerp from Center to Dock Position (stack vertically if multiple types)
-          const startX = canvas.width / 2;
-          const startY = canvas.height / 2 - 50;
-          const endX = myLaneX;
-          const endY = dockY + (i * 45); // Stack multiple warnings
-          
-          x = startX + (endX - startX) * ease;
-          y = startY + (endY - startY) * ease;
-          scale = 1.2 - (0.4 * ease); // Shrink from 1.2 to 0.8
+      case "incomingAttack":
+        // LOGIC: Group attacks by type to prevent spam (e.g., "Swarm x10")
+        const existingPopup = attackPopups.find(p => p.type === msg.attackType);
+        if (existingPopup) {
+          existingPopup.count++;
+          existingPopup.lastUpdate = Date.now(); // Reset idle timer
+          // Note: We DON'T reset startTime, so it doesn't re-center. 
+          // It stays docked and just updates the number.
         } else {
-          // PHASE 3: Docked
-          isDocked = true;
-          x = myLaneX;
-          y = dockY + (i * 45);
-          scale = 0.8;
-          
-          // Fade out if near death (alive for > 3s since last update)
-          const timeSinceUpdate = (now - popup.lastUpdate) / 1000;
-          if (timeSinceUpdate > 3.0) {
-            alpha = 1 - (timeSinceUpdate - 3.0);
-          }
+          attackPopups.push({ 
+            type: msg.attackType, 
+            from: msg.from, 
+            startTime: Date.now(), // When animation began
+            lastUpdate: Date.now(), // For decay
+            count: 1 
+          });
         }
-
-        ctx.save();
-        ctx.translate(x, y);
-        ctx.scale(scale, scale);
-        ctx.globalAlpha = Math.max(0, alpha);
-
-        if (!isDocked) {
-          // BIG POPUP STYLE
-          ctx.shadowColor = atkDef.color;
-          ctx.shadowBlur = 30;
-          ctx.fillStyle = "rgba(0,0,0,0.8)";
-          ctx.beginPath();
-          ctx.roundRect(-120, -40, 240, 80, 10);
-          ctx.fill();
-          
-          ctx.font = "40px sans-serif";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.fillText(atkDef.icon, -80, 0);
-          
-          ctx.font = "bold 24px 'Orbitron', sans-serif";
-          ctx.fillStyle = "#ff4444";
-          ctx.shadowBlur = 0;
-          ctx.fillText("INCOMING!", 20, -10);
-          
-          ctx.font = "bold 16px monospace";
-          ctx.fillStyle = "#fff";
-          ctx.fillText(`x${popup.count} ${atkDef.name.toUpperCase()}`, 20, 15);
-        } else {
-          // DOCKED BADGE STYLE (Compact)
-          ctx.shadowColor = atkDef.color;
-          ctx.shadowBlur = 10;
-          
-          // Background Pill
-          ctx.fillStyle = "rgba(20, 10, 10, 0.8)";
-          ctx.strokeStyle = atkDef.color;
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.roundRect(-60, -20, 120, 40, 20);
-          ctx.fill();
-          ctx.stroke();
-          
-          // Icon
-          ctx.font = "24px sans-serif";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.shadowBlur = 0;
-          ctx.fillText(atkDef.icon, -35, 2);
-          
-          // Count
-          ctx.font = "bold 20px monospace";
-          ctx.fillStyle = "#fff";
-          ctx.fillText(`x${popup.count}`, 15, 2);
-        }
-
-        ctx.restore();
-      }
+        break;
 
       case "gameOver":
         phase = "gameover";
@@ -6107,13 +6002,130 @@
         ctx.fillText(`${atkDef?.icon || "?"} ${atkDef?.name || "?"} QUEUED!${targetText}`, canvas.width / 2, canvas.height - 40);
       }
 
-      // Incoming attack warnings - filter in place to avoid allocation
-      const currentTime = Date.now();
-      for (let i = incomingAttacks.length - 1; i >= 0; i--) {
-        if (currentTime - incomingAttacks[i].time >= 3000) {
-          incomingAttacks.splice(i, 1);
+      // ===== UNIFIED ATTACK NOTIFICATIONS =====
+      // 1. Filter out old popups (remove if idle for > 4 seconds)
+      const now = Date.now();
+      for (let i = attackPopups.length - 1; i >= 0; i--) {
+        if (now - attackPopups[i].lastUpdate > 4000) {
+          attackPopups.splice(i, 1);
         }
       }
+
+      // 2. Render Animation (Center Popup -> Slide -> Docked Top)
+      // Calculate docking position based on MY player slot
+      const { sx: animSx, offsetX: animOffX } = getScale(); // Rename to avoid conflict
+      const mySlotWidth = (world.segmentWidth || 360) * animSx;
+      // Center of MY specific lane
+      const myLaneX = animOffX + (mySlot * (world.segmentWidth || 360)) * animSx + mySlotWidth / 2;
+      const dockY = 90; // Top area of the lane
+
+      for (let i = 0; i < attackPopups.length; i++) {
+        const popup = attackPopups[i];
+        const atkDef = ATTACK_TYPES[popup.type];
+        if (!atkDef) continue;
+
+        const timeAlive = (now - popup.startTime) / 1000;
+        
+        // ANIMATION PHASES
+        // 0.0s - 1.2s: Phase 1 - Big Center Popup
+        // 1.2s - 1.8s: Phase 2 - Slide to Top
+        // 1.8s +     : Phase 3 - Docked Badge
+        
+        let x, y, scale, alpha = 1;
+        let isDocked = false;
+
+        if (timeAlive < 1.2) {
+          // PHASE 1: Center Popup (Elastic Entrace)
+          x = canvas.width / 2;
+          y = canvas.height / 2 - 50;
+          const t = Math.min(1, timeAlive / 0.3);
+          scale = 1 + Math.sin(t * Math.PI) * 0.2; // slight bounce
+          scale = Math.min(scale, 1.2); // Cap scale
+        } else if (timeAlive < 1.8) {
+          // PHASE 2: Slide Up
+          const t = (timeAlive - 1.2) / 0.6; // 0.0 to 1.0
+          const ease = t * t * (3 - 2 * t); // Smoothstep
+          
+          // Lerp from Center to Dock Position (stack vertically if multiple types)
+          const startX = canvas.width / 2;
+          const startY = canvas.height / 2 - 50;
+          const endX = myLaneX;
+          const endY = dockY + (i * 45); // Stack multiple warnings
+          
+          x = startX + (endX - startX) * ease;
+          y = startY + (endY - startY) * ease;
+          scale = 1.2 - (0.4 * ease); // Shrink from 1.2 to 0.8
+        } else {
+          // PHASE 3: Docked
+          isDocked = true;
+          x = myLaneX;
+          y = dockY + (i * 45);
+          scale = 0.8;
+          
+          // Fade out if near death (alive for > 3s since last update)
+          const timeSinceUpdate = (now - popup.lastUpdate) / 1000;
+          if (timeSinceUpdate > 3.0) {
+            alpha = 1 - (timeSinceUpdate - 3.0);
+          }
+        }
+
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.scale(scale, scale);
+        ctx.globalAlpha = Math.max(0, alpha);
+
+        if (!isDocked) {
+          // BIG POPUP STYLE
+          ctx.shadowColor = atkDef.color;
+          ctx.shadowBlur = 30;
+          ctx.fillStyle = "rgba(0,0,0,0.8)";
+          ctx.beginPath();
+          ctx.roundRect(-120, -40, 240, 80, 10);
+          ctx.fill();
+          
+          ctx.font = "40px sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(atkDef.icon, -80, 0);
+          
+          ctx.font = "bold 24px 'Orbitron', sans-serif";
+          ctx.fillStyle = "#ff4444";
+          ctx.shadowBlur = 0;
+          ctx.fillText("INCOMING!", 20, -10);
+          
+          ctx.font = "bold 16px monospace";
+          ctx.fillStyle = "#fff";
+          ctx.fillText(`x${popup.count} ${atkDef.name.toUpperCase()}`, 20, 15);
+        } else {
+          // DOCKED BADGE STYLE (Compact)
+          ctx.shadowColor = atkDef.color;
+          ctx.shadowBlur = 10;
+          
+          // Background Pill
+          ctx.fillStyle = "rgba(20, 10, 10, 0.8)";
+          ctx.strokeStyle = atkDef.color;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.roundRect(-60, -20, 120, 40, 20);
+          ctx.fill();
+          ctx.stroke();
+          
+          // Icon
+          ctx.font = "24px sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.shadowBlur = 0;
+          ctx.fillText(atkDef.icon, -35, 2);
+          
+          // Count
+          ctx.font = "bold 20px monospace";
+          ctx.fillStyle = "#fff";
+          ctx.fillText(`x${popup.count}`, 15, 2);
+        }
+
+        ctx.restore();
+      }
+	  
       for (let i = 0; i < incomingAttacks.length; i++) {
         const a = incomingAttacks[i];
         const age = (currentTime - a.time) / 3000;
