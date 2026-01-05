@@ -1915,14 +1915,13 @@
         break;
 
       case "incomingAttack":
-        // AGGREGATION: Check if we already have this specific attack waiting
+        // AGGREGATION: Check if we already have this specific attack waiting from this person
         const existingAlert = attackPopups.find(a => a.type === msg.attackType && a.from === msg.from);
         
         if (existingAlert) {
           // Just add to the count!
           existingAlert.count = (existingAlert.count || 1) + (msg.count || 1);
-          // Optional: Add a 'pulse' timestamp if you want it to flash when updated
-          existingAlert.lastUpdate = Date.now(); 
+          existingAlert.time = Date.now(); // Reset timer so it stays on screen
         } else {
           // New attack type, add it to the list
           attackPopups.push({ 
