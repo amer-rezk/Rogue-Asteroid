@@ -1915,8 +1915,7 @@
         break;
 
       case "incomingAttack":
-        incomingAttacks.push({ type: msg.attackType, from: msg.from, time: Date.now() });
-        // NEW: Add visual popup animation
+        // Add to our popup system
         attackPopups.push({ type: msg.attackType, from: msg.from, time: Date.now() });
         break;
 
@@ -5989,82 +5988,89 @@
         ctx.fillText(`${atkDef?.icon || "?"} ${atkDef?.name || "?"} QUEUED!${targetText}`, canvas.width / 2, canvas.height - 40);
       }
 
-      // ===== INCOMING ATTACK ALERTS =====
-      // 1. Clean up old popups
+      // ===== INCOMING ATTACK ALERTS (POPUP & SLIDE) =====
+      
+      // 1. Cleanup old popups (keep them for 6 seconds so they stay docked)
       const currentTime = Date.now();
       for (let i = attackPopups.length - 1; i >= 0; i--) {
-        // Keep them for 6 seconds so they can "dock" at the top
         if (currentTime - attackPopups[i].time >= 6000) {
           attackPopups.splice(i, 1);
         }
       }
 
-      // 2. Render Animation (Pop Up -> Slide -> Dock)
+      // 2. Render The Animation
       const { sx, sy, offsetX, offsetY } = getScale();
-      // Calculate the top-center of YOUR lane
-      // If mySlot is -1 (spectator/dead), use center screen top
+      
+      // Calculate where to "dock" (Top of YOUR player slot)
+      // If we are spectating or dead, default to center-ish (1.5)
       const targetSlot = (mySlot !== undefined && mySlot >= 0) ? mySlot : 1.5; 
+      
+      // Destination Coordinates (Top of your specific lane)
       const dockX = (targetSlot * world.segmentWidth + world.segmentWidth / 2) * sx + offsetX;
-      const dockY = 80 * sy + offsetY; // Top of the lane
+      const dockY = 80 * sy + offsetY; 
 
       for (let i = 0; i < attackPopups.length; i++) {
         const popup = attackPopups[i];
-        const age = (currentTime - popup.time) / 1000; // in seconds
+        const age = (currentTime - popup.time) / 1000; // Seconds since arrival
         const atkDef = ATTACK_TYPES[popup.type];
         if (!atkDef) continue;
 
         let x, y, scale, alpha;
 
-        // ANIMATION PHASES
+        // --- ANIMATION PHASES ---
+        
         if (age < 1.5) {
-          // PHASE 1: ALERT (Center Screen)
+          // PHASE 1: ALERT! (Big, Center Screen)
           // Elastic pop-in effect
           const t = Math.min(1, age / 0.4);
           const elastic = 1 + Math.sin(t * Math.PI * 0.7) * 0.3 * (1-t);
           
           x = canvas.width / 2;
           y = canvas.height / 3;
-          scale = 1.0 * elastic;
+          scale = 1.0 * elastic; // Big size
           alpha = 1;
         
         } else if (age < 2.5) {
           // PHASE 2: SLIDE UP (Transition to Dock)
           const t = (age - 1.5); // 0.0 to 1.0
-          // Ease-in-out curve for smooth movement
+          // Smooth slide curve
           const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
           
+          // Slide from Center -> Dock Position
           x = (canvas.width / 2) + (dockX - (canvas.width / 2)) * ease;
           y = (canvas.height / 3) + (dockY - (canvas.height / 3)) * ease;
-          scale = 1.0 - (0.6 * ease); // Shrink from 1.0 to 0.4
+          scale = 1.0 - (0.6 * ease); // Shrink from 1.0 down to 0.4
           alpha = 1;
 
         } else {
-          // PHASE 3: DOCKED (Stay at top)
+          // PHASE 3: DOCKED (Stay at top of lane)
           x = dockX;
           y = dockY;
-          scale = 0.4;
+          scale = 0.4; // Small icon size
           // Fade out at the very end
           alpha = age > 5.5 ? (6.0 - age) / 0.5 : 1;
         }
 
-        // Draw the Popup
+        // --- DRAWING ---
         ctx.save();
         ctx.translate(x, y);
         ctx.scale(scale, scale);
         ctx.globalAlpha = alpha;
 
-        // Glow
+        // Glow Effect
         ctx.shadowColor = atkDef.color || "#f44";
         ctx.shadowBlur = 30;
 
-        // Icon
+        // Draw Icon
         ctx.font = "60px sans-serif";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
+        ctx.fillStyle = "#fff";
         ctx.fillText(atkDef.icon, 0, -25);
 
-        // Only show text during the big alert phase
+        // Text handling based on phase
         if (age < 2.0) {
+            // Big Alert Text
             ctx.shadowBlur = 10;
             ctx.font = "bold 28px 'Orbitron', sans-serif";
             ctx.fillStyle = "#ff4444";
@@ -6075,79 +6081,12 @@
             ctx.shadowBlur = 0;
             ctx.fillText(`FROM ${popup.from.toUpperCase()}`, 0, 55);
         } else {
-            // In docked phase, simple compact label
+            // Small Docked Text
              ctx.font = "bold 24px 'Courier New', monospace";
              ctx.fillStyle = "#fff";
+             ctx.shadowBlur = 0;
              ctx.fillText("COMING", 0, 25);
         }
-
-        ctx.restore();
-      }
-	  
-      for (let i = 0; i < incomingAttacks.length; i++) {
-        const a = incomingAttacks[i];
-        const age = (currentTime - a.time) / 3000;
-        const alpha = 1 - age;
-        const attackDef = ATTACK_TYPES[a.type];
-        ctx.font = "bold 14px 'Courier New', monospace";
-        ctx.textAlign = "center";
-        ctx.fillStyle = `rgba(255,100,100,${alpha})`;
-        ctx.fillText(`⚠️ ${attackDef?.icon || "?"} INCOMING FROM ${a.from.toUpperCase()}!`, canvas.width / 2, 245 + i * 20);
-      }
-
-      // NEW: Render Attack Popups (Big Animation)
-      for (let i = attackPopups.length - 1; i >= 0; i--) {
-        const popup = attackPopups[i];
-        const age = (Date.now() - popup.time) / 1000; // Seconds
-        
-        if (age > 3.0) {
-          attackPopups.splice(i, 1);
-          continue;
-        }
-
-        const atkDef = ATTACK_TYPES[popup.type];
-        if (!atkDef) continue;
-
-        // Animation: Pop in with elastic effect
-        let scale = 1;
-        let alpha = 1;
-        
-        if (age < 0.3) {
-          // Elastic scale out
-          const t = age / 0.3;
-          scale = 0.5 + Math.sin(t * Math.PI * 0.6) * 0.6; // Overshoot slightly
-          alpha = t;
-        } else if (age > 2.5) {
-          // Fade out
-          alpha = 1 - (age - 2.5) / 0.5;
-        }
-
-        ctx.save();
-        ctx.translate(canvas.width / 2, canvas.height / 3);
-        ctx.scale(scale, scale);
-        ctx.globalAlpha = alpha;
-
-        // Glow background
-        ctx.shadowColor = atkDef.color || "#f44";
-        ctx.shadowBlur = 30;
-        
-        // Icon
-        ctx.font = "60px sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(atkDef.icon, 0, -25);
-        
-        // "INCOMING" Text
-        ctx.shadowBlur = 10;
-        ctx.font = "bold 28px 'Orbitron', sans-serif";
-        ctx.fillStyle = "#ff4444";
-        ctx.fillText("INCOMING!", 0, 30);
-        
-        // Sender Name
-        ctx.font = "bold 16px 'Courier New', monospace";
-        ctx.fillStyle = "#fff";
-        ctx.shadowBlur = 0;
-        ctx.fillText(`FROM ${popup.from.toUpperCase()}`, 0, 55);
 
         ctx.restore();
       }
