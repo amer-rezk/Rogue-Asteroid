@@ -402,7 +402,13 @@ const MUSIC_TRACKS = [
   "Song (8).mp3",
   "Song (9).mp3",
   "Song (10).mp3",
-  "Song (11).mp3"
+  "Song (11).mp3",
+  "Song (12).mp3",
+  "Song (13).mp3",
+  "Song (14).mp3",
+  "Song (15).mp3",
+  "Song (16).mp3",
+  "Song (17).mp3"
 ];
 let musicState = {
   currentTrack: 0,
@@ -2603,13 +2609,19 @@ function tick() {
             const u = p.upgrades || {};
             const towerBulletSpeed = BULLET_SPEED * (1 + ((u.bulletSpeedMult ?? 1) - 1) * 0.5) * (stats.bulletType === "sniper" ? 1.5 : 1);
             
-            // Calculate intercept point for tower
-            let speedMult = slotSpeedMultipliers[p.slot] || 1;
-            // Include gravity increase in prediction
-            const gravityMult = 1 + waveElapsedTime * GRAVITY_INCREASE_RATE;
-            speedMult *= gravityMult;
-            const intercept = calculateInterceptPoint(towerPos.x, towerPos.y, towerBulletSpeed, target, speedMult);
-            const aim = clampAimAngle(towerPos.x, towerPos.y, intercept.x, intercept.y);
+            let aim;
+            if (stats.bulletType === "sniper") {
+              // RAILGUN: Hitscan - aim directly at target (no prediction needed)
+              aim = clampAimAngle(towerPos.x, towerPos.y, target.x, target.y);
+            } else {
+              // Other towers: Calculate intercept point for projectiles
+              let speedMult = slotSpeedMultipliers[p.slot] || 1;
+              // Include gravity increase in prediction
+              const gravityMult = 1 + waveElapsedTime * GRAVITY_INCREASE_RATE;
+              speedMult *= gravityMult;
+              const intercept = calculateInterceptPoint(towerPos.x, towerPos.y, towerBulletSpeed, target, speedMult);
+              aim = clampAimAngle(towerPos.x, towerPos.y, intercept.x, intercept.y);
+            }
             tower.angle = aim.angle;
             
             if (tower.cd <= 0) {
