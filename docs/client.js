@@ -1915,15 +1915,15 @@
         break;
 
       case "incomingAttack":
-        // AGGREGATION: Check if we already have this specific attack waiting from this person
+        // AGGREGATION: Check if we already have this attack from this person
         const existingAlert = attackPopups.find(a => a.type === msg.attackType && a.from === msg.from);
         
         if (existingAlert) {
-          // Just add to the count!
+          // It exists! Just add to the count and reset the timer
           existingAlert.count = (existingAlert.count || 1) + (msg.count || 1);
-          existingAlert.time = Date.now(); // Reset timer so it stays on screen
+          existingAlert.time = Date.now(); 
         } else {
-          // New attack type, add it to the list
+          // New attack, add a new row
           attackPopups.push({ 
             type: msg.attackType, 
             from: msg.from, 
@@ -3236,6 +3236,7 @@
   });
 
   function draw() {
+	const { sx, sy, offsetX, offsetY } = getScale();
     requestAnimationFrame(draw);
     
     // Skip heavy rendering when tab is hidden (still process state)
@@ -6004,16 +6005,19 @@
       // ===== INCOMING ATTACK ALERTS (POPUP & SLIDE) =====
       const currentTime = Date.now();
       
-      // FIX: Use unique variable names (uiSX, uiOX) to prevent "ReferenceError" or crashes
-      const { sx: uiSX, sy: uiSY, offsetX: uiOX, offsetY: uiOY } = getScale();
+      // CRASH FIX: Get scale object safely without redeclaring 'offsetX'
+      const uiScale = getScale();
+      const uS = uiScale.sx; 
+      const uX = uiScale.offsetX;
+      const uY = uiScale.offsetY;
 
-      // Target Slot: Default to 1.5 (center) if spectating, otherwise use player's slot
+      // Target Slot: Default to 1.5 (center) if spectating
       const targetSlot = (mySlot !== undefined && mySlot >= 0) ? mySlot : 1.5; 
       
-      // Position: Left side of lane + padding
-      const laneX = (targetSlot * world.segmentWidth) * uiSX + uiOX;
-      const dockX = laneX + (40 * uiSX); 
-      const dockY = 100 * uiSY + uiOY; 
+      // DOCK DESTINATION: Left side of lane + padding
+      const laneX = (targetSlot * world.segmentWidth) * uS + uX;
+      const dockX = laneX + (40 * uS); 
+      const dockY = 100 * uS + uY; 
 
       for (let i = 0; i < attackPopups.length; i++) {
         const popup = attackPopups[i];
@@ -6048,8 +6052,7 @@
           // PHASE 3: DOCKED (Sleek List)
           phase = "docked";
           x = dockX;
-          // TIGHTER SPACING: Reduced to 45px
-          y = dockY + (i * 45 * uiSY); 
+          y = dockY + (i * 45 * uS); // Spacing: 45px
           scale = 0.8; 
           alpha = 1;
         }
@@ -6064,7 +6067,7 @@
             const barW = 140;
             const barH = 40;
             
-            // 1. Background (Gradient fade to right)
+            // 1. Background (Gradient)
             const grad = ctx.createLinearGradient(-30, 0, barW, 0);
             grad.addColorStop(0, "rgba(0, 0, 0, 0.9)");
             grad.addColorStop(1, "rgba(0, 0, 0, 0)");
@@ -6073,7 +6076,7 @@
             ctx.roundRect(-30, -barH/2, barW, barH, 5);
             ctx.fill();
 
-            // 2. Colored Accent Bar (Left side)
+            // 2. Colored Accent Bar
             ctx.fillStyle = atkDef.color || "#f44";
             ctx.shadowColor = atkDef.color || "#f44";
             ctx.shadowBlur = 15;
@@ -6089,23 +6092,21 @@
             ctx.fillStyle = "#fff";
             ctx.fillText(atkDef.icon, -10, 2);
 
-            // 4. Amount (Large Number)
+            // 4. Amount
             ctx.font = "bold 28px 'Orbitron', sans-serif";
             ctx.fillStyle = "#fff";
             ctx.textAlign = "left";
             ctx.fillText(`x${popup.count || 1}`, 20, 2);
             
-            // 5. Label (Small Text below number)
+            // 5. Label
             ctx.font = "10px sans-serif";
             ctx.fillStyle = "#aaa";
             ctx.fillText(atkDef.name.toUpperCase(), 20, 18);
 
         } else {
-            // === BIG ALERT UI (Center Screen) ===
+            // === BIG ALERT UI ===
             ctx.shadowColor = atkDef.color || "#f44";
             ctx.shadowBlur = 30;
-
-            // Icon
             ctx.font = "60px sans-serif";
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
