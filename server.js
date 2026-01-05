@@ -939,7 +939,7 @@ function generateAsteroidShape(baseRadius) {
   return points;
 }
 
-function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId = null, bossAdVariant = null, noGold = false, isMiniBoss = false) {
+function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId = null, senderSlot = null, bossAdVariant = null, noGold = false, isMiniBoss = false) {
   const sizeMap = { small: 10, medium: 13, large: 17, boss: 75, miniboss: 19, minibossAd: 8 }; // Mini-boss is 75% smaller than boss
   const r = sizeMap[type] || 12;
   const speedMult = type === "boss" ? 0.3 : (type === "miniboss" ? 0.5 : (attackType ? (ATTACK_TYPES[attackType]?.speed || 1) : 1)); // Mini-boss slightly faster than boss
@@ -1001,6 +1001,7 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
     id, x: finalX, y: finalY, r, type, attackType, vertices, rotSpeed, color, vx, vy, 
     hp, // maxHp at spawn time
     targetSlot, // For client collision prediction
+    senderSlot, // For visual sender identification
     isBoss, isBossAd, bossAdVariant, isMiniBoss: isMiniBossType, isMiniBossAd 
   });
 
@@ -1016,6 +1017,7 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
     targetSlot: targetSlot,
     attackType: attackType,
     senderId: senderId,
+    senderSlot: senderSlot,
     phaseTimer: attackType === "ghost" ? 0 : null,
     splits: attackType === "splitter" ? (ATTACK_TYPES.splitter?.splits || 4) : 0,
     isBerserker: attackType === "berserker", // Berserker speeds up as HP drops
@@ -1203,7 +1205,7 @@ function spawnWave() {
         const baseAttackHp = attackDef.baseHp + (wave * attackDef.hpScale);
         const attackHp = Math.ceil(baseAttackHp * extremeScaleMult);
 
-        spawnQueue.push({ x, y, type: attackDef.size, hp: attackHp, targetSlot, attackType: attack.type, senderId: attack.senderId });
+        spawnQueue.push({ x, y, type: attackDef.size, hp: attackHp, targetSlot, attackType: attack.type, senderId: attack.senderId, senderSlot: attack.senderSlot });
       }
     }
   }
@@ -1642,7 +1644,7 @@ function applyDeathMod(modId, deadPlayer) {
           const hp = Math.ceil(2 + wave * 0.8); // Tougher
           
           // Custom "meteor" asteroid with high downward velocity
-          const meteor = createAsteroid(x, y, "medium", hp, playerIdx, null);
+          const meteor = createAsteroid(x, y, "medium", hp, playerIdx, null, null, null, null, false, false);
           meteor.vy = rand(60, 90); // Very fast downward
           meteor.vx = rand(-5, 5);  // Little horizontal movement
           meteor.inFTL = false;     // Instant threat
@@ -2341,7 +2343,7 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
               "medium",
               Math.max(2, wave),
               m.targetSlot,
-              null, null, bossAdVariant, false
+              null, null, null, bossAdVariant, false, false
             ));
           }
           createExplosion(m.x, m.y, 80, "#ff0000");
@@ -2358,7 +2360,7 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
           for (let s = 0; s < splitsToSpawn; s++) {
             const nx = m.x + (Math.random() - 0.5) * 60;
             const ny = m.y + (Math.random() - 0.5) * 40;
-            const splitAsteroid = createAsteroid(nx, ny, "small", splitHp, m.targetSlot, null, m.senderId, null, true);
+            const splitAsteroid = createAsteroid(nx, ny, "small", splitHp, m.targetSlot, null, m.senderId, m.senderSlot, null, true, false);
             missiles.push(splitAsteroid);
           }
         }
@@ -2738,7 +2740,7 @@ function tick() {
             const queued = spawnQueue.shift();
             missiles.push(createAsteroid(
               queued.x, queued.y, queued.type, queued.hp, queued.targetSlot, 
-              queued.attackType, queued.senderId, null, false, queued.isMiniBoss || false
+              queued.attackType, queued.senderId, queued.senderSlot, null, false, queued.isMiniBoss || false
             ));
           }
         }
@@ -3116,8 +3118,10 @@ function tick() {
                 m.targetSlot, 
                 null, // No attack type - just regular small asteroid
                 m.senderId,
+                m.senderSlot, // Inherit sender slot from carrier
                 null, // No boss variant
-                true  // noGold - carrier minions give no gold
+                true, // noGold - carrier minions give no gold
+                false // Not a mini-boss
               );
               mini.inFTL = false; // Spawn immediately, no FTL effect
               mini.vy = Math.abs(m.vy) * 1.2; // Slightly faster than parent
@@ -3462,8 +3466,10 @@ function tick() {
                   m.targetSlot,
                   null,  // attackType
                   null,  // senderId
+                  null,  // senderSlot
                   bossAdVariant,  // bossAdVariant (1-5)
-                  false  // Boss ads give 1 gold each
+                  false, // Boss ads give 1 gold each
+                  false  // Not a mini-boss
                 ));
               }
               createExplosion(m.x, m.y, 60, "#ff0000");
@@ -3489,8 +3495,10 @@ function tick() {
                   m.targetSlot,
                   null,  // attackType
                   null,  // senderId
+                  null,  // senderSlot
                   null,  // bossAdVariant
-                  false  // Gives 1 gold each
+                  false, // Gives 1 gold each
+                  false  // Not a mini-boss
                 );
                 miniAd.isMiniBossAd = true;
                 miniAd.inFTL = false; // Spawn immediately
@@ -4092,10 +4100,12 @@ function tick() {
                   "minibossAd",
                   miniAdHp,
                   m.targetSlot,
-                  null,
-                  null,
-                  null,
-                  false
+                  null, // attackType
+                  null, // senderId
+                  null, // senderSlot
+                  null, // bossAdVariant
+                  false, // noGold
+                  false  // isMiniBoss
                 );
                 miniAd.isMiniBossAd = true;
                 miniAd.inFTL = false;
@@ -4124,10 +4134,12 @@ function tick() {
                   "medium",
                   Math.max(2, wave),
                   m.targetSlot,
-                  null,
-                  null,
-                  bossAdVariant,
-                  false // Boss ads CAN give gold (1 each)
+                  null, // attackType
+                  null, // senderId
+                  null, // senderSlot
+                  bossAdVariant, // bossAdVariant
+                  false, // Boss ads CAN give gold (1 each)
+                  false  // isMiniBoss
                 );
                 missiles.push(spawnedAd);
               }
@@ -4150,7 +4162,7 @@ function tick() {
                 for (let s = 0; s < splitsToSpawn; s++) {
                   const nx = m.x + rand(-30, 30);
                   const ny = m.y + rand(-20, 20);
-                  const splitAsteroid = createAsteroid(nx, ny, "small", splitHp, m.targetSlot, null, m.senderId, null, true); // noGold=true
+                  const splitAsteroid = createAsteroid(nx, ny, "small", splitHp, m.targetSlot, null, m.senderId, m.senderSlot, null, true, false); // noGold=true
                   missiles.push(splitAsteroid);
                 }
               }
@@ -5201,10 +5213,10 @@ wss.on("connection", (ws) => {
         if (!attackQueue.has(targetSlot)) {
           attackQueue.set(targetSlot, []);
         }
-        attackQueue.get(targetSlot).push({ type: attackType, senderId: id });
+        attackQueue.get(targetSlot).push({ type: attackType, senderId: id, senderSlot: p.slot });
         
         if (i === 0 && targetPlayer.ws) {
-          safeSend(targetPlayer.ws, { t: "incomingAttack", attackType, from: p.name, count: toBuy });
+          safeSend(targetPlayer.ws, { t: "incomingAttack", attackType, from: p.name, senderSlot: p.slot, count: toBuy });
         }
       }
       

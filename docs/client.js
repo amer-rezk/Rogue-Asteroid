@@ -936,6 +936,7 @@
             maxHp: ev.hp, // HP at spawn = maxHp
             targetSlot: ev.targetSlot,
             attackType: ev.attackType,
+            senderSlot: ev.senderSlot, // For visual sender identification
             // Boss flags
             isBoss: ev.isBoss || false,
             isBossAd: ev.isBossAd || false,
@@ -1828,6 +1829,7 @@
               m.maxHp = cached.maxHp;
               m.targetSlot = cached.targetSlot;
               m.attackType = cached.attackType;
+              m.senderSlot = cached.senderSlot; // For visual sender identification
               
               // If server didn't send HP, asteroid is at full health
               if (m.hp === undefined) m.hp = cached.maxHp;
@@ -1927,6 +1929,7 @@
           attackPopups.push({ 
             type: msg.attackType, 
             from: msg.from, 
+            senderSlot: msg.senderSlot, // For sender color
             count: msg.count || 1, 
             time: Date.now() 
           });
@@ -4041,6 +4044,192 @@
         ctx.save();
         ctx.translate(x, y);
         
+        // ===== PVP ATTACK VISUAL OVERHAUL =====
+        // Get sender info for visual distinction
+        const senderSlot = cached?.senderSlot;
+        const attackType = m.attackType || cached?.attackType;
+        const isPvPAttack = attackType && senderSlot !== null && senderSlot !== undefined;
+        const senderColor = isPvPAttack ? (PLAYER_COLORS[senderSlot]?.main || "#ff00ff") : null;
+        const time = Date.now();
+        
+        if (isPvPAttack && !isBoss && !isBossAd && !isMiniBoss && !isMiniBossAd) {
+          ctx.save();
+          
+          // === SENDER COLOR TRAIL ===
+          // Animated trailing particles in sender's color
+          const trailCount = 5;
+          for (let t = 0; t < trailCount; t++) {
+            const trailAge = (time * 0.003 + t * 0.4) % 2;
+            const trailAlpha = Math.max(0, 0.6 - trailAge * 0.3);
+            const trailY = -r * 0.5 - trailAge * r * 1.5;
+            const trailX = Math.sin(time * 0.005 + t * 1.5) * r * 0.3;
+            const trailSize = r * (0.3 - trailAge * 0.1);
+            
+            ctx.globalAlpha = trailAlpha * phaseAlpha;
+            ctx.fillStyle = senderColor;
+            ctx.beginPath();
+            ctx.arc(trailX, trailY, Math.max(2, trailSize), 0, Math.PI * 2);
+            ctx.fill();
+          }
+          
+          // === SENDER COLOR RING ===
+          // Pulsing ring around asteroid in sender's color
+          const ringPulse = Math.sin(time * 0.006) * 0.15 + 0.85;
+          const ringRadius = r * 1.35 * ringPulse;
+          ctx.globalAlpha = 0.5 * phaseAlpha;
+          ctx.strokeStyle = senderColor;
+          ctx.lineWidth = 2;
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath();
+          ctx.arc(0, 0, ringRadius, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          
+          // === ATTACK TYPE SPECIFIC EFFECTS ===
+          ctx.globalAlpha = phaseAlpha;
+          
+          if (attackType === "swarm") {
+            // 🐝 SWARM: Buzzing particle trails
+            for (let i = 0; i < 4; i++) {
+              const buzzAngle = (time * 0.015 + i * Math.PI / 2) % (Math.PI * 2);
+              const buzzRadius = r * (1.1 + Math.sin(time * 0.02 + i) * 0.2);
+              const buzzX = Math.cos(buzzAngle) * buzzRadius;
+              const buzzY = Math.sin(buzzAngle) * buzzRadius;
+              ctx.globalAlpha = 0.7 * phaseAlpha;
+              ctx.fillStyle = "#ffdd00";
+              ctx.beginPath();
+              ctx.arc(buzzX, buzzY, 2, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            // Motion lines
+            ctx.strokeStyle = "rgba(255, 220, 0, 0.3)";
+            ctx.lineWidth = 1;
+            for (let i = 0; i < 3; i++) {
+              const lineOffset = (time * 0.01 + i * 0.3) % 1;
+              ctx.globalAlpha = (1 - lineOffset) * 0.4 * phaseAlpha;
+              ctx.beginPath();
+              ctx.moveTo(-r * 0.5, -r - lineOffset * r * 2);
+              ctx.lineTo(r * 0.5, -r - lineOffset * r * 2);
+              ctx.stroke();
+            }
+            
+          } else if (attackType === "bruiser") {
+            // 🪨 BRUISER: Heavy rock aura, impact cracks
+            ctx.globalAlpha = 0.4 * phaseAlpha;
+            ctx.strokeStyle = "#8B4513";
+            ctx.lineWidth = 3;
+            // Thick rocky outer ring
+            ctx.beginPath();
+            ctx.arc(0, 0, r * 1.15, 0, Math.PI * 2);
+            ctx.stroke();
+            // Impact crack lines radiating out
+            ctx.strokeStyle = "rgba(139, 69, 19, 0.5)";
+            ctx.lineWidth = 2;
+            for (let i = 0; i < 6; i++) {
+              const crackAngle = i * Math.PI / 3 + time * 0.001;
+              ctx.beginPath();
+              ctx.moveTo(Math.cos(crackAngle) * r, Math.sin(crackAngle) * r);
+              ctx.lineTo(Math.cos(crackAngle) * r * 1.4, Math.sin(crackAngle) * r * 1.4);
+              ctx.stroke();
+            }
+            
+          } else if (attackType === "carrier") {
+            // 👑 CARRIER: Crown particles, royal purple aura
+            ctx.globalAlpha = 0.5 * phaseAlpha;
+            // Purple aura glow
+            const crownGlow = ctx.createRadialGradient(0, 0, r * 0.8, 0, 0, r * 1.6);
+            crownGlow.addColorStop(0, "rgba(180, 0, 255, 0)");
+            crownGlow.addColorStop(0.5, "rgba(180, 0, 255, 0.3)");
+            crownGlow.addColorStop(1, "rgba(180, 0, 255, 0)");
+            ctx.fillStyle = crownGlow;
+            ctx.beginPath();
+            ctx.arc(0, 0, r * 1.6, 0, Math.PI * 2);
+            ctx.fill();
+            // Orbiting crown sparkles
+            for (let i = 0; i < 3; i++) {
+              const sparkAngle = (time * 0.004 + i * Math.PI * 2 / 3) % (Math.PI * 2);
+              const sparkR = r * 1.3;
+              ctx.globalAlpha = 0.8 * phaseAlpha;
+              ctx.fillStyle = "#ffd700";
+              ctx.font = `${8}px sans-serif`;
+              ctx.textAlign = "center";
+              ctx.textBaseline = "middle";
+              ctx.fillText("✦", Math.cos(sparkAngle) * sparkR, Math.sin(sparkAngle) * sparkR);
+            }
+            
+          } else if (attackType === "splitter") {
+            // 💎 SPLITTER: Crystal shards, prismatic reflections
+            ctx.globalAlpha = 0.6 * phaseAlpha;
+            // Prismatic refraction effect
+            const prismColors = ["#ff0000", "#00ff00", "#0000ff", "#ffff00", "#ff00ff", "#00ffff"];
+            for (let i = 0; i < 6; i++) {
+              const shardAngle = i * Math.PI / 3 + time * 0.002;
+              const shardDist = r * (1.0 + Math.sin(time * 0.008 + i) * 0.15);
+              ctx.strokeStyle = prismColors[i];
+              ctx.lineWidth = 2;
+              ctx.globalAlpha = 0.4 * phaseAlpha;
+              ctx.beginPath();
+              ctx.moveTo(0, 0);
+              ctx.lineTo(Math.cos(shardAngle) * shardDist, Math.sin(shardAngle) * shardDist);
+              ctx.stroke();
+            }
+            // Diamond sparkle at center
+            ctx.globalAlpha = (Math.sin(time * 0.01) * 0.3 + 0.7) * phaseAlpha;
+            ctx.fillStyle = "#ffffff";
+            ctx.beginPath();
+            ctx.moveTo(0, -4);
+            ctx.lineTo(4, 0);
+            ctx.lineTo(0, 4);
+            ctx.lineTo(-4, 0);
+            ctx.closePath();
+            ctx.fill();
+            
+          } else if (attackType === "ghost") {
+            // 👻 GHOST: Enhanced ethereal trail, phasing rings
+            ctx.globalAlpha = 0.3 * phaseAlpha;
+            // Ghostly afterimages
+            for (let i = 1; i <= 3; i++) {
+              const ghostAlpha = 0.2 / i;
+              const ghostOffset = i * 8;
+              ctx.globalAlpha = ghostAlpha * phaseAlpha;
+              ctx.fillStyle = "#aa88ff";
+              ctx.beginPath();
+              ctx.arc(0, -ghostOffset, r * (1 - i * 0.1), 0, Math.PI * 2);
+              ctx.fill();
+            }
+            // Phasing rings
+            const phaseWave = (time * 0.005) % 1;
+            ctx.globalAlpha = (1 - phaseWave) * 0.4 * phaseAlpha;
+            ctx.strokeStyle = "#aa88ff";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(0, 0, r * (1 + phaseWave * 0.5), 0, Math.PI * 2);
+            ctx.stroke();
+            
+          } else if (attackType === "berserker") {
+            // 🔥 BERSERKER: Enhanced fire trail (adds to existing effect)
+            // Fire trail behind
+            ctx.globalAlpha = 0.5 * phaseAlpha;
+            for (let i = 0; i < 6; i++) {
+              const fireAge = (time * 0.004 + i * 0.15) % 1;
+              const fireY = -r - fireAge * r * 2;
+              const fireX = Math.sin(time * 0.01 + i * 2) * r * 0.4;
+              const fireSize = r * 0.4 * (1 - fireAge);
+              const fireAlpha = (1 - fireAge) * 0.6;
+              ctx.globalAlpha = fireAlpha * phaseAlpha;
+              // Gradient from yellow to red
+              const fireHue = 30 + berserkerRage * 30; // Orange to red
+              ctx.fillStyle = `hsl(${fireHue}, 100%, ${60 - fireAge * 20}%)`;
+              ctx.beginPath();
+              ctx.arc(fireX, fireY, Math.max(2, fireSize), 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+          
+          ctx.restore();
+        }
+        // ===== END PVP ATTACK VISUAL OVERHAUL =====
+        
         if (bossImage) {
           // Render boss/boss-ad/mini-boss using image
           ctx.rotate(rotation);
@@ -4179,12 +4368,52 @@
           ctx.fillRect(bx, by, bw * (m.hp / m.maxHp), bh);
         }
 
-        // Attack type indicator (skip for boss/boss-ads/mini-boss which use images)
+        // ===== PVP ATTACK ICON OVERHAUL =====
+        // Skip for boss/boss-ads/mini-boss which use images
         if (!isBoss && !isBossAd && !isMiniBoss && !isMiniBossAd && m.attackType && ATTACK_TYPES[m.attackType]) {
-          ctx.font = `${10 * sx}px sans-serif`;
+          const atkDef = ATTACK_TYPES[m.attackType];
+          const senderSlot = cached?.senderSlot;
+          const senderColor = (senderSlot !== null && senderSlot !== undefined) ? (PLAYER_COLORS[senderSlot]?.main || "#fff") : "#fff";
+          const time = Date.now();
+          
+          ctx.save();
+          
+          // Animated icon position (slight bob)
+          const bobOffset = Math.sin(time * 0.005) * 2 * sy;
+          const iconY = y + r + 14 * sy + bobOffset;
+          
+          // Background pill with sender color
+          const pillW = 28 * sx;
+          const pillH = 16 * sy;
+          const pillX = x - pillW / 2;
+          const pillY = iconY - pillH / 2 - 2 * sy;
+          
+          // Sender color glow behind
+          ctx.shadowColor = senderColor;
+          ctx.shadowBlur = 8;
+          
+          // Dark pill background
+          ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+          ctx.beginPath();
+          ctx.roundRect(pillX, pillY, pillW, pillH, pillH / 2);
+          ctx.fill();
+          
+          // Sender color border
+          ctx.strokeStyle = senderColor;
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+          
+          ctx.shadowBlur = 0;
+          
+          // Icon with slight scaling pulse
+          const iconPulse = 1 + Math.sin(time * 0.008) * 0.1;
+          ctx.font = `${10 * sx * iconPulse}px sans-serif`;
           ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
           ctx.fillStyle = "#fff";
-          ctx.fillText(ATTACK_TYPES[m.attackType].icon, x, y + r + 12 * sy);
+          ctx.fillText(atkDef.icon, x, iconY);
+          
+          ctx.restore();
         }
         
         // Berserker rage flames (visual effect when enraged)
@@ -6017,13 +6246,19 @@
       // DOCK DESTINATION: Left side of lane + padding
       const laneX = (targetSlot * world.segmentWidth) * uS + uX;
       const dockX = laneX + (40 * uS); 
-      const dockY = 100 * uS + uY; 
+      // UPDATED: Higher up (was 100, now 60)
+      const dockY = 60 * uS + uY; 
 
       for (let i = 0; i < attackPopups.length; i++) {
         const popup = attackPopups[i];
         const age = (currentTime - popup.time) / 1000;
         const atkDef = ATTACK_TYPES[popup.type];
         if (!atkDef) continue;
+        
+        // Get sender color
+        const senderColor = (popup.senderSlot !== undefined && popup.senderSlot !== null) 
+          ? (PLAYER_COLORS[popup.senderSlot]?.main || "#ff4444") 
+          : "#ff4444";
 
         let x, y, scale, alpha, phase;
 
@@ -6052,7 +6287,8 @@
           // PHASE 3: DOCKED (Sleek List)
           phase = "docked";
           x = dockX;
-          y = dockY + (i * 45 * uS); // Spacing: 45px
+          // UPDATED: Tighter spacing (was 45, now 35)
+          y = dockY + (i * 35 * uS); 
           scale = 0.8; 
           alpha = 1;
         }
@@ -6067,7 +6303,7 @@
             const barW = 140;
             const barH = 40;
             
-            // 1. Background (Gradient)
+            // 1. Background (Gradient fade to right)
             const grad = ctx.createLinearGradient(-30, 0, barW, 0);
             grad.addColorStop(0, "rgba(0, 0, 0, 0.9)");
             grad.addColorStop(1, "rgba(0, 0, 0, 0)");
@@ -6076,9 +6312,9 @@
             ctx.roundRect(-30, -barH/2, barW, barH, 5);
             ctx.fill();
 
-            // 2. Colored Accent Bar
-            ctx.fillStyle = atkDef.color || "#f44";
-            ctx.shadowColor = atkDef.color || "#f44";
+            // 2. Colored Accent Bar (Left side) - NOW USES SENDER COLOR
+            ctx.fillStyle = senderColor;
+            ctx.shadowColor = senderColor;
             ctx.shadowBlur = 15;
             ctx.beginPath();
             ctx.roundRect(-30, -barH/2, 6, barH, 2);
@@ -6092,21 +6328,24 @@
             ctx.fillStyle = "#fff";
             ctx.fillText(atkDef.icon, -10, 2);
 
-            // 4. Amount
+            // 4. Amount (Large Number)
             ctx.font = "bold 28px 'Orbitron', sans-serif";
             ctx.fillStyle = "#fff";
             ctx.textAlign = "left";
             ctx.fillText(`x${popup.count || 1}`, 20, 2);
             
-            // 5. Label
+            // 5. Label (Small Text below number) - NOW SHOWS SENDER NAME
             ctx.font = "10px sans-serif";
-            ctx.fillStyle = "#aaa";
-            ctx.fillText(atkDef.name.toUpperCase(), 20, 18);
+            ctx.fillStyle = senderColor;
+            ctx.fillText(`FROM ${popup.from.toUpperCase().slice(0, 8)}`, 20, 18);
 
         } else {
-            // === BIG ALERT UI ===
-            ctx.shadowColor = atkDef.color || "#f44";
+            // === BIG ALERT UI (Center Screen) ===
+            // Use sender color for glow
+            ctx.shadowColor = senderColor;
             ctx.shadowBlur = 30;
+
+            // Icon
             ctx.font = "60px sans-serif";
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
@@ -6116,7 +6355,7 @@
             if (phase === "alert") {
                 ctx.shadowBlur = 10;
                 ctx.font = "bold 28px 'Orbitron', sans-serif";
-                ctx.fillStyle = "#ff4444";
+                ctx.fillStyle = senderColor; // Sender's color
                 ctx.fillText("INCOMING!", 0, 30);
                 
                 ctx.font = "bold 16px 'Courier New', monospace";
