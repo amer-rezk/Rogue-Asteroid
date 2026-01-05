@@ -3502,7 +3502,6 @@
         uiHovered = true;
       }
 
-      const { sx, sy, offsetX, offsetY } = getScale();
       ctx.save();
       ctx.translate(offsetX, offsetY);
 
@@ -6004,7 +6003,7 @@
       const targetSlot = (mySlot !== undefined && mySlot >= 0) ? mySlot : 1.5; 
       
       // DOCK DESTINATION: Left side of the player's lane + 50px padding
-      // We use existing 'sx', 'sy', 'offsetX', 'offsetY' variables (DO NOT REDECLARE THEM)
+      // Note: We use the existing 'sx', 'sy', 'offsetX', 'offsetY' from top of draw()
       const laneX = (targetSlot * world.segmentWidth) * sx + offsetX;
       const dockX = laneX + (50 * sx); 
       const dockY = 100 * sy + offsetY; 
