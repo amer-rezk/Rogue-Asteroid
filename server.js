@@ -1966,6 +1966,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
       lifespan: bullet.lifespan, // DESYNC FIX: Send lifespan so client can expire bullets correctly
       isHoming: bullet.isHoming, // For homing missile rendering
       targetId: bullet.targetId, // Target asteroid ID for homing
+      modules: bullet.modules, // Fix: Send modules so client knows about boomerang!
     });
   }
   // If throttled, bullet still exists on server - client just won't see it immediately

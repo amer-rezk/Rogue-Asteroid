@@ -697,9 +697,40 @@
       const x0 = b.slot * segW;
       const x1 = (b.slot + 1) * segW;
       
-      // Bullets die at boundaries (no wall bouncing - ricochet chains between enemies now)
-      if (b.x < x0 || b.x > x1 || b.y < -50 || b.y > GROUND_Y) {
-        continue; // Don't keep this bullet
+      // Temporal Boomerang & Boundary Logic
+      const hitLeft = b.x < x0;
+      const hitRight = b.x > x1;
+      const hitTop = b.y < -50;
+      const hitBottom = b.y > GROUND_Y;
+
+      if (hitLeft || hitRight || hitTop || hitBottom) {
+        // Temporal Boomerang: Bounce back to source on wall/ceiling hit
+        if (b.modules && b.modules.includes("temporalBoomerang") && !b.returning && !hitBottom) {
+           b.returning = true;
+           if (b.hitSet) b.hitSet.clear(); // Reset hits so it can damage again
+           
+           // Aim back at source
+           const sx = b.sourceX !== undefined ? b.sourceX : (x0 + segW/2);
+           const sy = b.sourceY !== undefined ? b.sourceY : GROUND_Y;
+           
+           const dx = sx - b.x;
+           const dy = sy - b.y;
+           const dist = Math.hypot(dx, dy) || 1;
+           const speed = Math.hypot(b.vx, b.vy);
+           
+           b.vx = (dx / dist) * speed;
+           b.vy = (dy / dist) * speed;
+           
+           // Push back inside bounds so it doesn't get stuck
+           if (hitLeft) b.x = x0 + 2;
+           if (hitRight) b.x = x1 - 2;
+           if (hitTop) b.y = -48;
+           
+           // Reset lifespan so it doesn't fade out
+           b.lifespan = b.maxLifespan || 3.0;
+        } else {
+           continue; // Normal bullets die at border
+        }
       }
       
       // CLIENT-SIDE COLLISION PREDICTION: Handle bullet-enemy hits with pierce
@@ -1098,7 +1129,14 @@
             lifespan: ev.lifespan || 3.0, // Match server BULLET_LIFESPAN
             isHoming: ev.isHoming || false, // Homing missile
             targetId: ev.targetId || null, // Target asteroid ID
-            homingSpeed: Math.sqrt(ev.vx * ev.vx + ev.vy * ev.vy) // Store initial speed for homing
+            homingSpeed: Math.sqrt(ev.vx * ev.vx + ev.vy * ev.vy), // Store initial speed for homing
+            
+            // FIX: Store module info for boomerang logic
+            modules: ev.modules || [],
+            sourceX: ev.x,
+            sourceY: ev.y,
+            maxLifespan: ev.lifespan || 3.0,
+            returning: false
           });
           break;
 
