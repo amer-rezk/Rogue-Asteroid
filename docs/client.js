@@ -1197,10 +1197,8 @@
 
     if (ws) try { ws.close(); } catch { }
 
-    // Use serverUrl input value if available, otherwise use default
-    const serverUrlInput = document.getElementById("serverUrl");
-    const serverAddress = serverUrlInput?.value?.trim() || DEFAULT_SERVER;
-    ws = new WebSocket(serverAddress);
+    // Hardcoded connection to your Koyeb server
+    ws = new WebSocket(DEFAULT_SERVER);
 
     ws.onopen = () => {
       connected = true;
@@ -2097,21 +2095,38 @@
     
     if (leaderboard && leaderboard.length > 0) {
       leaderboardList.innerHTML = "";
+      // Add a header row for clarity
+      const header = document.createElement("div");
+      header.className = "leaderboard-entry header";
+      header.style.color = "#888";
+      header.style.fontSize = "10px";
+      header.innerHTML = `
+        <div class="leaderboard-rank">#</div>
+        <div class="leaderboard-name">NAME</div>
+        <div class="leaderboard-score">DAMAGE</div>
+        <div class="leaderboard-wave">WAVE</div>
+      `;
+      leaderboardList.appendChild(header);
+
       for (let i = 0; i < leaderboard.length; i++) {
         const entry = leaderboard[i];
         const div = document.createElement("div");
         const rankClass = i === 0 ? "gold" : i === 1 ? "silver" : i === 2 ? "bronze" : "";
         div.className = "leaderboard-entry " + rankClass;
+        
+        // Handle old scores (fallback to score if damage is missing)
+        const displayValue = entry.damage !== undefined ? Math.round(entry.damage) : (Math.round(entry.score) + " (pts)");
+        
         div.innerHTML = `
           <div class="leaderboard-rank">#${i + 1}</div>
           <div class="leaderboard-name">${entry.name}</div>
-          <div class="leaderboard-score">${Math.round(entry.score)}</div>
+          <div class="leaderboard-score">${displayValue}</div>
           <div class="leaderboard-wave">W${entry.wave}</div>
         `;
         leaderboardList.appendChild(div);
       }
     } else {
-      leaderboardList.innerHTML = '<div class="leaderboard-empty">No scores yet - be the first!</div>';
+      leaderboardList.innerHTML = '<div class="leaderboard-empty">No records yet!</div>';
     }
   }
   
@@ -2523,30 +2538,37 @@
     // Handle music player clicks
     if (musicPlayerHover && window.musicPlayerBounds) {
       const mpBounds = window.musicPlayerBounds;
-      if (musicPlayerHover === "expand") {
-        musicState.expanded = true;
-      } else if (musicPlayerHover === "collapse") {
-        musicState.expanded = false;
-      } else if (musicPlayerHover === "prev") {
-        send({ t: "musicPrev" });
-      } else if (musicPlayerHover === "next") {
-        send({ t: "musicNext" });
-      } else if (musicPlayerHover === "shuffle") {
-        send({ t: "musicToggleShuffle" });
-      } else if (musicPlayerHover === "mute") {
-        toggleMusicMute();
-      } else if (musicPlayerHover === "volume") {
-        // Calculate volume from click position
-        const volX = mpBounds.x + 10;
-        const volW = mpBounds.w - 20;
-        const clickVol = Math.max(0, Math.min(1, (mouseX - volX) / volW));
-        setMusicVolume(clickVol);
-      } else if (musicPlayerHover === "lobbyToggle") {
-        // Toggle mute in lobby
-        toggleMusicMute();
+      
+      // FIX: Safety check - ensure mouse is actually in bounds
+      if (mouseX >= mpBounds.x && mouseX <= mpBounds.x + mpBounds.w && 
+          mouseY >= mpBounds.y && mouseY <= mpBounds.y + mpBounds.h) {
+          
+        if (musicPlayerHover === "expand") {
+          musicState.expanded = true;
+        } else if (musicPlayerHover === "collapse") {
+          musicState.expanded = false;
+        } else if (musicPlayerHover === "prev") {
+          send({ t: "musicPrev" });
+        } else if (musicPlayerHover === "next") {
+          send({ t: "musicNext" });
+        } else if (musicPlayerHover === "shuffle") {
+          send({ t: "musicToggleShuffle" });
+        } else if (musicPlayerHover === "mute") {
+          toggleMusicMute();
+        } else if (musicPlayerHover === "volume") {
+          // Calculate volume from click position
+          const volX = mpBounds.x + 10;
+          const volW = mpBounds.w - 20;
+          const clickVol = Math.max(0, Math.min(1, (mouseX - volX) / volW));
+          setMusicVolume(clickVol);
+        } else if (musicPlayerHover === "lobbyToggle") {
+          toggleMusicMute();
+        }
+        mouseDown = false;
+        return;
       }
-      mouseDown = false;
-      return;
+      // If we're here, hover was stuck but mouse moved away - clear it
+      musicPlayerHover = null;
     }
 
     // Handle death mod button clicks
@@ -3162,6 +3184,9 @@
     
     // Skip heavy rendering when tab is hidden (still process state)
     if (!isTabVisible) return;
+
+    // FIX: Reset hover state every frame to prevent stuck UI
+    musicPlayerHover = null;
 
     try {
       // Calculate actual delta time for smooth animations
@@ -4728,7 +4753,7 @@
         ctx.textAlign = "left";
       }
 
-      // Scoreboard
+      // Scoreboard (Now shows DAMAGE)
       ctx.textAlign = "right";
       ctx.font = "12px 'Courier New', monospace";
       let scoreX = canvas.width - 20;
@@ -4736,7 +4761,8 @@
         const p = lastSnap.players[i];
         const color = PLAYER_COLORS[p.slot]?.main || "#fff";
         ctx.fillStyle = p.hp <= 0 ? "#666" : color;
-        const text = `${p.name}: ${p.score}`;
+        // SHOW DAMAGE instead of score
+        const text = `${p.name}: ${Math.round(p.damageDealt || 0)} dmg`;
         ctx.fillText(text, scoreX, 30);
         scoreX -= ctx.measureText(text).width + 20;
       }
@@ -4783,16 +4809,18 @@
           ctx.fillText(displayName, mpX + 8, mpY + 20);
           ctx.restore();
           
-          // Check if current player is score leader (can control music) - check early for crown
+          // Check if current player is DAMAGE leader (can control music)
           let isScoreLeader = true;
           let leaderName = "";
           if (lastSnap && lastSnap.players && lastSnap.players.length > 1) {
             const myPlayer = lastSnap.players.find(p => p.id === myId);
-            let maxScore = -1;
+            let maxDamage = -1;
             let leader = null;
             for (const p of lastSnap.players) {
-              if ((p.score || 0) > maxScore) {
-                maxScore = p.score || 0;
+              // Check damageDealt instead of score
+              const dmg = p.damageDealt || 0;
+              if (dmg > maxDamage) {
+                maxDamage = dmg;
                 leader = p;
               }
             }
@@ -6822,7 +6850,8 @@
           ctx.font = "bold 18px 'Courier New', monospace";
           ctx.textAlign = "center";
           ctx.fillStyle = "#fff";
-          ctx.fillText(`Score: ${player?.score || 0}`, canvas.width / 2, 180);
+          // Replace Score with Damage
+          ctx.fillText(`Damage: ${Math.round(player?.damage || 0)}`, canvas.width / 2, 180);
           ctx.fillText(`Kills: ${player?.kills || 0}`, canvas.width / 2, 210);
         } else {
           // PvP mode game over
@@ -6844,7 +6873,8 @@
             const color = PLAYER_COLORS[s.slot]?.main || "#fff";
             const y = 200 + i * 30;
             ctx.fillStyle = s.isWinner ? "#ffd700" : color;
-            ctx.fillText(`${i + 1}. ${s.name} - ${s.score} pts (${s.kills} kills)`, canvas.width / 2, y);
+            // Display Damage instead of pts
+            ctx.fillText(`${i + 1}. ${s.name} - ${Math.round(s.damage)} dmg (${s.kills} kills)`, canvas.width / 2, y);
           });
         }
 

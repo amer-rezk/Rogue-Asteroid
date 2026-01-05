@@ -557,11 +557,10 @@ function loadLeaderboard() {
 }
 
 function saveLeaderboard() {
-  try {
-    fs.writeFileSync(LEADERBOARD_FILE, JSON.stringify(leaderboard, null, 2));
-  } catch (err) {
-    console.error("Failed to save leaderboard:", err);
-  }
+  // Use async write so the game doesn't freeze
+  fs.writeFile(LEADERBOARD_FILE, JSON.stringify(leaderboard, null, 2), (err) => {
+    if (err) console.error("Failed to save leaderboard:", err);
+  });
 }
 
 loadLeaderboard();
@@ -678,25 +677,24 @@ function redistributeAsteroids(deadSlot) {
   const aliveSlots = getAliveSlots();
   if (aliveSlots.length === 0) return;
   
+  // 1. Handle Active Missiles
   for (const m of missiles) {
     if (m.dead) continue;
     
     // BOSS STAYS - Don't redistribute boss or boss ads when player dies
-    // The boss and its minions belong to that player's lane only
     if (m.type === "boss" || m.isBossAd) continue;
     
     // If the missile was targeting the player who just died
     if (m.targetSlot === deadSlot) {
       
-      // 1. Find players who are alive AND did not send this asteroid
-      // (lockedSlots array maps the slot number to the Player ID)
+      // Filter out the sender so they don't get their own attack back
       const validTargets = aliveSlots.filter(slotIdx => {
         const playerId = lockedSlots[slotIdx];
         return playerId !== m.senderId;
       });
 
-      // 2. Pick a new target
       if (validTargets.length > 0) {
+        // Pick random valid target
         const newSlot = validTargets[Math.floor(Math.random() * validTargets.length)];
         const { x0, x1 } = segmentBounds(newSlot);
         
@@ -705,29 +703,43 @@ function redistributeAsteroids(deadSlot) {
         // Randomize X position in the new lane
         m.x = x0 + Math.random() * (x1 - x0);
         
-        // 3. FIX: Reset Y position to the TOP of the screen
+        // Reset Y position to the TOP of the screen
         m.y = -m.r - 20; 
         
         // Visual flair: Trigger the "FTL" hyperspace effect again
         m.inFTL = true;  
       } else {
-        // If the only person left is the one who sent it, just destroy the asteroid
+        // If only the sender is left, destroy the asteroid
         m.dead = true; 
         createExplosion(m.x, m.y, 20, "#ff00ff");
       }
     }
   }
   
-  // Handle asteroids that were queued up but not spawned yet
-  for (const queued of spawnQueue) {
-    // Skip boss from redistribution
+  // 2. Handle Queued Asteroids (The Bug Fix)
+  // Iterate backwards so we can safely remove items
+  for (let i = spawnQueue.length - 1; i >= 0; i--) {
+    const queued = spawnQueue[i];
+    
+    // Skip boss
     if (queued.type === "boss") continue;
     
     if (queued.targetSlot === deadSlot) {
-      const newSlot = aliveSlots[Math.floor(Math.random() * aliveSlots.length)];
-      const { x0, x1 } = segmentBounds(newSlot);
-      queued.targetSlot = newSlot;
-      queued.x = x0 + Math.random() * (x1 - x0);
+      // FIX: Filter out the sender here too!
+      const validTargets = aliveSlots.filter(slotIdx => {
+        const playerId = lockedSlots[slotIdx];
+        return playerId !== queued.senderId;
+      });
+
+      if (validTargets.length > 0) {
+        const newSlot = validTargets[Math.floor(Math.random() * validTargets.length)];
+        const { x0, x1 } = segmentBounds(newSlot);
+        queued.targetSlot = newSlot;
+        queued.x = x0 + Math.random() * (x1 - x0);
+      } else {
+        // No valid targets (e.g. only sender is left), remove from queue
+        spawnQueue.splice(i, 1);
+      }
     }
   }
 }
@@ -1591,118 +1603,147 @@ function applyDeathMod(modId, deadPlayer) {
   
   switch (modId) {
     case "meteorShower":
-      // Spawn 8 extra asteroids for each living player
+      // BUFF: "Orbital Bombardment" - Spawn 20 (was 8) fast, high-damage asteroids
       for (let playerIdx = 0; playerIdx < playerCount; playerIdx++) {
         const playerId = lockedSlots[playerIdx];
         const player = players.get(playerId);
         if (!player || player.hp <= 0) continue;
         
         const { x0, x1 } = segmentBounds(playerIdx);
-        for (let i = 0; i < 8; i++) {
-          const x = rand(x0 + 30, x1 - 30);
-          const y = rand(-50, -20);
-          const hp = Math.ceil(1 + wave * 0.5);
-          spawnQueue.push({ x, y, type: "medium", hp, targetSlot: playerIdx, attackType: null });
+        // Spawn 20 meteors per living player
+        for (let i = 0; i < 20; i++) {
+          const x = rand(x0 + 20, x1 - 20);
+          const y = rand(-100, -20); // Start higher up
+          const hp = Math.ceil(2 + wave * 0.8); // Tougher
+          
+          // Custom "meteor" asteroid with high downward velocity
+          const meteor = createAsteroid(x, y, "medium", hp, playerIdx, null);
+          meteor.vy = rand(60, 90); // Very fast downward
+          meteor.vx = rand(-5, 5);  // Little horizontal movement
+          meteor.inFTL = false;     // Instant threat
+          missiles.push(meteor);
         }
       }
-      broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} summoned a METEOR SHOWER! ☄️`, timestamp: Date.now() });
+      broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} unleashed an ORBITAL BOMBARDMENT! ☄️`, timestamp: Date.now() });
       break;
       
     case "speedDemon":
-      // All enemies move 50% faster for 10 seconds
+      // FIX & BUFF: Now Stacks! +50% Speed AND +10s Duration per use
       activeDeathMods.speedDemon.active = true;
-      activeDeathMods.speedDemon.endTime = Date.now() + 10000;
-      broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} activated SPEED DEMON! 💨 Enemies are faster for 10s!`, timestamp: Date.now() });
-      broadcast({ t: "deathModEffect", effect: "speedDemon", duration: 10 });
+      
+      // Stack Count logic
+      activeDeathMods.speedDemon.stacks = (activeDeathMods.speedDemon.stacks || 0) + 1;
+      
+      // Stack Duration logic (Add 10s to remaining time)
+      const now = Date.now();
+      if (activeDeathMods.speedDemon.endTime < now) {
+        activeDeathMods.speedDemon.endTime = now + 10000;
+      } else {
+        activeDeathMods.speedDemon.endTime += 10000;
+      }
+      
+      const currentSpeed = 1 + (activeDeathMods.speedDemon.stacks * 0.5);
+      broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} boosted enemy engines! Speed: ${currentSpeed}x | Duration: ${(activeDeathMods.speedDemon.endTime - now)/1000}s`, timestamp: Date.now() });
+      broadcast({ t: "deathModEffect", effect: "speedDemon", duration: 10, stacks: activeDeathMods.speedDemon.stacks });
       break;
       
     case "curseOfGreed":
-      // Steal 15% gold from each living player, give to dead player as score
+      // BUFF: "Grand Larceny" - Steal 35% (was 15%) and destroy 1 random upgrade
       let totalStolen = 0;
       for (const [pid, player] of players) {
         if (player.hp <= 0) continue;
-        const stolen = Math.floor(player.gold * 0.15);
+        const stolen = Math.floor(player.gold * 0.35); // 35% theft
         if (stolen > 0) {
           player.gold -= stolen;
           totalStolen += stolen;
           safeSend(player.ws, { t: "goldStolen", amount: stolen, by: deadPlayer.name });
         }
       }
-      // Dead player gets some score from the theft
-      deadPlayer.score += Math.floor(totalStolen * 0.5);
-      broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} cast CURSE OF GREED! 💸 Stole ${totalStolen} gold!`, timestamp: Date.now() });
+      // Dead player gets massive score for being a master thief
+      deadPlayer.score += Math.floor(totalStolen); 
+      broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} cast GRAND LARCENY! 💸 Stole ${totalStolen} gold from the living!`, timestamp: Date.now() });
       break;
       
     case "shieldBreaker":
-      // All living players take 3 damage
+      // BUFF: "Core Destabilizer" - Deals 8 damage (was 3) and removes ALL shields
       for (const [pid, player] of players) {
         if (player.hp <= 0) continue;
         const wasAlive = player.hp > 0;
-        player.hp = Math.max(0, player.hp - 3);
-        safeSend(player.ws, { t: "spiteDamage", amount: 3, by: deadPlayer.name });
         
-        // Check if this killed anyone
+        // Destroy ALL shields first
+        if (player.upgrades && player.upgrades.shieldActive > 0) {
+          player.upgrades.shieldActive = 0;
+          safeSend(player.ws, { t: "shieldBroken", by: deadPlayer.name });
+        }
+        
+        // Then deal massive damage
+        player.hp = Math.max(0, player.hp - 8);
+        safeSend(player.ws, { t: "spiteDamage", amount: 8, by: deadPlayer.name });
+        
         if (wasAlive && player.hp <= 0) {
-          player.spite = 0; // Reset spite on death
-          deadPlayer.score += 100; // Bonus score for getting a kill from beyond!
-          broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} ELIMINATED ${player.name} from beyond the grave! 💔`, timestamp: Date.now() });
+          player.spite = 0; 
+          deadPlayer.score += 500; 
+          broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} EXECUTES ${player.name} with CORE DESTABILIZER! 💔`, timestamp: Date.now() });
         }
       }
-      broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} used SHIELD BREAKER! 💔 All bases took 3 damage!`, timestamp: Date.now() });
+      broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} detonated EMP BLAST! 💥 All shields destroyed + 8 Damage!`, timestamp: Date.now() });
       break;
       
     case "chaosRift":
-      // Summon a mini-boss for each living player
-      // Use same extreme scaling as normal asteroids
+      // BUFF: "Void Invasion" - Summons 3 Mini-Bosses (was 1) per player
       const chaosExtremeMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
       for (let playerIdx = 0; playerIdx < playerCount; playerIdx++) {
         const playerId = lockedSlots[playerIdx];
         const player = players.get(playerId);
         if (!player || player.hp <= 0) continue;
         
-        const { x0 } = segmentBounds(playerIdx);
+        const { x0, x1 } = segmentBounds(playerIdx);
         let baseMiniBossHp = 15 + (wave * 2);
-        if (wave > 10) {
-          baseMiniBossHp += Math.floor(Math.pow(wave - 10, 1.3) * 2);
-        }
-        // Apply extreme scaling for late game
+        if (wave > 10) baseMiniBossHp += Math.floor(Math.pow(wave - 10, 1.3) * 2);
         const miniBossHp = Math.ceil(baseMiniBossHp * chaosExtremeMult);
         
-        spawnQueue.push({ 
-          x: x0 + SEGMENT_W / 2, 
-          y: -80, 
-          type: "miniboss", 
-          hp: miniBossHp, 
-          targetSlot: playerIdx, 
-          attackType: null,
-          isMiniBoss: true,
-          isSpiteSpawn: true // Mark as spite spawn for potential visual
-        });
+        // Spawn 3 Mini-Bosses
+        for(let k=0; k<3; k++) {
+           const spawnX = x0 + SEGMENT_W * (0.2 + k*0.3); // Spread them out
+           spawnQueue.push({ 
+            x: spawnX, 
+            y: -80 - (k * 40), // Staggered vertical spawn
+            type: "miniboss", 
+            hp: miniBossHp, 
+            targetSlot: playerIdx, 
+            attackType: null,
+            isMiniBoss: true,
+            isSpiteSpawn: true 
+          });
+        }
       }
-      broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} opened a CHAOS RIFT! 🌀 Mini-bosses incoming!`, timestamp: Date.now() });
+      broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: `${deadPlayer.name} opened a VOID RIFT! 🌀 TRIPLE Mini-boss invasion!`, timestamp: Date.now() });
       break;
   }
 }
 
 function endGame(winnerId) {
   phase = "gameover";
+  
+  // Sort by DAMAGE DEALT instead of score
   const scores = lockedSlots.map(id => {
     const p = players.get(id);
     return { 
       id, 
       name: p?.name || "???", 
-      score: p?.score || 0, 
+      damage: Math.round(p?.damageDealt || 0), // Use Damage
       slot: p?.slot || 0,
       kills: p?.kills || 0,
       isWinner: !soloMode && id === winnerId
     };
-  }).sort((a, b) => b.score - a.score);
+  }).sort((a, b) => b.damage - a.damage); // Sort descending by damage
 
+  // Save to leaderboard (Tracking Damage now)
   for (const s of scores) {
-    if (s.score > 0) {
+    if (s.damage > 0) {
       leaderboard.push({
         name: s.name,
-        score: s.score,
+        damage: s.damage, // Saved as damage
         kills: s.kills,
         wave: wave,
         date: Date.now(),
@@ -1710,7 +1751,8 @@ function endGame(winnerId) {
       });
     }
   }
-  leaderboard.sort((a, b) => b.score - a.score);
+  // Sort leaderboard by damage
+  leaderboard.sort((a, b) => b.damage - a.damage);
   leaderboard = leaderboard.slice(0, MAX_LEADERBOARD_ENTRIES);
   saveLeaderboard();
 
@@ -1734,6 +1776,9 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
   let modules = [];
   let ownerGold = 0;
 
+  // Helper variable to store chance before rolling
+  let critChance = 0;
+
   if (overrideProps) {
     dmg = overrideProps.damage;
     modules = overrideProps.modules || [];
@@ -1741,7 +1786,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     
     if (overrideProps.inheritedUpgrades) {
       speed = BULLET_SPEED * (overrideProps.bulletSpeedMult ?? 1) * (overrideProps.bulletType === "sniper" ? 1.5 : 1);
-      isCrit = Math.random() < (overrideProps.critChance ?? 0);
+      critChance = overrideProps.critChance ?? 0;
       explosive = overrideProps.explosive || 0;
       lifespan = BULLET_LIFESPAN + (overrideProps.lifespanAdd ?? 0);
       ricochet = overrideProps.ricochet || 0;
@@ -1749,7 +1794,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
       chainChance = overrideProps.chainChance || 0;
     } else {
       speed = BULLET_SPEED * (overrideProps.bulletType === "sniper" ? 1.5 : 1);
-      isCrit = false;
+      critChance = 0;
       explosive = overrideProps.explosive || 0;
       lifespan = BULLET_LIFESPAN;
       ricochet = 0;
@@ -1766,21 +1811,37 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     dmg = BULLET_DAMAGE + (owner.upgrades?.damageAdd ?? 0);
     dmg *= (owner.upgrades?.multishotDmgMult ?? 1);
     speed = BULLET_SPEED * (owner.upgrades?.bulletSpeedMult ?? 1);
-    isCrit = Math.random() < (owner.upgrades?.critChance ?? 0);
+    critChance = owner.upgrades?.critChance ?? 0;
     explosive = owner.upgrades?.explosive ?? 0;
-    lifespan = BULLET_LIFESPAN; // Removed lifespanAdd
+    lifespan = BULLET_LIFESPAN; 
     bulletType = "main";
     ricochet = owner.upgrades?.ricochet || 0;
     pierce = owner.upgrades?.pierce || 0;
     chainChance = owner.upgrades?.chainChance || 0;
     ownerGold = owner.gold || 0;
-    // Only use owner.modules if explicitly set (for Copycat's scaledOwner)
-    // Real players don't have .modules - their inventory is separate storage
-    // NEVER use owner.inventory for module effects!
     modules = owner.modules || [];
   }
 
-  let finalDmg = isCrit ? dmg * 3 : dmg;
+  // ===== OVERCRIT LOGIC =====
+  let isOverCrit = false;
+  if (critChance > 1.0) {
+    isCrit = true; // Guaranteed crit
+    // Excess chance becomes OverCrit chance (e.g., 1.10 = 10% chance)
+    if (Math.random() < (critChance - 1.0)) {
+      isOverCrit = true;
+    }
+  } else {
+    isCrit = Math.random() < critChance;
+  }
+
+  // Normal: 1x, Crit: 3x, OverCrit: 9x (Triple the crit damage)
+  let finalDmg = dmg;
+  if (isOverCrit) {
+    finalDmg = dmg * 9;
+  } else if (isCrit) {
+    finalDmg = dmg * 3;
+  }
+  
   let bulletR = bulletType === "sniper" ? 4 : bulletType === "missile" ? 5 : BULLET_R;
   let bulletColor = null;
   
@@ -1934,9 +1995,26 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
     baseDmg += props.damageAdd;
   }
   
-  // Critical hit check
-  const isCrit = Math.random() < (props.critChance || 0);
-  let finalDmg = isCrit ? baseDmg * 3 : baseDmg;
+  // Critical hit & OverCrit check
+  const critChance = props.critChance || 0;
+  let isCrit = false;
+  let isOverCrit = false;
+
+  if (critChance > 1.0) {
+    isCrit = true;
+    if (Math.random() < (critChance - 1.0)) {
+      isOverCrit = true;
+    }
+  } else {
+    isCrit = Math.random() < critChance;
+  }
+
+  let finalDmg = baseDmg;
+  if (isOverCrit) {
+    finalDmg = baseDmg * 9; // Triple the crit damage
+  } else if (isCrit) {
+    finalDmg = baseDmg * 3;
+  }
   
   // Module effects
   const modules = props.modules || [];
@@ -2480,8 +2558,9 @@ function tick() {
     // Check for expired death mod effects
     if (activeDeathMods.speedDemon.active && Date.now() >= activeDeathMods.speedDemon.endTime) {
       activeDeathMods.speedDemon.active = false;
+      activeDeathMods.speedDemon.stacks = 0; // Reset stacks
       broadcast({ t: "deathModExpired", effect: "speedDemon" });
-      broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: "Speed Demon effect has ended!", timestamp: Date.now() });
+      broadcast({ t: "chatMsg", id: uid(), from: "💀 SPITE", text: "Speed Demon effect has ended... for now.", timestamp: Date.now() });
     }
     
     // Track wave elapsed time for gravity increase
@@ -2838,9 +2917,10 @@ function tick() {
       // OPTIMIZED: Use cached speed multiplier for this slot
       let speedMult = slotSpeedMultipliers[m.targetSlot] || 1;
       
-      // Death Mod: Speed Demon makes enemies 50% faster
+      // Death Mod: Speed Demon - Stacks 50% speed per usage!
       if (activeDeathMods.speedDemon.active) {
-        speedMult *= 1.5;
+        const stacks = activeDeathMods.speedDemon.stacks || 1;
+        speedMult *= (1 + 0.5 * stacks); // 1 stack = 1.5x, 2 stacks = 2.0x, 3 stacks = 2.5x...
       }
       
       // Per-wave gravity increase: +1% per second to prevent infinite waves
@@ -3082,19 +3162,25 @@ function tick() {
         // Try to find current target
         if (b.targetId && slotMissiles) {
           for (let i = 0; i < slotMissiles.length; i++) {
-            if (slotMissiles[i].id === b.targetId && slotMissiles[i].hp > 0) {
+            // FIX: Don't stick to enemies we already hit (prevent death loops)
+            if (slotMissiles[i].id === b.targetId && slotMissiles[i].hp > 0 &&
+               (!b.hitSet || !b.hitSet.has(slotMissiles[i].id))) {
               target = slotMissiles[i];
               break;
             }
           }
         }
         
-        // If target dead or missing, find closest new target
+        // If target dead, missing, OR already hit, find closest new target
         if (!target && slotMissiles && slotMissiles.length > 0) {
           let closestDist = Infinity;
           for (let i = 0; i < slotMissiles.length; i++) {
             const m = slotMissiles[i];
             if (m.hp <= 0) continue;
+            
+            // FIX: Do not target enemies we have already hit
+            if (b.hitSet && b.hitSet.has(m.id)) continue;
+
             const dx = m.x - b.x;
             const dy = m.y - b.y;
             const dist = dx * dx + dy * dy;
@@ -3120,6 +3206,7 @@ function tick() {
         
         // Steer toward target
         if (target) {
+          // ... (keep existing steering logic) ...
           const dx = target.x - b.x;
           const dy = target.y - b.y;
           const dist = Math.sqrt(dx * dx + dy * dy);
@@ -3152,8 +3239,12 @@ function tick() {
       
       // Momentum Lens: Track distance traveled
       if (b.modules && b.modules.includes("momentumLens")) {
-        const distThisTick = Math.hypot(b.x - b.lastX, b.y - b.lastY);
-        // FIX 2: Handle undefined totalDistance (for shards/ricochets) to prevent NaN immunity
+        // FIX: Default to current position if lastX is missing (shards/ricochets)
+        // Otherwise b.x - undefined = NaN, causing invincible enemies
+        const lx = (b.lastX !== undefined) ? b.lastX : b.x;
+        const ly = (b.lastY !== undefined) ? b.lastY : b.y;
+        
+        const distThisTick = Math.hypot(b.x - lx, b.y - ly);
         b.totalDistance = (b.totalDistance || 0) + distThisTick;
       }
       b.lastX = b.x;
@@ -5094,7 +5185,7 @@ wss.on("connection", (ws) => {
     }
 
     // ===== MUSIC CONTROLS =====
-    // In lobby: host controls music. In game: score leader controls music.
+    // In lobby: host controls music. In game: HIGHEST DAMAGE dealer controls music.
     const canControlMusic = () => {
       if (players.size <= 1) return true; // Solo player always controls
       
@@ -5102,13 +5193,13 @@ wss.on("connection", (ws) => {
         // In lobby, only host can control
         return id === hostId;
       } else {
-        // In game, score leader controls
-        let maxScore = -1;
+        // In game, DAMAGE leader controls
+        let maxDamage = -1;
         let leaderId = null;
         for (const [pid, player] of players) {
-          const score = player.score || 0;
-          if (score > maxScore) {
-            maxScore = score;
+          const dmg = player.damageDealt || 0;
+          if (dmg > maxDamage) {
+            maxDamage = dmg;
             leaderId = pid;
           }
         }
