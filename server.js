@@ -115,6 +115,26 @@ const ATTACK_TYPES = {
   berserker: { name: "Berserker", cost: 100, count: 1, baseHp: 3, hpScale: 1.2, size: "large", speed: 0.8, desc: "Speeds up when damaged!", color: "#ff2200", icon: "🔥" }
 };
 
+// ===== Battleship Enemy Type =====
+// Large spaceship enemy that spawns after wave 15 with 4 turrets
+const BATTLESHIP_CONFIG = {
+  baseHp: 20,
+  hpPerWave: 3,
+  speed: 0.25, // Slow moving
+  size: 45, // Radius for collision
+  turretCount: 4,
+  turretCooldown: 1.5, // Seconds between shots
+  turretDamage: 2, // Damage per turret shot
+  bulletSpeed: 120,
+  // Turret positions relative to center (normalized, will be scaled by size)
+  turretOffsets: [
+    { x: -0.54, y: -0.27 },  // Top-left
+    { x: 0.54, y: -0.27 },   // Top-right
+    { x: -0.75, y: 0.36 },   // Bottom-left
+    { x: 0.75, y: 0.36 }     // Bottom-right
+  ]
+};
+
 // ===== Tower Modules (Boss Rewards) =====
 // SYNERGY DESIGN PHILOSOPHY:
 // Modules should work TOGETHER! When a bullet spawns child bullets (shards, ricochets),
@@ -1042,6 +1062,51 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
   };
 }
 
+// ===== BATTLESHIP ENEMY =====
+function createBattleship(x, y, targetSlot) {
+  const id = uid();
+  const config = BATTLESHIP_CONFIG;
+  
+  // Calculate HP based on wave
+  const extremeScaleMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
+  const hp = Math.ceil((config.baseHp + wave * config.hpPerWave) * extremeScaleMult);
+  
+  // Slow speed
+  const vy = config.speed * 30; // Base downward velocity
+  const vx = rand(-5, 5);
+  
+  // Initialize turret angles (pointing down initially)
+  const turretAngles = [Math.PI/2, Math.PI/2, Math.PI/2, Math.PI/2];
+  const turretCooldowns = [0, 0.3, 0.6, 0.9]; // Stagger initial shots
+  
+  // Send spawn event to clients
+  queueEvent("spawnBattleship", {
+    id, x, y, r: config.size,
+    hp,
+    targetSlot,
+    turretAngles
+  });
+  
+  return {
+    id,
+    x, y, vx, vy,
+    r: config.size,
+    type: "battleship",
+    hp,
+    maxHp: hp,
+    targetSlot,
+    isBattleship: true,
+    // Turret state
+    turretAngles,
+    turretCooldowns,
+    // Movement
+    inFTL: true,
+    ftlThreshold: GROUND_Y * 0.15,
+    // No gold for now (or add gold reward)
+    noGold: false
+  };
+}
+
 function spawnWave() {
   missiles = [];
   bullets = [];
@@ -1086,6 +1151,28 @@ function spawnWave() {
       });
     }
     return; // Skip normal spawns
+  }
+
+  // ===== BATTLESHIP SPAWN (Wave 1 for testing, change to wave >= 15 later) =====
+  // Spawn one battleship per player on applicable waves
+  if (wave >= 1) { // TODO: Change to wave >= 15 for production
+    const playerCount = lockedSlots.length;
+    for (let playerIdx = 0; playerIdx < playerCount; playerIdx++) {
+      const playerId = lockedSlots[playerIdx];
+      const player = players.get(playerId);
+      if (!player || player.hp <= 0) continue;
+      
+      const targetSlot = playerIdx;
+      const { x0, x1 } = segmentBounds(targetSlot);
+      
+      // Spawn battleship in center of lane, above screen
+      const battleship = createBattleship(
+        x0 + (x1 - x0) / 2,
+        -80,
+        targetSlot
+      );
+      missiles.push(battleship);
+    }
   }
 
   for (const id of lockedSlots) {
@@ -3135,6 +3222,113 @@ function tick() {
         }
       }
       
+      // ===== BATTLESHIP TURRET UPDATE =====
+      if (m.isBattleship && !m.inFTL && !m.dead) {
+        const config = BATTLESHIP_CONFIG;
+        const targetSlot = m.targetSlot;
+        const playerId = lockedSlots[targetSlot];
+        const targetPlayer = playerId ? players.get(playerId) : null;
+        
+        if (targetPlayer && targetPlayer.hp > 0) {
+          // Find the player's main turret position to aim at
+          const playerCenterX = targetSlot * SEGMENT_W + SEGMENT_W / 2;
+          const playerCenterY = GROUND_Y;
+          
+          // Update each turret
+          for (let t = 0; t < 4; t++) {
+            // Calculate turret world position
+            const offset = config.turretOffsets[t];
+            const turretX = m.x + offset.x * m.r;
+            const turretY = m.y + offset.y * m.r;
+            
+            // Calculate angle to player
+            const dx = playerCenterX - turretX;
+            const dy = playerCenterY - turretY;
+            const targetAngle = Math.atan2(dy, dx);
+            
+            // Smoothly rotate turret towards target
+            let currentAngle = m.turretAngles[t];
+            let angleDiff = targetAngle - currentAngle;
+            // Normalize angle difference
+            while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+            while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+            // Rotate at 2 radians per second
+            const rotateSpeed = 2.0;
+            if (Math.abs(angleDiff) < rotateSpeed * DT) {
+              m.turretAngles[t] = targetAngle;
+            } else {
+              m.turretAngles[t] += Math.sign(angleDiff) * rotateSpeed * DT;
+            }
+            
+            // Update cooldown and fire
+            m.turretCooldowns[t] -= DT;
+            if (m.turretCooldowns[t] <= 0) {
+              m.turretCooldowns[t] = config.turretCooldown;
+              
+              // Fire a bullet towards player
+              const bulletAngle = m.turretAngles[t];
+              const bulletSpeed = config.bulletSpeed;
+              
+              // Create enemy bullet (reuse bullet system but mark as enemy)
+              queueEvent("battleshipShot", {
+                x: turretX,
+                y: turretY,
+                vx: Math.cos(bulletAngle) * bulletSpeed,
+                vy: Math.sin(bulletAngle) * bulletSpeed,
+                damage: config.turretDamage,
+                targetSlot: targetSlot,
+                shipId: m.id,
+                turretIndex: t
+              });
+              
+              // Add to enemy bullets array (we'll need to track these)
+              if (!m.enemyBullets) m.enemyBullets = [];
+              m.enemyBullets.push({
+                id: uid(),
+                x: turretX,
+                y: turretY,
+                vx: Math.cos(bulletAngle) * bulletSpeed,
+                vy: Math.sin(bulletAngle) * bulletSpeed,
+                damage: config.turretDamage,
+                targetSlot: targetSlot,
+                life: 5.0 // 5 second lifespan
+              });
+            }
+          }
+          
+          // Update enemy bullets
+          if (m.enemyBullets) {
+            for (let bi = m.enemyBullets.length - 1; bi >= 0; bi--) {
+              const eb = m.enemyBullets[bi];
+              eb.x += eb.vx * DT;
+              eb.y += eb.vy * DT;
+              eb.life -= DT;
+              
+              // Check if bullet hit player's base
+              if (eb.y >= GROUND_Y - 10) {
+                const hitSlot = Math.floor(eb.x / SEGMENT_W);
+                if (hitSlot === eb.targetSlot && isSlotAlive(hitSlot)) {
+                  const hitPlayerId = lockedSlots[hitSlot];
+                  const hitPlayer = players.get(hitPlayerId);
+                  if (hitPlayer && hitPlayer.hp > 0) {
+                    hitPlayer.hp -= eb.damage;
+                    if (hitPlayer.hp < 0) hitPlayer.hp = 0;
+                    queueEvent("battleshipHit", { x: eb.x, y: eb.y, damage: eb.damage, slot: hitSlot });
+                  }
+                }
+                m.enemyBullets.splice(bi, 1);
+                continue;
+              }
+              
+              // Remove if expired or off screen
+              if (eb.life <= 0 || eb.y > WORLD_H + 50 || eb.x < -50 || eb.x > worldW + 50) {
+                m.enemyBullets.splice(bi, 1);
+              }
+            }
+          }
+        }
+      }
+      
       bounceOffWalls(m);
       
       // Shield sphere collision check (dome above ground)
@@ -4074,6 +4268,12 @@ function tick() {
                 owner.gold = (owner.gold || 0) + 5;
                 owner.score = (owner.score || 0) + 100; // Bonus score
               }
+              // Battleship gives 8 gold
+              else if (m.isBattleship) {
+                owner.gold = (owner.gold || 0) + 8;
+                owner.score = (owner.score || 0) + 150; // Bonus score
+                createExplosion(m.x, m.y, 50, "#88aaff"); // Big blue explosion
+              }
               // Berserker gives 3 gold
               else if (m.isBerserker) {
                 owner.gold = (owner.gold || 0) + 3;
@@ -4605,6 +4805,12 @@ function broadcastGameState() {
     obj.isBerserker = m.isBerserker || undefined;
     obj.staticCharge = m.staticCharge > 0 ? m.staticCharge : undefined;
     obj.infected = m.infected || undefined;
+    
+    // Battleship data
+    obj.isBattleship = m.isBattleship || undefined;
+    if (m.isBattleship) {
+      obj.turretAngles = m.turretAngles;
+    }
   }
   // Truncate array to actual size (JSON.stringify respects .length)
   broadcastState.missiles.length = missileCount;

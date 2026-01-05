@@ -169,6 +169,59 @@
     bossImages[`ad${i}`].src = `images/${imgName}`;
   }
 
+  // ===== Battleship Images =====
+  const battleshipImages = {
+    hull: new Image(),
+    flame1: new Image(),
+    flame2: new Image(),
+    turret: new Image()
+  };
+  let battleshipImagesLoaded = false;
+  let battleshipImagesCount = 0;
+  const totalBattleshipImages = 4;
+  
+  function onBattleshipImageLoad(name) {
+    battleshipImagesCount++;
+    console.log(`✓ Battleship image loaded: ${name} (${battleshipImagesCount}/${totalBattleshipImages})`);
+    if (battleshipImagesCount >= totalBattleshipImages) {
+      battleshipImagesLoaded = true;
+      console.log("Battleship images ready!");
+    }
+  }
+  
+  function onBattleshipImageError(name) {
+    console.warn(`✗ Failed to load battleship image: ${name}`);
+    battleshipImagesCount++;
+    if (battleshipImagesCount >= totalBattleshipImages) {
+      battleshipImagesLoaded = battleshipImagesCount > 0;
+    }
+  }
+  
+  battleshipImages.hull.onload = () => onBattleshipImageLoad("ship.png");
+  battleshipImages.hull.onerror = () => onBattleshipImageError("ship.png");
+  battleshipImages.hull.src = "images/ship.png";
+  
+  battleshipImages.flame1.onload = () => onBattleshipImageLoad("shipflame1.png");
+  battleshipImages.flame1.onerror = () => onBattleshipImageError("shipflame1.png");
+  battleshipImages.flame1.src = "images/shipflame1.png";
+  
+  battleshipImages.flame2.onload = () => onBattleshipImageLoad("shipflame2.png");
+  battleshipImages.flame2.onerror = () => onBattleshipImageError("shipflame2.png");
+  battleshipImages.flame2.src = "images/shipflame2.png";
+  
+  battleshipImages.turret.onload = () => onBattleshipImageLoad("shipturret1.png");
+  battleshipImages.turret.onerror = () => onBattleshipImageError("shipturret1.png");
+  battleshipImages.turret.src = "images/shipturret1.png";
+  
+  // Battleship turret positions (relative to center, normalized to ship size 240x330)
+  // These match the 4 red dots on the ship sprite
+  const BATTLESHIP_TURRET_OFFSETS = [
+    { x: -65, y: -45 },   // Top-left
+    { x: 65, y: -45 },    // Top-right  
+    { x: -90, y: 60 },    // Bottom-left
+    { x: 90, y: 60 }      // Bottom-right
+  ];
+
   // ===== Main Turret Sprites =====
   const turretImages = {
     base: new Image(),
@@ -946,6 +999,50 @@
           });
           // Just mark that we know about this missile (no position tracking)
           missileStates.set(ev.id, true);
+          break;
+        
+        case "spawnBattleship":
+          // Cache battleship data for rendering
+          asteroidCache.set(ev.id, {
+            r: ev.r,
+            type: "battleship",
+            maxHp: ev.hp,
+            targetSlot: ev.targetSlot,
+            isBattleship: true,
+            turretAngles: ev.turretAngles || [Math.PI/2, Math.PI/2, Math.PI/2, Math.PI/2],
+            flameFrame: 0, // For flame animation
+            rotation: 0
+          });
+          missileStates.set(ev.id, true);
+          break;
+        
+        case "battleshipShot":
+          // Visual effect for battleship turret firing
+          if (!skipVisualEffects) {
+            // Muzzle flash
+            createClientParticle(ev.x, ev.y, "#ff4400", 4, 0.8);
+            // Track enemy bullet for rendering
+            if (!window.enemyBullets) window.enemyBullets = [];
+            window.enemyBullets.push({
+              id: ev.shipId + "_" + ev.turretIndex + "_" + Date.now(),
+              x: ev.x,
+              y: ev.y,
+              vx: ev.vx,
+              vy: ev.vy,
+              life: 5.0
+            });
+          }
+          break;
+        
+        case "battleshipHit":
+          // Visual effect when battleship bullet hits player
+          if (!skipVisualEffects) {
+            createClientParticle(ev.x, ev.y, "#ff0000", 8, 1.2);
+            // Screen shake for the affected player
+            if (ev.slot === mySlot) {
+              screenShake = Math.min((screenShake || 0) + 3, 10);
+            }
+          }
           break;
           
         case "explosion":
@@ -1840,6 +1937,12 @@
               m.bossAdVariant = cached.bossAdVariant;
               m.isMiniBoss = cached.isMiniBoss;
               m.isMiniBossAd = cached.isMiniBossAd;
+              
+              // Battleship data
+              m.isBattleship = cached.isBattleship;
+              if (cached.isBattleship) {
+                m.turretAngles = cached.turretAngles;
+              }
             }
             
             // MAGIC: Store the server position as "target", use old visual position as "current"
@@ -3910,6 +4013,110 @@
           baseColor = ATTACK_TYPES[m.attackType].color;
         }
 
+        // ===== BATTLESHIP RENDERING =====
+        const isBattleship = m.isBattleship || m.type === "battleship" || cached?.isBattleship;
+        
+        if (isBattleship) {
+          ctx.save();
+          ctx.translate(x, y);
+          
+          // Check if images are loaded
+          const hullImg = battleshipImages.hull;
+          const flame1Img = battleshipImages.flame1;
+          const flame2Img = battleshipImages.flame2;
+          const turretImg = battleshipImages.turret;
+          const imagesReady = hullImg.complete && hullImg.naturalWidth > 0;
+          
+          if (imagesReady) {
+            // Calculate scale based on radius (ship is 240x330, we want it to fit radius)
+            const shipScale = (r * 2.2) / 240; // Scale to fit the radius
+            
+            // FTL effect for battleship
+            if (m.inFTL) {
+              // Draw FTL streaks
+              ctx.strokeStyle = "rgba(100, 180, 255, 0.6)";
+              ctx.lineWidth = 3;
+              const streakLength = 120 * sy;
+              for (let i = 0; i < 6; i++) {
+                const offsetX = (i - 2.5) * 20 * shipScale;
+                ctx.beginPath();
+                ctx.moveTo(offsetX, -streakLength);
+                ctx.lineTo(offsetX, 0);
+                ctx.stroke();
+              }
+              
+              // Draw stretched ship
+              ctx.scale(1, 1.5);
+              ctx.globalAlpha = 0.8;
+            }
+            
+            // Draw flames (flickering between frame 1 and 2)
+            const flameFrame = Math.floor(Date.now() / 100) % 2; // Switch every 100ms
+            const flameImg = flameFrame === 0 ? flame1Img : flame2Img;
+            if (flameImg.complete && flameImg.naturalWidth > 0) {
+              const flameW = 240 * shipScale;
+              const flameH = 330 * shipScale;
+              ctx.drawImage(flameImg, -flameW/2, -flameH/2, flameW, flameH);
+            }
+            
+            // Draw hull
+            const hullW = 240 * shipScale;
+            const hullH = 330 * shipScale;
+            ctx.drawImage(hullImg, -hullW/2, -hullH/2, hullW, hullH);
+            
+            // Draw turrets
+            if (turretImg.complete && turretImg.naturalWidth > 0 && !m.inFTL) {
+              const turretAngles = m.turretAngles || cached?.turretAngles || [Math.PI/2, Math.PI/2, Math.PI/2, Math.PI/2];
+              const turretOffsets = BATTLESHIP_TURRET_OFFSETS;
+              
+              for (let t = 0; t < 4; t++) {
+                const offset = turretOffsets[t];
+                const turretX = offset.x * shipScale;
+                const turretY = offset.y * shipScale;
+                
+                ctx.save();
+                ctx.translate(turretX, turretY);
+                ctx.rotate(turretAngles[t] - Math.PI/2); // Adjust for turret sprite orientation
+                
+                // Draw turret (35x46 original size)
+                const turretScale = shipScale * 1.2;
+                const tw = 35 * turretScale;
+                const th = 46 * turretScale;
+                ctx.drawImage(turretImg, -tw/2, -th/2, tw, th);
+                
+                ctx.restore();
+              }
+            }
+            
+            ctx.globalAlpha = 1;
+          } else {
+            // Fallback rendering if images not loaded
+            ctx.fillStyle = "#445566";
+            ctx.strokeStyle = "#88aacc";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.ellipse(0, 0, r * 0.7, r, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          }
+          
+          ctx.restore();
+          
+          // HP bar for battleship
+          if (m.hp < m.maxHp) {
+            const bw = r * 2.5, bh = 4 * sy, bx = x - bw / 2, by = y - r * 1.2 - 10 * sy;
+            ctx.fillStyle = "rgba(0,0,0,0.7)";
+            ctx.fillRect(bx, by, bw, bh);
+            ctx.fillStyle = (m.hp / m.maxHp) > 0.5 ? "#0f8" : "#f44";
+            ctx.fillRect(bx, by, bw * (m.hp / m.maxHp), bh);
+            ctx.strokeStyle = "#fff";
+            ctx.lineWidth = 1;
+            ctx.strokeRect(bx, by, bw, bh);
+          }
+          
+          continue; // Skip normal asteroid rendering
+        }
+
         // FTL entry effect - Star Wars hyperspace exit style
         if (m.inFTL) {
           // Check if this is a boss/boss-ad with an image
@@ -4435,6 +4642,54 @@
       for (const b of clientBullets) {
         const baseColor = PLAYER_COLORS[b.slot]?.main || "#0ff";
         drawBullet(b, sx, sy, baseColor);
+      }
+      
+      // Render enemy bullets (from battleships)
+      if (window.enemyBullets && window.enemyBullets.length > 0) {
+        const dt = 1/60; // Approximate delta time
+        for (let i = window.enemyBullets.length - 1; i >= 0; i--) {
+          const eb = window.enemyBullets[i];
+          // Update position
+          eb.x += eb.vx * dt;
+          eb.y += eb.vy * dt;
+          eb.life -= dt;
+          
+          // Remove if expired or off screen
+          if (eb.life <= 0 || eb.y > world.height + 50 || eb.x < -50 || eb.x > world.width + 50) {
+            window.enemyBullets.splice(i, 1);
+            continue;
+          }
+          
+          // Draw enemy bullet
+          const bx = eb.x * sx;
+          const by = eb.y * sy;
+          
+          ctx.save();
+          ctx.translate(bx, by);
+          
+          // Rotate to face direction of travel
+          const angle = Math.atan2(eb.vy, eb.vx);
+          ctx.rotate(angle);
+          
+          // Red glowing bullet
+          ctx.shadowColor = "#ff4400";
+          ctx.shadowBlur = 8;
+          
+          // Bullet body (elongated)
+          ctx.fillStyle = "#ff6644";
+          ctx.beginPath();
+          ctx.ellipse(0, 0, 6 * sx, 3 * sx, 0, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // Bright core
+          ctx.fillStyle = "#ffaa88";
+          ctx.beginPath();
+          ctx.ellipse(0, 0, 3 * sx, 1.5 * sx, 0, 0, Math.PI * 2);
+          ctx.fill();
+          
+          ctx.shadowBlur = 0;
+          ctx.restore();
+        }
       }
 
       // Damage numbers
