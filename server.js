@@ -1767,36 +1767,60 @@ function endGame(winnerId) {
   }, 8000);
 }
 
+// ===== HELPER: Count Module Occurrences =====
+// Returns count of how many times a module appears in the array
+// Used for stacking effects when multiple of same module equipped
+// PERF: Short-circuits on null, non-array, or empty arrays
+function countModule(modules, moduleId) {
+  if (!modules || !Array.isArray(modules) || modules.length === 0) return 0;
+  let count = 0;
+  for (let i = 0; i < modules.length; i++) {
+    if (modules[i] === moduleId) count++;
+  }
+  return count;
+}
+
 // ===== HELPER: Calculate Module Damage Effects =====
 // Consolidates all damage-modifying module effects at bullet creation time
+// STACKING: Multiple copies of same module multiply their effects!
 // Returns: { damage, hadHighRoulette } - hadHighRoulette triggers visual effect
 function applyModuleDamage(dmg, modules, gold, x, y) {
   let hadHighRoulette = false;
   
-  // Russian Roulette: random 0x-3x damage (nerfed from 10x)
-  if (modules.includes("russianRoulette")) {
-    const rouletteMult = Math.random() * 3; 
-    dmg *= rouletteMult;
-    if (rouletteMult >= 2.4) { // Top 20% triggers crit visual
-      hadHighRoulette = true;
-      queueEvent("rouletteCrit", { x: x, y: y });
+  // Russian Roulette: random 0x-3x damage per copy! (STACKS MULTIPLICATIVELY)
+  // 1x = 0-3x, 2x = 0-9x, 3x = 0-27x (chaos mode!)
+  const rouletteCount = countModule(modules, "russianRoulette");
+  if (rouletteCount > 0) {
+    for (let i = 0; i < rouletteCount; i++) {
+      const rouletteMult = Math.random() * 3; 
+      dmg *= rouletteMult;
+      if (rouletteMult >= 2.4) { // Top 20% triggers crit visual
+        hadHighRoulette = true;
+        queueEvent("rouletteCrit", { x: x, y: y });
+      }
     }
   }
   
-  // Midas Capacitor: add 1% of gold as damage (CAPPED at 2000 gold / 20 dmg)
-  if (modules.includes("midasCapacitor")) {
+  // Midas Capacitor: +1% of gold as damage per copy (STACKS ADDITIVELY)
+  // 1x = +1%, 2x = +2%, 3x = +3% (still capped at 2000 gold)
+  const midasCount = countModule(modules, "midasCapacitor");
+  if (midasCount > 0) {
     const effectiveGold = Math.min(gold, 2000); // Cap at 2000 gold
-    dmg += effectiveGold * 0.01;
+    dmg += effectiveGold * 0.01 * midasCount;
   }
   
-  // Vampiric Nanobots: -50% damage (healing happens on hit)
-  if (modules.includes("vampiricNanobots")) {
-    dmg *= 0.5;
+  // Vampiric Nanobots: -50% damage per copy (STACKS - diminishing returns)
+  // 1x = 50% dmg, 2x = 25% dmg, 3x = 12.5% dmg (healing scales with copies on hit)
+  const vampiricCount = countModule(modules, "vampiricNanobots");
+  if (vampiricCount > 0) {
+    dmg *= Math.pow(0.5, vampiricCount);
   }
   
-  // Taxman: -90% damage (gold generation happens on hit)
-  if (modules.includes("taxman")) {
-    dmg *= 0.1;
+  // Taxman: -90% damage per copy (STACKS - diminishing returns)
+  // 1x = 10% dmg, 2x = 1% dmg, 3x = 0.1% dmg (gold gen scales with copies on hit)
+  const taxmanCount = countModule(modules, "taxman");
+  if (taxmanCount > 0) {
+    dmg *= Math.pow(0.1, taxmanCount);
   }
   
   return { damage: dmg, hadHighRoulette };
@@ -1804,6 +1828,7 @@ function applyModuleDamage(dmg, modules, gold, x, y) {
 
 // ===== HELPER: Apply Confetti Cannon Effects =====
 // Randomizes bullet stats for party mode! Returns modified stats object
+// Does NOT stack - one confetti cannon is enough chaos!
 function applyConfettiEffects(speed, dmg, bulletR) {
   return {
     speed: speed * (0.5 + Math.random() * 2),     // 0.5x to 2.5x speed
@@ -1816,20 +1841,23 @@ function applyConfettiEffects(speed, dmg, bulletR) {
 
 // ===== HELPER: Apply On-Hit Damage Modifiers =====
 // Modifiers that affect damage at the moment of impact (not bullet creation)
+// STACKING: Multiple copies multiply their effects!
 // Used by both regular bullets and railgun hits
 function applyOnHitDamageModifiers(baseDmg, modules, target, bulletData) {
   let finalDmg = baseDmg;
   
-  // Executioner's Sight: 300% damage to enemies below 30% HP
-  if (modules && modules.includes("executionerSight")) {
-    if (target.hp / target.maxHp < 0.3) {
-      finalDmg *= 3;
-    }
+  // Executioner's Sight: 300% damage to enemies below 30% HP per copy (STACKS)
+  // 1x = 3x at <30%, 2x = 9x at <30%, 3x = 27x at <30% (execute harder!)
+  const execCount = countModule(modules, "executionerSight");
+  if (execCount > 0 && target.hp / target.maxHp < 0.3) {
+    finalDmg *= Math.pow(3, execCount);
   }
   
-  // Momentum Lens: +10% damage per 100 pixels traveled
-  if (modules && modules.includes("momentumLens") && bulletData && bulletData.totalDistance) {
-    const distanceBonus = 1 + (bulletData.totalDistance / 100) * 0.1;
+  // Momentum Lens: +10% damage per 100 pixels per copy (STACKS ADDITIVELY)
+  // 1x = +10%/100px, 2x = +20%/100px, 3x = +30%/100px
+  const momentumCount = countModule(modules, "momentumLens");
+  if (momentumCount > 0 && bulletData && bulletData.totalDistance) {
+    const distanceBonus = 1 + (bulletData.totalDistance / 100) * 0.1 * momentumCount;
     finalDmg *= distanceBonus;
   }
   
@@ -2303,11 +2331,15 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
       
       queueEvent("explosion", { x: m.x, y: m.y, color: "#0f0", radius: 20 });
       
-      if (modules.includes("gravityWell")) {
+      // Gravity Well: Create gravity pull effect per copy (STACKS)
+      const gravityRailgunCount = countModule(modules, "gravityWell");
+      if (gravityRailgunCount > 0) {
+        const baseRadius = 100 + (gravityRailgunCount - 1) * 30;
+        const baseStrength = 80 + (gravityRailgunCount - 1) * 40;
         gravityWells.push({
           x: m.x, y: m.y,
           targetId: m.id,
-          life: 2.0, radius: 100, strength: 80,
+          life: 2.0, radius: baseRadius, strength: baseStrength,
           ownerSlot: ownerSlot
         });
         queueEvent("gravityWell", { x: m.x, y: m.y });
@@ -2322,14 +2354,17 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
     });
   }
   
-  // Vampiric healing
-  if (modules.includes("vampiricNanobots") && vampiricDamageDealt > 0) {
+  // Vampiric healing per copy (STACKS)
+  // 1x = 400 dmg/heal, 2x = 300 dmg/heal, 3x = 200 dmg/heal
+  const vampiricRailgunCount = countModule(modules, "vampiricNanobots");
+  if (vampiricRailgunCount > 0 && vampiricDamageDealt > 0) {
     const p = players.get(owner.id);
     if (p) {
-      p.vampiricPool = (p.vampiricPool || 0) + vampiricDamageDealt;
-      if (p.vampiricPool >= 400) {
-        const heals = Math.floor(p.vampiricPool / 400);
-        p.vampiricPool -= heals * 400;
+      const healThreshold = Math.max(200, 400 - (vampiricRailgunCount - 1) * 100);
+      p.vampiricPool = (p.vampiricPool || 0) + vampiricDamageDealt * vampiricRailgunCount;
+      if (p.vampiricPool >= healThreshold) {
+        const heals = Math.floor(p.vampiricPool / healThreshold);
+        p.vampiricPool -= heals * healThreshold;
         p.hp = Math.min(p.hp + heals, p.maxHp);
         if (heals > 0) {
           queueEvent("vampiricHeal", { slot: p.slot, amount: heals });
@@ -2777,16 +2812,20 @@ function tick() {
                 }
               }
               
-              // FEEDBACK LOOP: +15% fire rate per module on this tower
-              if (activeModules.includes("feedbackLoop")) {
+              // FEEDBACK LOOP: +15% fire rate per module per copy (STACKS)
+              // 1x = +15% per module, 2x = +30% per module, 3x = +45% per module
+              const feedbackCount = countModule(activeModules, "feedbackLoop");
+              if (feedbackCount > 0) {
                 const moduleCount = activeModules.length;
-                fireRateBonus *= 1 + (moduleCount * 0.15); // +15% per module (including feedbackLoop itself)
+                fireRateBonus *= 1 + (moduleCount * 0.15 * feedbackCount);
               }
               
-              // BLOODTHIRSTER ENGINE: +1% fire rate per 1% HP missing
-              if (activeModules.includes("bloodthirster")) {
+              // BLOODTHIRSTER ENGINE: +1% fire rate per 1% HP missing per copy (STACKS)
+              // 1x = +100% at 0 HP, 2x = +200% at 0 HP, 3x = +300% at 0 HP
+              const bloodthirsterCount = countModule(activeModules, "bloodthirster");
+              if (bloodthirsterCount > 0) {
                 const missingHpPercent = (p.maxHp - p.hp) / p.maxHp;
-                fireRateBonus *= 1 + missingHpPercent;
+                fireRateBonus *= 1 + (missingHpPercent * bloodthirsterCount);
               }
               
               tower.cd = stats.cooldown / levelBonus / fireRateBonus;
@@ -2798,8 +2837,11 @@ function tick() {
                 const scaledFireRate = 1 + (mainFireRate - 1) * 0.75;
                 tower.cd = BULLET_COOLDOWN / scaledFireRate;
                 
-                // Get other modules (excluding copycat itself) to apply additively
-                const otherModules = activeModules.filter(m => m !== "copycat");
+                // PERF: Build otherModules without filter() - modules array is small (max 3)
+                const otherModules = [];
+                for (let omi = 0; omi < activeModules.length; omi++) {
+                  if (activeModules[omi] !== "copycat") otherModules.push(activeModules[omi]);
+                }
                 
                 // Create a "scaled owner" with 75% of all main turret stats
                 const scaledOwner = {
@@ -2874,9 +2916,9 @@ function tick() {
           const tower = p.towers[tIdx];
           if (!tower) continue;
           
-          // Check if this tower has droneCommand module
-          const hasDrone = tower.modules && tower.modules.includes("droneCommand");
-          if (!hasDrone) {
+          // Check if this tower has droneCommand module (STACKS for more damage/fire rate)
+          const droneCount = countModule(tower.modules, "droneCommand");
+          if (droneCount === 0) {
             tower.dronePos = null;
             continue;
           }
@@ -2899,14 +2941,18 @@ function tick() {
           // Store drone position for client rendering
           tower.dronePos = { x: droneX, y: droneY, angle: tower.droneAngle };
           
-          // Drone firing
+          // Drone firing - scales with copies! 
+          // 1x = 0.5s cd, 100% dmg. 2x = 0.35s cd, 150% dmg. 3x = 0.25s cd, 200% dmg
           tower.droneCd = Math.max(0, tower.droneCd - DT);
+          
+          const droneCooldown = 0.5 / (1 + (droneCount - 1) * 0.5); // 0.5s, 0.33s, 0.25s
           
           if (tower.droneCd <= 0) {
             const droneTarget = findBestTarget(x0, x1, droneX, droneY, 0.8, p.slot);
             
             if (droneTarget) {
-              const droneDamage = 1 + (p.upgrades?.damageAdd ?? 0) * 0.3;
+              const baseDroneDamage = 1 + (p.upgrades?.damageAdd ?? 0) * 0.3;
+              const droneDamage = baseDroneDamage * (1 + (droneCount - 1) * 0.5); // 100%, 150%, 200%
               
               let speedMult = slotSpeedMultipliers[p.slot] || 1;
               const gravityMult = 1 + waveElapsedTime * GRAVITY_INCREASE_RATE;
@@ -2920,7 +2966,7 @@ function tick() {
                 modules: [],
               });
               
-              tower.droneCd = 0.5;
+              tower.droneCd = droneCooldown;
             }
           }
         }
@@ -3244,8 +3290,9 @@ function tick() {
           // ... (keep existing steering logic) ...
           const dx = target.x - b.x;
           const dy = target.y - b.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist > 0) {
+          const distSq = dx * dx + dy * dy;
+          if (distSq > 0) {
+            const dist = Math.sqrt(distSq);
             // Calculate desired velocity toward target
             const desiredVx = (dx / dist) * b.homingSpeed;
             const desiredVy = (dy / dist) * b.homingSpeed;
@@ -3256,8 +3303,10 @@ function tick() {
             b.vy += (desiredVy - b.vy) * turnRate * DT;
             
             // Normalize to maintain consistent speed
-            const currentSpeed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
-            if (currentSpeed > 0) {
+            // PERF: Use squared values first
+            const currentSpeedSq = b.vx * b.vx + b.vy * b.vy;
+            if (currentSpeedSq > 0) {
+              const currentSpeed = Math.sqrt(currentSpeedSq);
               b.vx = (b.vx / currentSpeed) * b.homingSpeed;
               b.vy = (b.vy / currentSpeed) * b.homingSpeed;
             }
@@ -3273,12 +3322,16 @@ function tick() {
       // if (b.lifespan <= 0) { b.dead = true; continue; } 
       
       // Momentum Lens: Track distance traveled
-      if (b.modules && b.modules.includes("momentumLens")) {
+      // PERF: Skip check if bullet has no modules
+      if (b.modules && b.modules.length > 0 && b.modules.includes("momentumLens")) {
         // FIX: Default to current position if lastX is missing (shards/ricochets)
         const lx = (b.lastX !== undefined) ? b.lastX : b.x;
         const ly = (b.lastY !== undefined) ? b.lastY : b.y;
         
-        const distThisTick = Math.hypot(b.x - lx, b.y - ly);
+        // PERF: Use squared distance, then sqrt only once
+        const ddx = b.x - lx;
+        const ddy = b.y - ly;
+        const distThisTick = Math.sqrt(ddx * ddx + ddy * ddy);
         b.totalDistance = (b.totalDistance || 0) + distThisTick;
       }
       b.lastX = b.x;
@@ -3294,7 +3347,8 @@ function tick() {
       if (hitLeft || hitRight || hitTop || hitBottom) {
         // Temporal Boomerang: Bounce back to source on wall/ceiling hit (once)
         // (We don't bounce off the floor/bottom, that counts as a miss)
-        if (b.modules && b.modules.includes("temporalBoomerang") && !b.returning && !hitBottom) {
+        // PERF: Check modules.length first to avoid includes() on empty array
+        if (b.modules && b.modules.length > 0 && b.modules.includes("temporalBoomerang") && !b.returning && !hitBottom) {
            b.returning = true;
            b.hitSet.clear(); // Allow hitting enemies again on the way back
            
@@ -3305,8 +3359,11 @@ function tick() {
            
            const dx = sx - b.x;
            const dy = sy - b.y;
-           const dist = Math.hypot(dx, dy) || 1;
-           const speed = Math.hypot(b.vx, b.vy); // Keep same speed
+           // PERF: Calculate speed first using squared values, then single sqrt for direction
+           const distSq = dx * dx + dy * dy;
+           const speedSq = b.vx * b.vx + b.vy * b.vy;
+           const dist = Math.sqrt(distSq) || 1;
+           const speed = Math.sqrt(speedSq);
            
            // Redirect bullet exactly towards source
            b.vx = (dx / dist) * speed;
@@ -3430,8 +3487,11 @@ function tick() {
           const bulletModules = b.modules || [];
           const owner = players.get(b.ownerId);
           
+          // PERF: Skip all module checks if bullet has no modules
+          const hasModules = bulletModules.length > 0;
+          
           // 🎉 CONFETTI CANNON: Party explosion on hit!
-          if (bulletModules.includes("confettiCannon")) {
+          if (hasModules && bulletModules.includes("confettiCannon")) {
             queueEvent("confettiExplosion", { 
               x: m.x, 
               y: m.y, 
@@ -3440,29 +3500,48 @@ function tick() {
             });
           }
           
-          // Fractal Prism: Shatter into 4 smaller bullets (2 Left, 2 Right)
+          // Fractal Prism: Shatter into shards per copy (STACKS)
           // SYNERGY: Shards inherit all modules EXCEPT fractalPrism itself (prevents infinite recursion)
-          // This allows combos like: Fractal + Viral (infectious shards), Fractal + Taxman (gold shards)
-          if (bulletModules.includes("fractalPrism") && bullets.length < MAX_BULLETS) {
-            const shardsToSpawn = Math.min(4, MAX_BULLETS - bullets.length);
+          // 1x = 4 shards, 2x = 6 shards, 3x = 8 shards
+          // MISSILE TOWER BONUS: Shards are homing when fired from missile towers!
+          const fractalCount = countModule(bulletModules, "fractalPrism");
+          if (fractalCount > 0 && bullets.length < MAX_BULLETS) {
+            const baseShards = 4 + (fractalCount - 1) * 2; // 4, 6, 8 shards
+            const shardsToSpawn = Math.min(baseShards, MAX_BULLETS - bullets.length);
             
-            // Filter out fractalPrism to prevent shards spawning more shards (infinite loop)
-            // Keep all OTHER modules so shards can infect, generate gold, heal, etc.
-            const shardModules = bulletModules.filter(mod => mod !== "fractalPrism");
+            // PERF: Build shardModules without filter() - modules array is small (max 3)
+            // Filter out fractalPrism to prevent infinite recursion
+            const shardModules = [];
+            for (let mi = 0; mi < bulletModules.length; mi++) {
+              if (bulletModules[mi] !== "fractalPrism") shardModules.push(bulletModules[mi]);
+            }
             
-            // Define 4 specific angles: 2 Right (approx 0), 2 Left (approx PI)
-            // 0.4 radians is about 23 degrees
-            const angles = [
-               -0.4,            // Right Up
-               0.4,             // Right Down
-               Math.PI - 0.4,   // Left Up
-               Math.PI + 0.4    // Left Down
-            ];
-
+            // Check if parent bullet was from missile tower - shards will be homing!
+            const isMissileShard = b.bulletType === "missile";
+            
+            // Find targets for homing shards (missile tower only)
+            let homingTargets = [];
+            if (isMissileShard) {
+              const slotMissilesForShards = missilesBySlot[b.ownerSlot] || [];
+              for (let ti = 0; ti < slotMissilesForShards.length && homingTargets.length < shardsToSpawn; ti++) {
+                const t = slotMissilesForShards[ti];
+                if (!t.dead && t.id !== m.id && t.hp > 0) {
+                  homingTargets.push(t);
+                }
+              }
+            }
+            
+            // Generate angles evenly distributed in a circle
             for (let i = 0; i < shardsToSpawn; i++) {
-              const angle = angles[i];
-              const shardVx = Math.cos(angle) * 100;
-              const shardVy = Math.sin(angle) * 100;
+              const angle = (i / shardsToSpawn) * Math.PI * 2;
+              const shardSpeed = 100;
+              const shardVx = Math.cos(angle) * shardSpeed;
+              const shardVy = Math.sin(angle) * shardSpeed;
+              
+              // Assign homing target if missile tower (cycle through available targets)
+              const homingTarget = isMissileShard && homingTargets.length > 0 
+                ? homingTargets[i % homingTargets.length] 
+                : null;
               
               // SYNERGY: Shards inherit modules, ricochet, pierce, chain chance from parent
               // This enables powerful combos where shards continue the parent's effects
@@ -3479,7 +3558,7 @@ function tick() {
                 dmg: b.dmg * 0.3,
                 isCrit: false,
                 explosive: Math.floor(b.explosive * 0.5), // Half explosive power
-                lifespan: 1.0,
+                lifespan: 1.5, // 50% increased range
                 isTowerBullet: b.isTowerBullet,
                 bulletType: b.bulletType, // VISUAL: Inherit parent's bullet type (gatling/sniper/missile/main)
                 chainChance: b.chainChance, // Inherit chain lightning chance
@@ -3489,6 +3568,10 @@ function tick() {
                 modules: shardModules, // SYNERGY: Inherit modules for combo effects!
                 bulletColor: b.bulletColor, // VISUAL: Inherit custom color (e.g. from Confetti Cannon)
                 skipThisTick: true, // Don't process until next tick
+                // MISSILE TOWER HOMING: Shards seek enemies!
+                isHoming: isMissileShard,
+                targetId: homingTarget ? homingTarget.id : null,
+                homingSpeed: shardSpeed,
               };
               bullets.push(shard);
 
@@ -3506,15 +3589,21 @@ function tick() {
                 ricochet: shard.ricochet || 0, // For client-side ricochet/pierce order
                 pierce: shard.pierce, // For client-side pierce prediction
                 r: shard.r,
-                lifespan: shard.lifespan // DESYNC FIX: Send lifespan for client expiration
+                lifespan: shard.lifespan, // DESYNC FIX: Send lifespan for client expiration
+                isHoming: shard.isHoming, // For homing shard rendering
+                targetId: shard.targetId, // Target for homing
               });
             }
           }
           
-          // Quantum Displacer: 10% chance to teleport enemy to top (5% for bosses)
+          // Quantum Displacer: teleport chance per copy (STACKS ADDITIVELY)
           // SYNERGY: Inherited by shards/ricochets - each child bullet has teleport chance!
-          if (bulletModules.includes("quantumDisplacer") && m.hp > 0) {
-            const teleportChance = (m.type === "boss" || m.isBoss) ? 0.05 : 0.10;
+          // 1x = 10% (5% boss), 2x = 20% (10% boss), 3x = 30% (15% boss)
+          const quantumCount = countModule(bulletModules, "quantumDisplacer");
+          if (quantumCount > 0 && m.hp > 0) {
+            const teleportChance = (m.type === "boss" || m.isBoss) 
+              ? 0.05 * quantumCount 
+              : 0.10 * quantumCount;
             if (Math.random() < teleportChance) {
               m.y = -m.r - 20;
               m.inFTL = true;
@@ -3522,38 +3611,48 @@ function tick() {
             }
           }
           
-          // Gravity Well: Create gravity pull effect
+          // Gravity Well: Create gravity pull effect per copy (STACKS)
           // SYNERGY: Shards can create multiple gravity wells, ricochets leave wells at each bounce!
-          if (bulletModules.includes("gravityWell") && m.hp > 0) {
+          // 1x = 100 radius, 80 strength. 2x = 130 radius, 120 strength. 3x = 160 radius, 160 strength
+          const gravityCount = countModule(bulletModules, "gravityWell");
+          if (gravityCount > 0 && m.hp > 0) {
+            const baseRadius = 100 + (gravityCount - 1) * 30;
+            const baseStrength = 80 + (gravityCount - 1) * 40;
             gravityWells.push({
               x: m.x,
               y: m.y,
               targetId: m.id,
               life: 2.0,
-              radius: 100,
-              strength: 80,
+              radius: baseRadius,
+              strength: baseStrength,
               ownerSlot: b.ownerSlot
             });
             queueEvent("gravityWell", { x: m.x, y: m.y });
           }
           
-          // Vampiric Nanobots: Accumulate damage for healing
+          // Vampiric Nanobots: Accumulate damage for healing (STACKS)
           // SYNERGY: All child bullets (shards, ricochets) contribute to healing pool!
-          // NERFED: Now requires 400 accumulated damage (was 200) to heal 1 HP
-          if (bulletModules.includes("vampiricNanobots") && owner) {
-            owner.lifestealAccum = (owner.lifestealAccum || 0) + b.dmg * 2; // x2 because we halved damage
-            if (owner.lifestealAccum >= 400) {
-              const heals = Math.floor(owner.lifestealAccum / 400);
+          // 1x = 400 dmg per heal, 2x = 300 dmg per heal, 3x = 200 dmg per heal
+          const vampiricHitCount = countModule(bulletModules, "vampiricNanobots");
+          if (vampiricHitCount > 0 && owner) {
+            const healThreshold = Math.max(200, 400 - (vampiricHitCount - 1) * 100);
+            // x2 because damage was halved per copy, scale accumulation with copies
+            owner.lifestealAccum = (owner.lifestealAccum || 0) + b.dmg * 2 * vampiricHitCount;
+            if (owner.lifestealAccum >= healThreshold) {
+              const heals = Math.floor(owner.lifestealAccum / healThreshold);
               owner.hp = Math.min(owner.maxHp, owner.hp + heals);
-              owner.lifestealAccum = owner.lifestealAccum % 400;
+              owner.lifestealAccum = owner.lifestealAccum % healThreshold;
               queueEvent("lifesteal", { slot: owner.slot, amount: heals });
             }
           }
           
-          // Chain Reaction: Add static charge
+          // Chain Reaction: Add static charge per copy (STACKS)
           // SYNERGY: Shards add charge to multiple enemies, building up chain explosions faster!
-          if (bulletModules.includes("chainReaction") && m.hp > 0) {
-            m.staticCharge = (m.staticCharge || 0) + b.dmg;
+          // 1x = 100% charge, 2x = 150% charge, 3x = 200% charge
+          const chainCount = countModule(bulletModules, "chainReaction");
+          if (chainCount > 0 && m.hp > 0) {
+            const chargeMultiplier = 1 + (chainCount - 1) * 0.5;
+            m.staticCharge = (m.staticCharge || 0) + b.dmg * chargeMultiplier;
             m.staticColor = "#ffff00";
           }
           
@@ -3589,7 +3688,9 @@ function tick() {
             
             if (nearestTarget) {
               // Calculate intercept point using prediction
-              const bulletSpeed = Math.hypot(b.vx, b.vy);
+              // PERF: Calculate bullet speed using squared values
+              const bulletSpeedSq = b.vx * b.vx + b.vy * b.vy;
+              const bulletSpeed = Math.sqrt(bulletSpeedSq);
               
               // Safety check: bullet must have valid speed
               if (bulletSpeed < 1) {
@@ -3604,15 +3705,20 @@ function tick() {
                 // Calculate direction to intercept point
                 const dx = intercept.x - m.x;
                 const dy = intercept.y - m.y;
-                const dist = Math.hypot(dx, dy);
+                // PERF: Use squared distance check first
+                const distSq = dx * dx + dy * dy;
                 
                 // Safety check: must have valid direction
-                if (dist < 0.1) {
+                if (distSq < 0.01) {
                   // Target is at same position, just shoot toward target directly
                   const tdx = nearestTarget.x - m.x;
                   const tdy = nearestTarget.y - m.y;
-                  const tdist = Math.hypot(tdx, tdy);
-                  if (tdist > 0.1) {
+                  const tdistSq = tdx * tdx + tdy * tdy;
+                  if (tdistSq > 0.01) {
+                    const tdist = Math.sqrt(tdistSq);
+                    // PERF: Create hitSet outside closure
+                    const newHitSet = new Set(b.hitSet);
+                    newHitSet.add(m.id);
                     // SYNERGY: Spawn fresh bullet that inherits everything from parent
                     const newBullet = {
                       id: uid(),
@@ -3632,11 +3738,7 @@ function tick() {
                       chainChance: b.chainChance,
                       ricochet: b.ricochet - 1,
                       pierce: b.pierce,
-                      hitSet: (() => {
-                        const newSet = new Set(b.hitSet);
-                        newSet.add(m.id);
-                        return newSet;
-                      })(),
+                      hitSet: newHitSet,
                       modules: b.modules || [],
                       bulletColor: b.bulletColor,
                       skipThisTick: true,
@@ -3658,6 +3760,10 @@ function tick() {
                 } else {
                   // SYNERGY: Spawn fresh bullet that inherits everything from parent
                   // Modules, pierce, chain chance, explosive - all carry forward!
+                  const dist = Math.sqrt(distSq);
+                  // PERF: Create hitSet outside object literal
+                  const newHitSet2 = new Set(b.hitSet);
+                  newHitSet2.add(m.id);
                   const newBullet = {
                     id: uid(),
                     ownerId: b.ownerId,
@@ -3676,11 +3782,7 @@ function tick() {
                     chainChance: b.chainChance, // Inherit chain lightning
                     ricochet: b.ricochet - 1, // Decrement ricochet counter
                     pierce: b.pierce, // Inherit pierce (used after ricochet depleted)
-                    hitSet: (() => { // OPTIMIZED: Avoid spread operator allocation
-                      const newSet = new Set(b.hitSet);
-                      newSet.add(m.id);
-                      return newSet;
-                    })(),
+                    hitSet: newHitSet2,
                     modules: b.modules || [], // SYNERGY: Inherit ALL modules!
                     bulletColor: b.bulletColor,
                     skipThisTick: true, // Don't process this bullet until next tick
@@ -3719,11 +3821,13 @@ function tick() {
             // This allows pierce to work when there's nothing to bounce to
           }
           
-          // Pinball Wizard (boss module): Bounce between enemies up to 4 times
+          // Pinball Wizard: Bounce between enemies per copy (STACKS)
           // SYNERGY: Pinball redirects the SAME bullet, so all modules stay active!
           // Combos naturally: Pinball + Viral (infects each bounce), Pinball + Taxman (gold each hit)
-          if (bulletModules.includes("pinballWizard") && m.hp > 0) {
-            const maxBounces = 4;
+          // 1x = 4 bounces, 2x = 6 bounces, 3x = 8 bounces
+          const pinballCount = countModule(bulletModules, "pinballWizard");
+          if (pinballCount > 0 && m.hp > 0) {
+            const maxBounces = 4 + (pinballCount - 1) * 2; // 4, 6, 8 bounces
             b.enemyBounces = (b.enemyBounces || 0) + 1;
             
             if (b.enemyBounces < maxBounces) {
@@ -3756,7 +3860,9 @@ function tick() {
                 const dx = nearestTarget.x - m.x;
                 const dy = nearestTarget.y - m.y;
                 const dist = Math.sqrt(nearestDistSq);
-                const speed = Math.hypot(b.vx, b.vy);
+                // PERF: Calculate speed using squared values
+                const speedSq = b.vx * b.vx + b.vy * b.vy;
+                const speed = Math.sqrt(speedSq);
                 b.vx = (dx / dist) * speed;
                 b.vy = (dy / dist) * speed;
                 b.x = m.x + (dx / dist) * (m.r + 5); // Move bullet outside current enemy
@@ -3773,11 +3879,12 @@ function tick() {
             }
           }
           
-          // Taxman: Generate gold on hit (damage already reduced at bullet creation)
+          // Taxman: Generate gold on hit per copy (STACKS)
           // SYNERGY: Works with any bullet source - shards, ricochets, pinballs all generate gold!
-          // BALANCE: 0.1 gold per hit (accumulates, awards 1 gold when >= 1.0)
-          if (bulletModules.includes("taxman") && owner) {
-            owner.taxmanAccum = (owner.taxmanAccum || 0) + 0.1;
+          // 1x = +0.1 gold/hit, 2x = +0.2 gold/hit, 3x = +0.3 gold/hit
+          const taxmanHitCount = countModule(bulletModules, "taxman");
+          if (taxmanHitCount > 0 && owner) {
+            owner.taxmanAccum = (owner.taxmanAccum || 0) + 0.1 * taxmanHitCount;
             if (owner.taxmanAccum >= 1.0) {
               const goldToAdd = Math.floor(owner.taxmanAccum);
               owner.gold = (owner.gold || 0) + goldToAdd;
@@ -3786,15 +3893,17 @@ function tick() {
             }
           }
           
-          // Viral Payload: Infect enemy with spreading DOT
+          // Viral Payload: Infect enemy with spreading DOT per copy (STACKS)
           // SYNERGY: Shards, ricochets, pinballs can all spread infection!
-          if (bulletModules.includes("viralPayload") && m.hp > 0) {
+          // 1x = 50% DOT, 5s. 2x = 75% DOT, 6s. 3x = 100% DOT, 7s
+          const viralCount = countModule(bulletModules, "viralPayload");
+          if (viralCount > 0 && m.hp > 0) {
             if (!m.infected) {
               m.infected = true;
               m.infectionOwner = b.ownerId;
               m.infectionSlot = b.ownerSlot;
-              m.infectionDamage = b.dmg * 0.5; // DOT = 50% of bullet damage per second
-              m.infectionLife = 5.0; // Infection lasts 5 seconds
+              m.infectionDamage = b.dmg * (0.5 + (viralCount - 1) * 0.25); // 50%, 75%, 100%
+              m.infectionLife = 5.0 + (viralCount - 1); // 5s, 6s, 7s
               queueEvent("infected", { id: m.id, x: m.x, y: m.y });
             }
           }
@@ -3883,19 +3992,25 @@ function tick() {
             m.dead = true;
             createExplosion(m.x, m.y, 25, ATTACK_TYPES[m.attackType]?.color || "#fa0");
             
-            // Necromancer Drive: Create ghost ally on kill
-            if (bulletModules.includes("necromancerDrive")) {
-              ghostAllies.push({
-                x: m.x,
-                y: m.y,
-                r: m.r * 0.8,
-                vy: -60, // Flies upward
-                life: 5.0,
-                damage: b.dmg * 0.5,
-                ownerSlot: b.ownerSlot,
-                hitSet: new Set() // O(1) hit tracking
-              });
-              queueEvent("ghostSpawn", { x: m.x, y: m.y, slot: b.ownerSlot });
+            // Necromancer Drive: Create ghost allies on kill per copy (STACKS)
+            // 1x = 1 ghost, 2x = 2 ghosts, 3x = 3 ghosts
+            const necroCount = countModule(bulletModules, "necromancerDrive");
+            if (necroCount > 0) {
+              for (let gi = 0; gi < necroCount; gi++) {
+                // Spread ghosts slightly so they don't stack perfectly
+                const offsetX = (gi - (necroCount - 1) / 2) * 15;
+                ghostAllies.push({
+                  x: m.x + offsetX,
+                  y: m.y,
+                  r: m.r * 0.8,
+                  vy: -60, // Flies upward
+                  life: 5.0,
+                  damage: b.dmg * 0.5,
+                  ownerSlot: b.ownerSlot,
+                  hitSet: new Set() // O(1) hit tracking
+                });
+              }
+              queueEvent("ghostSpawn", { x: m.x, y: m.y, slot: b.ownerSlot, count: necroCount });
             }
             
             if (owner) {
