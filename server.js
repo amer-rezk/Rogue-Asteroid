@@ -123,7 +123,7 @@ const BATTLESHIP_CONFIG = {
   speed: 0.25, // Slow moving
   size: 28, // Radius for collision (was 45, now ~50% smaller)
   turretCount: 4,
-  turretCooldown: 1.5, // Seconds between shots
+  turretCooldown: 3.0, // Seconds between shots (was 1.5, now 50% slower)
   turretDamage: 0, // Turrets don't deal damage, they destroy bullets
   bulletSpeed: 150, // Faster bullets for intercepting
   bulletLifespan: 2.0, // Shorter lifespan

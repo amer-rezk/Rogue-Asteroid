@@ -4044,29 +4044,26 @@
           const imagesReady = hullImg.complete && hullImg.naturalWidth > 0;
           
           if (imagesReady) {
-            // Calculate scale based on radius (ship is 240x330, 50% smaller than before)
-            const shipScale = (r * 1.1) / 240; // 50% smaller (was 2.2, now 1.1)
+            // Calculate scale based on radius (ship is 240x330, 25% smaller than original)
+            const shipScale = (r * 1.65) / 240; // 25% smaller (was 2.2, now 1.65)
             
-            // FTL effect for battleship - blurry and stretched
+            // FTL effect for battleship - phasing in effect
             if (m.inFTL) {
-              // Draw FTL streaks
-              ctx.strokeStyle = "rgba(100, 180, 255, 0.7)";
-              ctx.lineWidth = 4;
-              const streakLength = 150 * sy;
-              for (let i = 0; i < 8; i++) {
-                const offsetX = (i - 3.5) * 15 * shipScale;
+              // Draw FTL streaks behind the ship
+              ctx.strokeStyle = "rgba(100, 180, 255, 0.5)";
+              ctx.lineWidth = 3;
+              const streakLength = 100 * sy;
+              for (let i = 0; i < 6; i++) {
+                const offsetX = (i - 2.5) * 18 * shipScale;
                 ctx.beginPath();
                 ctx.moveTo(offsetX, -streakLength);
                 ctx.lineTo(offsetX, 0);
                 ctx.stroke();
               }
               
-              // Apply blur filter for FTL (creates motion blur effect)
-              ctx.filter = 'blur(4px)';
-              
-              // Draw stretched ship
-              ctx.scale(1, 2.0); // More stretched
-              ctx.globalAlpha = 0.6; // More transparent
+              // Phasing effect - ship is visible but slightly stretched and translucent
+              ctx.scale(1, 1.3); // Slight vertical stretch
+              ctx.globalAlpha = 0.7; // Visible but phasing in
             }
             
             // Draw flames (flickering between frame 1 and 2)
@@ -4083,10 +4080,7 @@
             const hullH = 330 * shipScale;
             ctx.drawImage(hullImg, -hullW/2, -hullH/2, hullW, hullH);
             
-            // Reset filter after FTL ship drawing
-            if (m.inFTL) {
-              ctx.filter = 'none';
-            }
+            ctx.globalAlpha = 1;
             
             // Draw turrets (only when not in FTL)
             if (turretImg.complete && turretImg.naturalWidth > 0 && !m.inFTL) {
