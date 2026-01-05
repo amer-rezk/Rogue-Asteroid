@@ -705,7 +705,8 @@
 
       if (hitLeft || hitRight || hitTop || hitBottom) {
         // Temporal Boomerang: Bounce back to source on wall/ceiling hit
-        if (b.modules && b.modules.includes("temporalBoomerang") && !b.returning && !hitBottom) {
+        // OPTIMIZED: Check the flag instead of searching a list
+        if (b.isBoomerang && !b.returning && !hitBottom) {
            b.returning = true;
            if (b.hitSet) b.hitSet.clear(); // Reset hits so it can damage again
            
@@ -1131,8 +1132,8 @@
             targetId: ev.targetId || null, // Target asteroid ID
             homingSpeed: Math.sqrt(ev.vx * ev.vx + ev.vy * ev.vy), // Store initial speed for homing
             
-            // FIX: Store module info for boomerang logic
-            modules: ev.modules || [],
+            // OPTIMIZED: Only store the boolean flag, not the heavy array
+            isBoomerang: ev.isBoomerang || false,
             sourceX: ev.x,
             sourceY: ev.y,
             maxLifespan: ev.lifespan || 3.0,
