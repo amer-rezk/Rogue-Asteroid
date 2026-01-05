@@ -1911,6 +1911,8 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     ownerSlot: owner.slot,
     x: originX,
     y: originY - 6,
+    sourceX: originX,     // Track start X
+    sourceY: originY - 6, // Track start Y
     vx, vy,
     r: bulletR,
     dmg: finalDmg,
@@ -3240,7 +3242,6 @@ function tick() {
       // Momentum Lens: Track distance traveled
       if (b.modules && b.modules.includes("momentumLens")) {
         // FIX: Default to current position if lastX is missing (shards/ricochets)
-        // Otherwise b.x - undefined = NaN, causing invincible enemies
         const lx = (b.lastX !== undefined) ? b.lastX : b.x;
         const ly = (b.lastY !== undefined) ? b.lastY : b.y;
         
@@ -3250,28 +3251,48 @@ function tick() {
       b.lastX = b.x;
       b.lastY = b.y;
       
-      // Temporal Boomerang: Reverse direction at half lifespan
-      if (b.modules && b.modules.includes("temporalBoomerang") && !b.returning) {
-        if (b.lifespan < b.maxLifespan / 2) {
-          b.vx *= -1;
-          b.vy *= -1;
-          b.returning = true;
-          // Clear hit set so it can hit enemies again on return trip
-          b.hitSet.clear();
+      // ===== TEMPORAL BOOMERANG & BOUNDARY LOGIC =====
+      const { x0: ownerX0, x1: ownerX1 } = segmentBounds(b.ownerSlot);
+      const hitLeft = b.x < ownerX0;
+      const hitRight = b.x > ownerX1;
+      const hitTop = b.y < -50;
+      const hitBottom = b.y > GROUND_Y;
+
+      if (hitLeft || hitRight || hitTop || hitBottom) {
+        // Temporal Boomerang: Bounce back to source on wall/ceiling hit (once)
+        // (We don't bounce off the floor/bottom, that counts as a miss)
+        if (b.modules && b.modules.includes("temporalBoomerang") && !b.returning && !hitBottom) {
+           b.returning = true;
+           b.hitSet.clear(); // Allow hitting enemies again on the way back
+           
+           // Calculate vector back to source turret
+           // If source is missing (e.g. older bullets), aim for center of lane
+           const sx = b.sourceX !== undefined ? b.sourceX : (ownerX0 + SEGMENT_W/2);
+           const sy = b.sourceY !== undefined ? b.sourceY : GROUND_Y;
+           
+           const dx = sx - b.x;
+           const dy = sy - b.y;
+           const dist = Math.hypot(dx, dy) || 1;
+           const speed = Math.hypot(b.vx, b.vy); // Keep same speed
+           
+           // Redirect bullet exactly towards source
+           b.vx = (dx / dist) * speed;
+           b.vy = (dy / dist) * speed;
+           
+           // Push back inside bounds to prevent getting stuck in the wall
+           if (hitLeft) b.x = ownerX0 + 2;
+           if (hitRight) b.x = ownerX1 - 2;
+           if (hitTop) b.y = -48;
+           
+           // Refresh lifespan so it has time to travel back
+           b.lifespan = b.maxLifespan; 
+        } else {
+           // Normal bullets (or boomerang returning bullets) die at borders
+           b.dead = true;
         }
       }
-
-      // Ricochet now chains between enemies, not walls - bullets die at boundaries
-      const { x0: ownerX0, x1: ownerX1 } = segmentBounds(b.ownerSlot);
-      if (b.x < ownerX0 || b.x > ownerX1) { b.dead = true; }
-      if (b.y < -50 || b.y > GROUND_Y) { b.dead = true; }
     }
 
-    // Buckets already built above before player shooting
-
-    // Bullet-missile collision (now O(bullets × missiles_per_slot) instead of O(bullets × all_missiles))
-    // PERFORMANCE: Added quick bounding box rejection before expensive distance calc
-    // NOTE: Use fixed bulletCount to avoid processing newly spawned ricochets in same tick
     const bulletCount = bullets.length;
     for (let bulletIdx = 0; bulletIdx < bulletCount; bulletIdx++) {
       const b = bullets[bulletIdx];
