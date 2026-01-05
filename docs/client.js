@@ -5994,20 +5994,19 @@
       }
 
       // ===== INCOMING ATTACK ALERTS (POPUP & SLIDE) =====
-      
       // 1. Cleanup: Only remove old ALERTS (Phase 1/2). 
       // DOCKED items (Phase 3) stay until the 'wave' event clears them.
       const currentTime = Date.now();
       // (No loop here anymore - we rely on the "wave" event to clear the list)
 
       // 2. Render The Animation
-      const { sx, sy, offsetX, offsetY } = getScale();
-      
+      // Target Slot: Default to 1.5 (center) if spectating, otherwise use player's slot
       const targetSlot = (mySlot !== undefined && mySlot >= 0) ? mySlot : 1.5; 
       
-      // DOCK DESTINATION: Left side of the player's lane + 40px padding
+      // DOCK DESTINATION: Left side of the player's lane + 50px padding
+      // We use existing 'sx', 'sy', 'offsetX', 'offsetY' variables (DO NOT REDECLARE THEM)
       const laneX = (targetSlot * world.segmentWidth) * sx + offsetX;
-      const dockX = laneX + (40 * sx); 
+      const dockX = laneX + (50 * sx); 
       const dockY = 100 * sy + offsetY; 
 
       for (let i = 0; i < attackPopups.length; i++) {
@@ -6024,6 +6023,7 @@
           phase = "alert";
           const t = Math.min(1, age / 0.4);
           const elastic = 1 + Math.sin(t * Math.PI * 0.7) * 0.3 * (1-t);
+          
           x = canvas.width / 2;
           y = canvas.height / 3;
           scale = 1.0 * elastic;
@@ -6037,14 +6037,13 @@
           
           x = (canvas.width / 2) + (dockX - (canvas.width / 2)) * ease;
           y = (canvas.height / 3) + (dockY - (canvas.height / 3)) * ease;
-          scale = 1.0 - (0.0 * ease); // Keep size roughly same
+          scale = 1.0 - (0.2 * ease); // Slight shrink
           alpha = 1;
 
         } else {
           // PHASE 3: DOCKED (Square Box)
           phase = "docked";
           // Stack them vertically if there are multiple
-          // (i * 70px spacing)
           x = dockX;
           y = dockY + (i * 70 * sy); 
           scale = 0.8; 
@@ -6059,10 +6058,10 @@
         if (phase === "docked") {
             // === SQUARE BOX UI ===
             // Background Box
-            ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+            ctx.fillStyle = "rgba(0, 0, 0, 0.8)";
             ctx.strokeStyle = atkDef.color || "#f44";
             ctx.lineWidth = 3;
-            // Draw box centered on X/Y
+            // Draw box centered on X/Y (80px wide)
             ctx.beginPath();
             ctx.rect(-40, -30, 80, 60);
             ctx.fill();
@@ -6079,7 +6078,7 @@
             ctx.font = "bold 24px 'Orbitron', monospace";
             ctx.fillStyle = "#fff";
             ctx.textAlign = "center";
-            ctx.fillText(`x${popup.count}`, 20, 2);
+            ctx.fillText(`x${popup.count || 1}`, 20, 2);
 
         } else {
             // === BIG ALERT UI (Phase 1 & 2) ===
@@ -6103,7 +6102,8 @@
                 ctx.font = "bold 16px 'Courier New', monospace";
                 ctx.fillStyle = "#fff";
                 ctx.shadowBlur = 0;
-                ctx.fillText(`x${popup.count} FROM ${popup.from.toUpperCase()}`, 0, 55);
+                const countText = popup.count > 1 ? `x${popup.count} ` : "";
+                ctx.fillText(`${countText}FROM ${popup.from.toUpperCase()}`, 0, 55);
             }
         }
 
