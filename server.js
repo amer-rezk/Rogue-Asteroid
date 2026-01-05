@@ -1967,7 +1967,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
       isHoming: bullet.isHoming, // For homing missile rendering
       targetId: bullet.targetId, // Target asteroid ID for homing
       // OPTIMIZED: Send a simple flag instead of the full list to prevent LAG
-      isBoomerang: bullet.modules && bullet.modules.includes("temporalBoomerang"), knows about boomerang!
+      isBoomerang: bullet.modules && bullet.modules.includes("temporalBoomerang"),
     });
   }
   // If throttled, bullet still exists on server - client just won't see it immediately
