@@ -1915,13 +1915,23 @@
         break;
 
       case "incomingAttack":
-        // Save the amount (msg.count) for the UI
-        attackPopups.push({ 
+        // AGGREGATION: Check if we already have this specific attack waiting
+        const existingAlert = attackPopups.find(a => a.type === msg.attackType && a.from === msg.from);
+        
+        if (existingAlert) {
+          // Just add to the count!
+          existingAlert.count = (existingAlert.count || 1) + (msg.count || 1);
+          // Optional: Add a 'pulse' timestamp if you want it to flash when updated
+          existingAlert.lastUpdate = Date.now(); 
+        } else {
+          // New attack type, add it to the list
+          attackPopups.push({ 
             type: msg.attackType, 
             from: msg.from, 
-            count: msg.count || 1, // Default to 1 if missing
+            count: msg.count || 1, 
             time: Date.now() 
-        });
+          });
+        }
         break;
 
       case "gameOver":
@@ -5996,16 +6006,13 @@
       // 1. Cleanup: Only remove old ALERTS (Phase 1/2). 
       // DOCKED items (Phase 3) stay until the 'wave' event clears them.
       const currentTime = Date.now();
-      // (No loop here anymore - we rely on the "wave" event to clear the list)
 
       // 2. Render The Animation
-      // Target Slot: Default to 1.5 (center) if spectating, otherwise use player's slot
       const targetSlot = (mySlot !== undefined && mySlot >= 0) ? mySlot : 1.5; 
       
-      // DOCK DESTINATION: Left side of the player's lane + 50px padding
-      // Note: We use the existing 'sx', 'sy', 'offsetX', 'offsetY' from top of draw()
+      // Position: Left side of lane + padding
       const laneX = (targetSlot * world.segmentWidth) * sx + offsetX;
-      const dockX = laneX + (50 * sx); 
+      const dockX = laneX + (40 * sx); 
       const dockY = 100 * sy + offsetY; 
 
       for (let i = 0; i < attackPopups.length; i++) {
@@ -6022,7 +6029,6 @@
           phase = "alert";
           const t = Math.min(1, age / 0.4);
           const elastic = 1 + Math.sin(t * Math.PI * 0.7) * 0.3 * (1-t);
-          
           x = canvas.width / 2;
           y = canvas.height / 3;
           scale = 1.0 * elastic;
@@ -6032,19 +6038,18 @@
           // PHASE 2: SLIDE (Center -> Left)
           phase = "slide";
           const t = (age - 1.5); 
-          const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; // EaseInOut
-          
+          const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
           x = (canvas.width / 2) + (dockX - (canvas.width / 2)) * ease;
           y = (canvas.height / 3) + (dockY - (canvas.height / 3)) * ease;
-          scale = 1.0 - (0.2 * ease); // Slight shrink
+          scale = 1.0 - (0.2 * ease); 
           alpha = 1;
 
         } else {
-          // PHASE 3: DOCKED (Square Box)
+          // PHASE 3: DOCKED (Sleek List)
           phase = "docked";
-          // Stack them vertically if there are multiple
           x = dockX;
-          y = dockY + (i * 70 * sy); 
+          // TIGHTER SPACING: Reduced from 70 to 45
+          y = dockY + (i * 45 * sy); 
           scale = 0.8; 
           alpha = 1;
         }
@@ -6055,32 +6060,50 @@
         ctx.globalAlpha = alpha;
 
         if (phase === "docked") {
-            // === SQUARE BOX UI ===
-            // Background Box
-            ctx.fillStyle = "rgba(0, 0, 0, 0.8)";
-            ctx.strokeStyle = atkDef.color || "#f44";
-            ctx.lineWidth = 3;
-            // Draw box centered on X/Y (80px wide)
+            // === SLEEK SIDEBAR UI ===
+            // Dimensions
+            const barW = 140;
+            const barH = 40;
+            
+            // 1. Background (Gradient fade)
+            // Instead of a box, use a sleek dark tab fading to the right
+            const grad = ctx.createLinearGradient(-30, 0, barW, 0);
+            grad.addColorStop(0, "rgba(0, 0, 0, 0.8)");
+            grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+            ctx.fillStyle = grad;
             ctx.beginPath();
-            ctx.rect(-40, -30, 80, 60);
+            ctx.roundRect(-30, -barH/2, barW, barH, 5);
             ctx.fill();
-            ctx.stroke();
 
-            // Icon (Left side of box)
-            ctx.font = "30px sans-serif";
+            // 2. Colored Accent Bar (Left side)
+            ctx.fillStyle = atkDef.color || "#f44";
+            ctx.shadowColor = atkDef.color || "#f44";
+            ctx.shadowBlur = 10;
+            ctx.beginPath();
+            ctx.roundRect(-30, -barH/2, 6, barH, 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+
+            // 3. Icon
+            ctx.font = "24px sans-serif";
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
             ctx.fillStyle = "#fff";
-            ctx.fillText(atkDef.icon, -20, 0);
+            ctx.fillText(atkDef.icon, -10, 2);
 
-            // Amount (Right side of box)
-            ctx.font = "bold 24px 'Orbitron', monospace";
+            // 4. Amount (Large Number)
+            ctx.font = "bold 28px 'Orbitron', sans-serif";
             ctx.fillStyle = "#fff";
-            ctx.textAlign = "center";
+            ctx.textAlign = "left";
             ctx.fillText(`x${popup.count || 1}`, 20, 2);
+            
+            // 5. Label (Small Text below number)
+            ctx.font = "10px sans-serif";
+            ctx.fillStyle = "#aaa";
+            ctx.fillText(atkDef.name.toUpperCase(), 20, 18);
 
         } else {
-            // === BIG ALERT UI (Phase 1 & 2) ===
+            // === BIG ALERT UI (Center Screen) ===
             ctx.shadowColor = atkDef.color || "#f44";
             ctx.shadowBlur = 30;
 
@@ -6091,7 +6114,6 @@
             ctx.fillStyle = "#fff";
             ctx.fillText(atkDef.icon, 0, -25);
 
-            // "INCOMING" Text
             if (phase === "alert") {
                 ctx.shadowBlur = 10;
                 ctx.font = "bold 28px 'Orbitron', sans-serif";
@@ -6101,7 +6123,7 @@
                 ctx.font = "bold 16px 'Courier New', monospace";
                 ctx.fillStyle = "#fff";
                 ctx.shadowBlur = 0;
-                const countText = popup.count > 1 ? `x${popup.count} ` : "";
+                const countText = (popup.count > 1) ? `x${popup.count} ` : "";
                 ctx.fillText(`${countText}FROM ${popup.from.toUpperCase()}`, 0, 55);
             }
         }
