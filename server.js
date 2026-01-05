@@ -1069,7 +1069,8 @@ function spawnWave() {
         baseBossHp += Math.floor(Math.pow(wave - 10, 1.5) * 3);
       }
       // Apply extreme scaling multiplier (same as normal asteroids)
-      const bossHp = Math.ceil(baseBossHp * extremeScaleMult);
+      // SCALING ADJUSTMENT: Reduced by 25%
+      const bossHp = Math.ceil(baseBossHp * extremeScaleMult * 0.75);
       
       spawnQueue.push({ 
         x: x0 + SEGMENT_W / 2, 
@@ -1129,7 +1130,8 @@ function spawnWave() {
           baseMiniBossHp += Math.floor(Math.pow(wave - 10, 1.5) * 3);
         }
         // Apply extreme scaling, then 20% for mini-boss size
-        const miniBossHp = Math.ceil(baseMiniBossHp * extremeScaleMult * 0.2);
+        // SCALING ADJUSTMENT: Reduced by 25%
+        const miniBossHp = Math.ceil(baseMiniBossHp * extremeScaleMult * 0.2 * 0.75);
         spawnQueue.push({ x, y, type: "miniboss", hp: miniBossHp, targetSlot, attackType: null, isMiniBoss: true });
         continue; // Skip normal asteroid
       }
