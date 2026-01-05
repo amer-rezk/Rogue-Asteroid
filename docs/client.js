@@ -72,7 +72,7 @@
   // Tower Config (must match server)
   const TOWER_TYPES = {
     0: { name: "Gatling", cost: 50, color: "#ffff00", desc: "Fast Fire", upgradeCost: 40, icon: "⚡" },
-    1: { name: "Sniper", cost: 120, color: "#00ff00", desc: "Long Range", upgradeCost: 80, icon: "🎯" },
+    1: { name: "Railgun", cost: 120, color: "#00ff00", desc: "Piercing Beam", upgradeCost: 80, icon: "⚡" },
     2: { name: "Missile", cost: 250, color: "#ff0000", desc: "Splash Dmg", upgradeCost: 150, icon: "🚀" }
   };
   const MAX_TOWER_LEVEL = 5;
@@ -332,6 +332,7 @@
   let clientBullets = [];        // Local bullet simulation
   let clientDamageNumbers = [];  // Damage numbers generated from events
   let clientLightning = [];      // Lightning effects from tesla coil
+  let railgunBeams = [];         // Railgun beam visual effects
   let pendingTracers = [];       // Tracer lines for module effects
   let asteroidCache = new Map(); // Cache: id -> {vertices, rotSpeed, rotation, color}
   let lastUpdateTime = Date.now();
@@ -835,6 +836,17 @@
     }
     pendingTracers.length = tracerWriteIdx;
     
+    // Update railgun beam effects
+    let beamWriteIdx = 0;
+    for (let i = 0; i < railgunBeams.length; i++) {
+      const beam = railgunBeams[i];
+      beam.life -= dt;
+      if (beam.life > 0) {
+        railgunBeams[beamWriteIdx++] = beam;
+      }
+    }
+    railgunBeams.length = beamWriteIdx;
+    
     // Update cached asteroid rotations
     for (const [id, data] of asteroidCache) {
       data.rotation += data.rotSpeed * dt;
@@ -1009,6 +1021,38 @@
               color: "#aa88ff",
               life: 0.3
             });
+          }
+          break;
+        
+        case "railgun":
+          // Railgun instant beam effect
+          if (!skipVisualEffects) {
+            const beamColor = ev.isCrit ? "#ffff00" : "#00ff00";
+            railgunBeams.push({
+              x1: ev.x1, y1: ev.y1,
+              x2: ev.x2, y2: ev.y2,
+              slot: ev.slot,
+              isCrit: ev.isCrit,
+              hitCount: ev.hitCount,
+              life: 0.25,
+              maxLife: 0.25,
+              color: beamColor
+            });
+            
+            // Muzzle flash particles at origin
+            for (let i = 0; i < 6; i++) {
+              const angle = Math.atan2(ev.y2 - ev.y1, ev.x2 - ev.x1) + (Math.random() - 0.5) * 0.5;
+              clientParticles.push({
+                x: ev.x1,
+                y: ev.y1,
+                vx: Math.cos(angle) * (60 + Math.random() * 40),
+                vy: Math.sin(angle) * (60 + Math.random() * 40),
+                life: 0.15 + Math.random() * 0.1,
+                maxLife: 0.25,
+                color: beamColor,
+                size: 3 + Math.random() * 3
+              });
+            }
           }
           break;
           
@@ -1300,6 +1344,7 @@
         clientDamageNumbers = [];
         clientLightning = [];
         pendingTracers = [];
+        railgunBeams = [];
         asteroidCache.clear();
         missileStates.clear();
         bulletStates.clear();
@@ -1458,6 +1503,7 @@
         clientDamageNumbers = [];
         clientLightning = [];
         pendingTracers = [];
+        railgunBeams = [];
         asteroidCache.clear();
         // Clear prediction states
         missileStates.clear();
@@ -2982,7 +3028,7 @@
         break;
 
       case "sniper":
-        // Sniper: Green laser - simplified
+        // Legacy sniper bullet (railgun no longer uses projectiles)
         const laserLen = 35 * sx;
         const laserWidth = r * 0.6;
         ctx.strokeStyle = hexToRgba("#00ff00", 0.8 * alpha);
@@ -3070,6 +3116,7 @@
       clientDamageNumbers = [];
       clientLightning = [];
       pendingTracers = [];
+      railgunBeams = [];
       lastFrameTime = performance.now(); // Reset to avoid huge dt jump
     }
   });
@@ -3678,6 +3725,43 @@
           ctx.restore();
         }
       }
+      
+      // Railgun Beams - bright instant laser effect
+      for (const beam of railgunBeams) {
+        const alpha = beam.life / beam.maxLife;
+        const beamWidth = beam.isCrit ? 8 : 5;
+        
+        ctx.save();
+        
+        // Outer glow
+        ctx.strokeStyle = hexToRgba(beam.color, alpha * 0.3);
+        ctx.lineWidth = (beamWidth + 8) * sx;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(beam.x1 * sx, beam.y1 * sy);
+        ctx.lineTo(beam.x2 * sx, beam.y2 * sy);
+        ctx.stroke();
+        
+        // Middle glow
+        ctx.strokeStyle = hexToRgba(beam.color, alpha * 0.6);
+        ctx.lineWidth = (beamWidth + 4) * sx;
+        ctx.beginPath();
+        ctx.moveTo(beam.x1 * sx, beam.y1 * sy);
+        ctx.lineTo(beam.x2 * sx, beam.y2 * sy);
+        ctx.stroke();
+        
+        // Core beam (white/bright)
+        ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+        ctx.lineWidth = beamWidth * sx;
+        ctx.shadowColor = beam.color;
+        ctx.shadowBlur = 15;
+        ctx.beginPath();
+        ctx.moveTo(beam.x1 * sx, beam.y1 * sy);
+        ctx.lineTo(beam.x2 * sx, beam.y2 * sy);
+        ctx.stroke();
+        
+        ctx.restore();
+      }
 
       // Asteroids/Missiles
       // PERFORMANCE: Get render bounds once for culling
@@ -4263,7 +4347,7 @@
                       ctx.fillStyle = hexToRgba(tColor, towerAlpha);
                       ctx.fillRect(b * 3 * sx * scale - 1 * sx * scale, -bodyH - 10 * sy * scale, 2 * sx * scale, 12 * sy * scale);
                     }
-                  } else if (typeInfo.name === "Sniper") {
+                  } else if (typeInfo.name === "Railgun") {
                     const bodyW = 10 * sx * scale;
                     const bodyH = 14 * sy * scale;
                     ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
@@ -4273,14 +4357,18 @@
                     ctx.roundRect(-bodyW / 2, -bodyH, bodyW, bodyH, 2);
                     ctx.fill();
                     ctx.stroke();
-                    // Long barrel
+                    // Long barrel (railgun coils)
                     ctx.fillStyle = hexToRgba(tColor, towerAlpha);
-                    ctx.fillRect(-1.5 * sx * scale, -bodyH - 14 * sy * scale, 3 * sx * scale, 16 * sy * scale);
-                    // Scope
-                    ctx.fillStyle = hexToRgba("#00ffaa", towerAlpha);
-                    ctx.beginPath();
-                    ctx.arc(5 * sx * scale, -bodyH + 4 * sy * scale, 2 * sx * scale, 0, Math.PI * 2);
-                    ctx.fill();
+                    ctx.fillRect(-2 * sx * scale, -bodyH - 16 * sy * scale, 4 * sx * scale, 18 * sy * scale);
+                    // Energy coils
+                    ctx.strokeStyle = hexToRgba("#00ffff", towerAlpha * 0.8);
+                    ctx.lineWidth = 1.5 * sx * scale;
+                    for (let ring = 0; ring < 3; ring++) {
+                      const ringY = -bodyH - 4 * sy * scale - ring * 5 * sy * scale;
+                      ctx.beginPath();
+                      ctx.arc(0, ringY, 3.5 * sx * scale, 0, Math.PI * 2);
+                      ctx.stroke();
+                    }
                   } else if (typeInfo.name === "Missile") {
                     const bodyW = 16 * sx * scale;
                     const bodyH = 12 * sy * scale;

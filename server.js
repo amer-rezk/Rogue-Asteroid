@@ -100,7 +100,7 @@ const PLAYER_COLORS = [
 // ===== Tower Definitions =====
 const TOWER_TYPES = {
   0: { name: "Gatling", cost: 50, damage: 0.5, cooldown: 0.25, rangeMult: 0.8, color: "#ffff00", upgradeCost: 40, bulletType: "gatling" },
-  1: { name: "Sniper", cost: 120, damage: 5, cooldown: 1.2, rangeMult: 1.5, color: "#00ff00", upgradeCost: 80, bulletType: "sniper" },
+  1: { name: "Railgun", cost: 120, damage: 4, cooldown: 1.4, rangeMult: 1.5, color: "#00ff00", upgradeCost: 80, bulletType: "sniper" },
   2: { name: "Missile", cost: 250, damage: 8, cooldown: 2.0, rangeMult: 1.0, color: "#ff0000", explosive: 1, upgradeCost: 150, bulletType: "missile" }
 };
 const MAX_TOWER_LEVEL = 5;
@@ -1835,6 +1835,205 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
   // Next state update will sync positions anyway
 }
 
+// RAILGUN: Instant hitscan beam that pierces all enemies in path
+function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
+  const ownerSlot = owner.slot;
+  const { x0, x1 } = segmentBounds(ownerSlot);
+  
+  // Calculate beam direction
+  const dx = targetX - originX;
+  const dy = targetY - originY;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1) return;
+  
+  const dirX = dx / dist;
+  const dirY = dy / dist;
+  
+  // Beam extends far beyond screen
+  const beamLength = 1500;
+  const endX = originX + dirX * beamLength;
+  const endY = originY + dirY * beamLength;
+  
+  // Calculate damage
+  let baseDmg = props.damage || 5;
+  if (props.level) {
+    baseDmg = Math.round(baseDmg * (1 + (props.level - 1) * 0.25));
+  }
+  
+  // Add inherited damage bonus from upgrades
+  if (props.damageAdd) {
+    baseDmg += props.damageAdd;
+  }
+  
+  // Critical hit check
+  const isCrit = Math.random() < (props.critChance || 0);
+  let finalDmg = isCrit ? baseDmg * 3 : baseDmg;
+  
+  // Module effects
+  const modules = props.modules || [];
+  const ownerGold = props.ownerGold || 0;
+  
+  // Russian Roulette: random 0x-10x damage
+  if (modules.includes("russianRoulette")) {
+    const rouletteMult = Math.random() * 10;
+    finalDmg *= rouletteMult;
+    if (rouletteMult >= 8) {
+      queueEvent("rouletteCrit", { x: originX, y: originY });
+    }
+  }
+  
+  // Midas Capacitor: add 1% of gold as damage
+  if (modules.includes("midasCapacitor")) {
+    finalDmg += ownerGold * 0.01;
+  }
+  
+  // Vampiric Nanobots: -50% damage but heals
+  let vampiricDamageDealt = 0;
+  if (modules.includes("vampiricNanobots")) {
+    finalDmg *= 0.5;
+  }
+  
+  // Find all enemies in path using line-circle intersection
+  const beamWidth = 6; // Beam has some thickness for hit detection
+  const hitEnemies = [];
+  
+  // Get missiles in this slot
+  const slotMissiles = missilesBySlot[ownerSlot] || [];
+  
+  for (const m of slotMissiles) {
+    if (m.dead || m.inFTL) continue;
+    
+    // Ghost phasing check - skip if currently phased
+    if (m.phasing) {
+      const cycleTime = 2.0;
+      const phase = ((m.phaseOffset || 0) + (Date.now() / 1000)) % cycleTime;
+      if (phase > cycleTime * 0.5) continue; // Currently phased
+    }
+    
+    // Line-circle intersection test
+    // Project asteroid center onto the beam line
+    const apX = m.x - originX;
+    const apY = m.y - originY;
+    const projection = apX * dirX + apY * dirY;
+    
+    // Skip if behind the origin or too far
+    if (projection < 0 || projection > beamLength) continue;
+    
+    // Find closest point on beam to asteroid
+    const closestX = originX + dirX * projection;
+    const closestY = originY + dirY * projection;
+    
+    // Distance from asteroid to beam
+    const distToBeam = Math.hypot(m.x - closestX, m.y - closestY);
+    
+    // Hit if within beam width + asteroid radius
+    if (distToBeam <= beamWidth + m.r) {
+      hitEnemies.push({ missile: m, dist: projection });
+    }
+  }
+  
+  // Sort by distance (closest first) for visual ordering
+  hitEnemies.sort((a, b) => a.dist - b.dist);
+  
+  // Apply damage to all hit enemies - NO FALLOFF
+  const hitData = [];
+  for (const hit of hitEnemies) {
+    const m = hit.missile;
+    
+    m.hp -= finalDmg;
+    vampiricDamageDealt += finalDmg;
+    
+    // Track damage for player stats
+    const p = players.get(owner.id);
+    if (p) {
+      p.damageDealt = (p.damageDealt || 0) + finalDmg;
+      p.waveDamage = (p.waveDamage || 0) + finalDmg;
+    }
+    
+    hitData.push({ id: m.id, x: m.x, y: m.y, dmg: finalDmg });
+    
+    // Check for kill
+    if (m.hp <= 0 && !m.dead) {
+      m.dead = true;
+      
+      // Gold reward
+      if (!m.noGold && p) {
+        let goldReward = m.gold || 1;
+        const goldBonus = p.upgrades?.goldBonus ?? 0;
+        goldReward = Math.round(goldReward * (1 + goldBonus));
+        p.gold += goldReward;
+        p.kills = (p.kills || 0) + 1;
+        p.score = (p.score || 0) + Math.ceil(m.maxHp);
+      }
+      
+      // Splitter: spawn children with noGold flag
+      if (m.splits > 0) {
+        const availableSlots = MAX_MISSILES - missiles.length;
+        const splitsToSpawn = Math.min(m.splits, availableSlots, 8);
+        if (splitsToSpawn > 0) {
+          const extremeMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
+          const splitHp = Math.ceil((0.5 + wave * 0.3) * extremeMult);
+          for (let s = 0; s < splitsToSpawn; s++) {
+            const nx = m.x + (Math.random() - 0.5) * 60;
+            const ny = m.y + (Math.random() - 0.5) * 40;
+            const splitAsteroid = createAsteroid(nx, ny, "small", splitHp, m.targetSlot, null, m.senderId, null, true);
+            missiles.push(splitAsteroid);
+          }
+        }
+      }
+      
+      // Explosion effect
+      queueEvent("explosion", { x: m.x, y: m.y, color: "#0f0", radius: 20 });
+      
+      // Gravity Well on kill
+      if (modules.includes("gravityWell")) {
+        gravityWells.push({
+          x: m.x, y: m.y,
+          targetId: m.id,
+          life: 2.0, radius: 100, strength: 80,
+          ownerSlot: ownerSlot
+        });
+        queueEvent("gravityWell", { x: m.x, y: m.y });
+      }
+    }
+    
+    // Hit visual
+    queueEvent("hit", { 
+      x: m.x, y: m.y, 
+      isCrit, 
+      dmg: Math.round(finalDmg * 10) / 10,
+      isRailgun: true
+    });
+  }
+  
+  // Vampiric healing
+  if (modules.includes("vampiricNanobots") && vampiricDamageDealt > 0) {
+    const p = players.get(owner.id);
+    if (p) {
+      p.vampiricPool = (p.vampiricPool || 0) + vampiricDamageDealt;
+      if (p.vampiricPool >= 400) {
+        const heals = Math.floor(p.vampiricPool / 400);
+        p.vampiricPool -= heals * 400;
+        p.hp = Math.min(p.hp + heals, p.maxHp);
+        if (heals > 0) {
+          queueEvent("vampiricHeal", { slot: p.slot, amount: heals });
+        }
+      }
+    }
+  }
+  
+  // Send railgun beam visual event
+  queueEvent("railgun", {
+    x1: originX,
+    y1: originY,
+    x2: endX,
+    y2: endY,
+    slot: ownerSlot,
+    isCrit,
+    hitCount: hitEnemies.length
+  });
+}
+
 // PREDICTIVE AIMING: Fire bullets at intercept points, each bullet can target different asteroid
 function fireWithMultishot(owner, originX, originY, targetX, targetY, isManual = false) {
   const shots = owner.upgrades?.multishot ?? 1;
@@ -2298,24 +2497,38 @@ function tick() {
                 fireWithMultishot(scaledOwner, towerPos.x, towerPos.y, aim.x, aim.y, false);
               } else {
                 // Normal tower firing
-                const towerProps = {
-                  ...stats,
-                  level: tower.level,
-                  damage: stats.damage + (u.damageAdd ?? 0) * 0.5,
-                  bulletSpeedMult: 1 + ((u.bulletSpeedMult ?? 1) - 1) * 0.5,
-                  critChance: (u.critChance ?? 0) * 0.5,
-                  explosive: (stats.explosive || 0) + Math.floor((u.explosive ?? 0) * 0.5),
-                  bulletSize: 1 + ((u.bulletSize ?? 1) - 1) * 0.5,
-                  lifespanAdd: (u.lifespanAdd ?? 0) * 0.5,
-                  ricochet: Math.floor((u.ricochet ?? 0) * 0.5),
-                  pierce: (stats.bulletType === "sniper" ? 1 : 0) + Math.floor((u.pierce ?? 0) * 0.5),
-                  chainChance: (u.chainChance ?? 0) * 0.5,
-                  inheritedUpgrades: true,
-                  modules: activeModules, // Tower modules
-                  ownerGold: p.gold, // For Midas Capacitor
-                  targetId: target.id, // For homing missiles
-                };
-                fireBullet(p, towerPos.x, towerPos.y, aim.x, aim.y, 0, towerProps);
+                if (stats.bulletType === "sniper") {
+                  // RAILGUN: Instant hitscan beam for sniper tower
+                  const railgunProps = {
+                    damage: stats.damage + (u.damageAdd ?? 0) * 0.5,
+                    level: tower.level,
+                    critChance: (u.critChance ?? 0) * 0.5,
+                    modules: activeModules,
+                    ownerGold: p.gold,
+                    damageAdd: (u.damageAdd ?? 0) * 0.5,
+                  };
+                  fireRailgun(p, towerPos.x, towerPos.y, aim.x, aim.y, railgunProps);
+                } else {
+                  // Other towers use normal bullets
+                  const towerProps = {
+                    ...stats,
+                    level: tower.level,
+                    damage: stats.damage + (u.damageAdd ?? 0) * 0.5,
+                    bulletSpeedMult: 1 + ((u.bulletSpeedMult ?? 1) - 1) * 0.5,
+                    critChance: (u.critChance ?? 0) * 0.5,
+                    explosive: (stats.explosive || 0) + Math.floor((u.explosive ?? 0) * 0.5),
+                    bulletSize: 1 + ((u.bulletSize ?? 1) - 1) * 0.5,
+                    lifespanAdd: (u.lifespanAdd ?? 0) * 0.5,
+                    ricochet: Math.floor((u.ricochet ?? 0) * 0.5),
+                    pierce: Math.floor((u.pierce ?? 0) * 0.5),
+                    chainChance: (u.chainChance ?? 0) * 0.5,
+                    inheritedUpgrades: true,
+                    modules: activeModules,
+                    ownerGold: p.gold,
+                    targetId: target.id,
+                  };
+                  fireBullet(p, towerPos.x, towerPos.y, aim.x, aim.y, 0, towerProps);
+                }
               }
             }
           } else {
