@@ -30,8 +30,8 @@ const BROADCAST_INTERVAL = Math.floor(TICK_RATE / BROADCAST_RATE); // = 2 ticks
 const MIN_INPUT_INTERVAL = 16; // Minimum ms between inputs (was 20, now 60Hz)
 
 // ENTITY CAPS
-const MAX_MISSILES = 200;      // Max asteroids/enemies on screen (was 150)
-const MAX_BULLETS = 120;       // Max player bullets (was 80)
+const MAX_MISSILES = 300;      // Max asteroids/enemies on screen (was 150)
+const MAX_BULLETS = 400;       // Max player bullets (was 120)
 
 // EVENT THROTTLING (per tick)
 const MAX_BULLET_EVENTS_SMALL = 100;  // Max bullet spawn events with <3 players (was 60)
@@ -3143,16 +3143,18 @@ function tick() {
         }
       }
       
-      b.x += b.vx * DT;
+	  b.x += b.vx * DT;
       b.y += b.vy * DT;
 
       b.lifespan -= DT;
-      if (b.lifespan <= 0) { b.dead = true; continue; }
+      // FIX 1: Removed death check so bullets don't vanish before returning
+      // if (b.lifespan <= 0) { b.dead = true; continue; } 
       
       // Momentum Lens: Track distance traveled
       if (b.modules && b.modules.includes("momentumLens")) {
         const distThisTick = Math.hypot(b.x - b.lastX, b.y - b.lastY);
-        b.totalDistance += distThisTick;
+        // FIX 2: Handle undefined totalDistance (for shards/ricochets) to prevent NaN immunity
+        b.totalDistance = (b.totalDistance || 0) + distThisTick;
       }
       b.lastX = b.x;
       b.lastY = b.y;

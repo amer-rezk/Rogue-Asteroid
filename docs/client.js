@@ -689,12 +689,7 @@
       b.x += b.vx * dt;
       b.y += b.vy * dt;
       
-      // DESYNC FIX: Decrement lifespan to match server behavior
-      // Server bullets die after BULLET_LIFESPAN (3.0 seconds)
       b.lifespan -= dt;
-      if (b.lifespan <= 0) {
-        continue; // Don't keep this bullet
-      }
 
       // Calculate lane boundaries for this bullet's owner
       // Default to 360 if world isn't loaded yet
