@@ -6002,17 +6002,18 @@
       }
 
       // ===== INCOMING ATTACK ALERTS (POPUP & SLIDE) =====
-      // 1. Cleanup: Only remove old ALERTS (Phase 1/2). 
-      // DOCKED items (Phase 3) stay until the 'wave' event clears them.
       const currentTime = Date.now();
+      
+      // FIX: Use unique variable names (uiSX, uiOX) to prevent "ReferenceError" or crashes
+      const { sx: uiSX, sy: uiSY, offsetX: uiOX, offsetY: uiOY } = getScale();
 
-      // 2. Render The Animation
+      // Target Slot: Default to 1.5 (center) if spectating, otherwise use player's slot
       const targetSlot = (mySlot !== undefined && mySlot >= 0) ? mySlot : 1.5; 
       
       // Position: Left side of lane + padding
-      const laneX = (targetSlot * world.segmentWidth) * sx + offsetX;
-      const dockX = laneX + (40 * sx); 
-      const dockY = 100 * sy + offsetY; 
+      const laneX = (targetSlot * world.segmentWidth) * uiSX + uiOX;
+      const dockX = laneX + (40 * uiSX); 
+      const dockY = 100 * uiSY + uiOY; 
 
       for (let i = 0; i < attackPopups.length; i++) {
         const popup = attackPopups[i];
@@ -6047,8 +6048,8 @@
           // PHASE 3: DOCKED (Sleek List)
           phase = "docked";
           x = dockX;
-          // TIGHTER SPACING: Reduced from 70 to 45
-          y = dockY + (i * 45 * sy); 
+          // TIGHTER SPACING: Reduced to 45px
+          y = dockY + (i * 45 * uiSY); 
           scale = 0.8; 
           alpha = 1;
         }
@@ -6060,14 +6061,12 @@
 
         if (phase === "docked") {
             // === SLEEK SIDEBAR UI ===
-            // Dimensions
             const barW = 140;
             const barH = 40;
             
-            // 1. Background (Gradient fade)
-            // Instead of a box, use a sleek dark tab fading to the right
+            // 1. Background (Gradient fade to right)
             const grad = ctx.createLinearGradient(-30, 0, barW, 0);
-            grad.addColorStop(0, "rgba(0, 0, 0, 0.8)");
+            grad.addColorStop(0, "rgba(0, 0, 0, 0.9)");
             grad.addColorStop(1, "rgba(0, 0, 0, 0)");
             ctx.fillStyle = grad;
             ctx.beginPath();
@@ -6077,7 +6076,7 @@
             // 2. Colored Accent Bar (Left side)
             ctx.fillStyle = atkDef.color || "#f44";
             ctx.shadowColor = atkDef.color || "#f44";
-            ctx.shadowBlur = 10;
+            ctx.shadowBlur = 15;
             ctx.beginPath();
             ctx.roundRect(-30, -barH/2, 6, barH, 2);
             ctx.fill();
