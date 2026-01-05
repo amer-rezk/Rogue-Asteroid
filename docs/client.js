@@ -296,6 +296,7 @@
   // PvP Attack Panel (always visible)
   let hoveredAttack = null;
   let incomingAttacks = [];
+  let attackPopups = []; // NEW: For visual popups
   let recentAttackSent = null; // For feedback animation
   let attackQuantityMode = 1; // 1, 10, or "max"
   let hoveredQuantityBtn = null; // Track which quantity button is hovered
@@ -1915,6 +1916,8 @@
 
       case "incomingAttack":
         incomingAttacks.push({ type: msg.attackType, from: msg.from, time: Date.now() });
+        // NEW: Add visual popup animation
+        attackPopups.push({ type: msg.attackType, from: msg.from, time: Date.now() });
         break;
 
       case "gameOver":
@@ -4171,13 +4174,6 @@
           ctx.fillText(ATTACK_TYPES[m.attackType].icon, x, y + r + 12 * sy);
         }
         
-        // Mini-boss indicator (skull icon below)
-        if (isMiniBoss && !isMiniBossAd) {
-          ctx.font = `${12 * sx}px sans-serif`;
-          ctx.textAlign = "center";
-          ctx.fillText("💀", x, y + r + 14 * sy);
-        }
-        
         // Berserker rage flames (visual effect when enraged)
         if (isBerserker && berserkerRage > 0.2) {
           ctx.save();
@@ -6009,6 +6005,63 @@
         ctx.textAlign = "center";
         ctx.fillStyle = `rgba(255,100,100,${alpha})`;
         ctx.fillText(`⚠️ ${attackDef?.icon || "?"} INCOMING FROM ${a.from.toUpperCase()}!`, canvas.width / 2, 245 + i * 20);
+      }
+
+      // NEW: Render Attack Popups (Big Animation)
+      for (let i = attackPopups.length - 1; i >= 0; i--) {
+        const popup = attackPopups[i];
+        const age = (Date.now() - popup.time) / 1000; // Seconds
+        
+        if (age > 3.0) {
+          attackPopups.splice(i, 1);
+          continue;
+        }
+
+        const atkDef = ATTACK_TYPES[popup.type];
+        if (!atkDef) continue;
+
+        // Animation: Pop in with elastic effect
+        let scale = 1;
+        let alpha = 1;
+        
+        if (age < 0.3) {
+          // Elastic scale out
+          const t = age / 0.3;
+          scale = 0.5 + Math.sin(t * Math.PI * 0.6) * 0.6; // Overshoot slightly
+          alpha = t;
+        } else if (age > 2.5) {
+          // Fade out
+          alpha = 1 - (age - 2.5) / 0.5;
+        }
+
+        ctx.save();
+        ctx.translate(canvas.width / 2, canvas.height / 3);
+        ctx.scale(scale, scale);
+        ctx.globalAlpha = alpha;
+
+        // Glow background
+        ctx.shadowColor = atkDef.color || "#f44";
+        ctx.shadowBlur = 30;
+        
+        // Icon
+        ctx.font = "60px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(atkDef.icon, 0, -25);
+        
+        // "INCOMING" Text
+        ctx.shadowBlur = 10;
+        ctx.font = "bold 28px 'Orbitron', sans-serif";
+        ctx.fillStyle = "#ff4444";
+        ctx.fillText("INCOMING!", 0, 30);
+        
+        // Sender Name
+        ctx.font = "bold 16px 'Courier New', monospace";
+        ctx.fillStyle = "#fff";
+        ctx.shadowBlur = 0;
+        ctx.fillText(`FROM ${popup.from.toUpperCase()}`, 0, 55);
+
+        ctx.restore();
       }
 
       // Build menu
