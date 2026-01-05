@@ -1767,6 +1767,75 @@ function endGame(winnerId) {
   }, 8000);
 }
 
+// ===== HELPER: Calculate Module Damage Effects =====
+// Consolidates all damage-modifying module effects at bullet creation time
+// Returns: { damage, hadHighRoulette } - hadHighRoulette triggers visual effect
+function applyModuleDamage(dmg, modules, gold, x, y) {
+  let hadHighRoulette = false;
+  
+  // Russian Roulette: random 0x-3x damage (nerfed from 10x)
+  if (modules.includes("russianRoulette")) {
+    const rouletteMult = Math.random() * 3; 
+    dmg *= rouletteMult;
+    if (rouletteMult >= 2.4) { // Top 20% triggers crit visual
+      hadHighRoulette = true;
+      queueEvent("rouletteCrit", { x: x, y: y });
+    }
+  }
+  
+  // Midas Capacitor: add 1% of gold as damage (CAPPED at 2000 gold / 20 dmg)
+  if (modules.includes("midasCapacitor")) {
+    const effectiveGold = Math.min(gold, 2000); // Cap at 2000 gold
+    dmg += effectiveGold * 0.01;
+  }
+  
+  // Vampiric Nanobots: -50% damage (healing happens on hit)
+  if (modules.includes("vampiricNanobots")) {
+    dmg *= 0.5;
+  }
+  
+  // Taxman: -90% damage (gold generation happens on hit)
+  if (modules.includes("taxman")) {
+    dmg *= 0.1;
+  }
+  
+  return { damage: dmg, hadHighRoulette };
+}
+
+// ===== HELPER: Apply Confetti Cannon Effects =====
+// Randomizes bullet stats for party mode! Returns modified stats object
+function applyConfettiEffects(speed, dmg, bulletR) {
+  return {
+    speed: speed * (0.5 + Math.random() * 2),     // 0.5x to 2.5x speed
+    damage: dmg * (0.3 + Math.random() * 3),       // 0.3x to 3.3x damage
+    radius: 2 + Math.random() * 8,                 // 2 to 10 size
+    color: `hsl(${Math.random() * 360}, 100%, 60%)`, // Random color
+    bulletType: "confetti"
+  };
+}
+
+// ===== HELPER: Apply On-Hit Damage Modifiers =====
+// Modifiers that affect damage at the moment of impact (not bullet creation)
+// Used by both regular bullets and railgun hits
+function applyOnHitDamageModifiers(baseDmg, modules, target, bulletData) {
+  let finalDmg = baseDmg;
+  
+  // Executioner's Sight: 300% damage to enemies below 30% HP
+  if (modules && modules.includes("executionerSight")) {
+    if (target.hp / target.maxHp < 0.3) {
+      finalDmg *= 3;
+    }
+  }
+  
+  // Momentum Lens: +10% damage per 100 pixels traveled
+  if (modules && modules.includes("momentumLens") && bulletData && bulletData.totalDistance) {
+    const distanceBonus = 1 + (bulletData.totalDistance / 100) * 0.1;
+    finalDmg *= distanceBonus;
+  }
+  
+  return finalDmg;
+}
+
 // ===== Simulation =====
 function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, overrideProps = null) {
   // ENTITY CAP: Prevent bullet spam from lagging server
@@ -1852,36 +1921,17 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
   
   // Confetti Cannon: PARTY MODE! 🎉
   if (modules.includes("confettiCannon")) {
-    speed *= 0.5 + Math.random() * 2; // 0.5x to 2.5x speed
-    finalDmg *= 0.3 + Math.random() * 3; // 0.3x to 3.3x damage
-    bulletR = 2 + Math.random() * 8; // 2 to 10 size
-    bulletColor = `hsl(${Math.random() * 360}, 100%, 60%)`; // Random color
-    bulletType = "confetti"; // Special confetti rendering!
+    const confettiStats = applyConfettiEffects(speed, finalDmg, bulletR);
+    speed = confettiStats.speed;
+    finalDmg = confettiStats.damage;
+    bulletR = confettiStats.radius;
+    bulletColor = confettiStats.color;
+    bulletType = confettiStats.bulletType;
   }
   
-  // Russian Roulette: random 0x-10x damage
-  if (modules.includes("russianRoulette")) {
-    const rouletteMult = Math.random() * 10; // 0 to 10
-    finalDmg *= rouletteMult;
-    if (rouletteMult >= 8) {
-      queueEvent("rouletteCrit", { x: originX, y: originY });
-    }
-  }
-  
-  // Midas Capacitor: add 1% of gold as damage
-  if (modules.includes("midasCapacitor")) {
-    finalDmg += ownerGold * 0.01;
-  }
-  
-  // Vampiric Nanobots: -50% damage
-  if (modules.includes("vampiricNanobots")) {
-    finalDmg *= 0.5;
-  }
-  
-  // Taxman: -90% damage (gold is added on hit)
-  if (modules.includes("taxman")) {
-    finalDmg *= 0.1;
-  }
+  // Apply consolidated damage modifiers (Russian Roulette, Midas, Vampiric, Taxman)
+  const moduleDmgResult = applyModuleDamage(finalDmg, modules, ownerGold, originX, originY);
+  finalDmg = moduleDmgResult.damage;
   
   // Apply bullet size upgrade (mult type like bulletSpeedMult, starts at 1)
   if (!overrideProps && owner.upgrades?.bulletSize) {
@@ -2020,29 +2070,16 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
     finalDmg = baseDmg * 3;
   }
   
-  // Module effects
+  // Module effects - use consolidated helper
   const modules = props.modules || [];
   const ownerGold = props.ownerGold || 0;
   
-  // Russian Roulette: random 0x-10x damage
-  if (modules.includes("russianRoulette")) {
-    const rouletteMult = Math.random() * 10;
-    finalDmg *= rouletteMult;
-    if (rouletteMult >= 8) {
-      queueEvent("rouletteCrit", { x: originX, y: originY });
-    }
-  }
+  // Apply consolidated damage modifiers (Russian Roulette, Midas, Vampiric, Taxman)
+  const moduleDmgResult = applyModuleDamage(finalDmg, modules, ownerGold, originX, originY);
+  finalDmg = moduleDmgResult.damage;
   
-  // Midas Capacitor: add 1% of gold as damage
-  if (modules.includes("midasCapacitor")) {
-    finalDmg += ownerGold * 0.01;
-  }
-  
-  // Vampiric Nanobots: -50% damage but heals
+  // Track vampiric damage for healing
   let vampiricDamageDealt = 0;
-  if (modules.includes("vampiricNanobots")) {
-    finalDmg *= 0.5;
-  }
   
   // Trace bouncing beam path
   const beamSegments = [];
@@ -2197,15 +2234,9 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
   for (const hit of hitEnemies) {
     const m = hit.missile;
     
-    // Calculate final damage with module effects
-    let hitDamage = finalDmg;
-    
-    // Executioner's Sight: 300% damage to enemies below 30% HP
-    if (modules.includes("executionerSight")) {
-      if (m.hp / m.maxHp < 0.3) {
-        hitDamage *= 3;
-      }
-    }
+    // Apply on-hit damage modifiers (Executioner's Sight)
+    // Note: Railgun doesn't track distance, so no Momentum Lens
+    const hitDamage = applyOnHitDamageModifiers(finalDmg, modules, m, null);
     
     m.hp -= hitDamage;
     vampiricDamageDealt += hitDamage;
@@ -3316,21 +3347,8 @@ function tick() {
         if (dy > rr || dy < -rr) continue; // Quick Y reject
         
         if (dx * dx + dy * dy <= rr * rr) {
-          // Calculate final damage with module effects
-          let hitDamage = b.dmg;
-          
-          // Executioner's Sight: 300% damage to enemies below 30% HP
-          if (b.modules && b.modules.includes("executionerSight")) {
-            if (m.hp / m.maxHp < 0.3) {
-              hitDamage *= 3;
-            }
-          }
-          
-          // Momentum Lens: +10% damage per 100 pixels traveled
-          if (b.modules && b.modules.includes("momentumLens")) {
-            const distanceBonus = 1 + (b.totalDistance / 100) * 0.1;
-            hitDamage *= distanceBonus;
-          }
+          // Apply on-hit damage modifiers (Executioner's Sight, Momentum Lens)
+          const hitDamage = applyOnHitDamageModifiers(b.dmg, b.modules, m, { totalDistance: b.totalDistance });
           
           m.hp -= hitDamage;
 
