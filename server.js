@@ -1096,6 +1096,11 @@ function createBattleship(x, y, targetSlot, bossHp = null) {
   const turretMaxHPs = [turretHp, turretHp, turretHp, turretHp]; // For HP bars
   const turretDestroyed = [false, false, false, false]; // Track destroyed turrets
   
+  // Hull rotation - oscillates as ship descends for dynamic look
+  const hullRotation = 0;
+  const hullRotationSpeed = 0.3 + Math.random() * 0.2; // Radians per second (randomized slightly)
+  const hullRotationDir = Math.random() < 0.5 ? 1 : -1; // Random initial direction
+  
   // Send spawn event to clients
   queueEvent("spawnBattleship", {
     id, x, y, r: config.size,
@@ -1103,7 +1108,8 @@ function createBattleship(x, y, targetSlot, bossHp = null) {
     targetSlot,
     turretAngles,
     turretHPs,
-    turretMaxHPs
+    turretMaxHPs,
+    hullRotation
   });
   
   return {
@@ -1121,6 +1127,10 @@ function createBattleship(x, y, targetSlot, bossHp = null) {
     turretHPs,
     turretMaxHPs,
     turretDestroyed,
+    // Hull rotation
+    hullRotation,
+    hullRotationSpeed,
+    hullRotationDir,
     // Movement - faster FTL exit
     inFTL: true,
     ftlThreshold: GROUND_Y * 0.25, // Exit FTL earlier (was 0.15)
@@ -1167,7 +1177,8 @@ function spawnWave() {
       // Base: 25 + wave*3 + polynomial, then exponential after wave 20
       let baseBossHp = 25 + (wave * 3);
       if (wave > 10) {
-        baseBossHp += Math.floor(Math.pow(wave - 10, 1.5) * 3);
+        // Polynomial growth reduced by 20% for waves after first boss
+        baseBossHp += Math.floor(Math.pow(wave - 10, 1.5) * 3 * 0.8);
       }
       // Apply extreme scaling multiplier (same as normal asteroids)
       // SCALING ADJUSTMENT: Reduced by 25%
@@ -1237,14 +1248,14 @@ function spawnWave() {
       if (wave > 10 && Math.random() < 0.05) {
         const x = rand(x0 + 30, x1 - 30);
         const y = rand(-30, -20);
-        // Mini-boss has 20% of what a boss would have at this wave (with extremeScaleMult)
+        // Mini-boss has 15% of what a boss would have at this wave (reduced from 20%)
         let baseMiniBossHp = 25 + (wave * 3);
         if (wave > 10) {
           baseMiniBossHp += Math.floor(Math.pow(wave - 10, 1.5) * 3);
         }
-        // Apply extreme scaling, then 20% for mini-boss size
+        // Apply extreme scaling, then 15% for mini-boss size (reduced by 25% from previous 20%)
         // SCALING ADJUSTMENT: Reduced by 25%
-        const miniBossHp = Math.ceil(baseMiniBossHp * extremeScaleMult * 0.2 * 0.75);
+        const miniBossHp = Math.ceil(baseMiniBossHp * extremeScaleMult * 0.15 * 0.75);
         spawnQueue.push({ x, y, type: "miniboss", hp: miniBossHp, targetSlot, attackType: null, isMiniBoss: true });
         continue; // Skip normal asteroid
       }
@@ -3269,6 +3280,21 @@ function tick() {
         const targetSlot = m.targetSlot;
         const { x0, x1 } = segmentBounds(targetSlot);
         
+        // Update hull rotation - oscillating rotation for dynamic movement
+        if (m.hullRotation !== undefined) {
+          m.hullRotation += m.hullRotationSpeed * m.hullRotationDir * DT;
+          
+          // Oscillate between -15 and +15 degrees (±0.26 radians)
+          const maxRotation = 0.26;
+          if (m.hullRotation > maxRotation) {
+            m.hullRotation = maxRotation;
+            m.hullRotationDir = -1;
+          } else if (m.hullRotation < -maxRotation) {
+            m.hullRotation = -maxRotation;
+            m.hullRotationDir = 1;
+          }
+        }
+        
         // Initialize turret target positions if not set
         if (!m.turretTargets) {
           m.turretTargets = [];
@@ -3290,10 +3316,12 @@ function tick() {
         // The client renders the ship at fixed pixel size (240x330), but positions use world coords
         // Client scale: sx = canvas_width / world_width ≈ 2 (for typical displays)
         // Turret pixel offsets need to be divided by sx to get world offsets
-        // Since turret screen pos = ship_pos * sx + offset_pixels
-        // And bullet screen pos = bullet_world_pos * sx
-        // We need: bullet_world_pos = ship_pos + offset_pixels / sx
         const pixelToWorld = 0.5; // Converts pixel offsets to world units (1/sx where sx ≈ 2)
+        
+        // Hull rotation affects turret positions
+        const hullRot = m.hullRotation || 0;
+        const cosHull = Math.cos(hullRot);
+        const sinHull = Math.sin(hullRot);
         
         // Update each turret
         for (let t = 0; t < 4; t++) {
@@ -3302,11 +3330,16 @@ function tick() {
             continue;
           }
           
-          // Calculate turret world position
-          // Turret offsets are in pixels, convert to world coords
+          // Calculate turret world position with hull rotation applied
+          // Turret offsets are in pixels, convert to world coords, then rotate by hull angle
           const offset = config.turretPixelOffsets[t];
-          const turretBaseX = m.x + offset.x * pixelToWorld;
-          const turretBaseY = m.y + offset.y * pixelToWorld;
+          const localX = offset.x * pixelToWorld;
+          const localY = offset.y * pixelToWorld;
+          // Rotate local offset by hull rotation
+          const rotatedX = localX * cosHull - localY * sinHull;
+          const rotatedY = localX * sinHull + localY * cosHull;
+          const turretBaseX = m.x + rotatedX;
+          const turretBaseY = m.y + rotatedY;
           
           // Get target ground position for this turret
           const target = m.turretTargets[t];
@@ -3437,8 +3470,8 @@ function tick() {
             createExplosion(m.x, GROUND_Y - 5, 25, "#ff6600");
             // No damage, just despawn
           } 
-          // Boss deals 10 damage, reduced by shield
-          else if (m.type === "boss") {
+          // Boss and Battleship deal 10 damage, reduced by shield
+          else if (m.type === "boss" || m.isBattleship) {
             // PERF: Direct slot lookup instead of iterating
             const playerId = lockedSlots[targetSlot];
             const p = playerId ? players.get(playerId) : null;
@@ -3685,14 +3718,24 @@ function tick() {
         const config = BATTLESHIP_CONFIG;
         const pixelToWorld = 0.5; // Consistent with bullet spawn (1/sx where sx ≈ 2)
         
+        // Apply hull rotation to turret positions
+        const hullRot = m.hullRotation || 0;
+        const cosHull = Math.cos(hullRot);
+        const sinHull = Math.sin(hullRot);
+        
         // Check each turret
         for (let t = 0; t < 4; t++) {
           // Skip destroyed turrets
           if (m.turretDestroyed && m.turretDestroyed[t]) continue;
           
           const offset = config.turretPixelOffsets[t];
-          const turretX = m.x + offset.x * pixelToWorld;
-          const turretY = m.y + offset.y * pixelToWorld;
+          const localX = offset.x * pixelToWorld;
+          const localY = offset.y * pixelToWorld;
+          // Rotate by hull rotation
+          const rotatedX = localX * cosHull - localY * sinHull;
+          const rotatedY = localX * sinHull + localY * cosHull;
+          const turretX = m.x + rotatedX;
+          const turretY = m.y + rotatedY;
           
           const dx = turretX - b.x;
           const dy = turretY - b.y;
@@ -5016,6 +5059,7 @@ function broadcastGameState() {
       obj.turretHPs = m.turretHPs; // Current HP of each turret
       obj.turretMaxHPs = m.turretMaxHPs; // Max HP for HP bars
       obj.turretDestroyed = m.turretDestroyed; // Which turrets are destroyed
+      obj.hullRotation = m.hullRotation || 0; // Hull rotation angle
     }
   }
   // Truncate array to actual size (JSON.stringify respects .length)

@@ -1017,6 +1017,7 @@
             turretHPs: ev.turretHPs || [10, 10, 10, 10],
             turretMaxHPs: ev.turretMaxHPs || [10, 10, 10, 10],
             turretDestroyed: [false, false, false, false],
+            hullRotation: ev.hullRotation || 0,
             flameFrame: 0, // For flame animation
             rotation: 0
           });
@@ -4143,6 +4144,10 @@
         if (isBattleship) {
           ctx.save();
           ctx.translate(x, y);
+          
+          // Apply hull rotation (ship rocks as it descends)
+          const hullRotation = m.hullRotation || 0;
+          ctx.rotate(hullRotation);
           
           // Check if images are loaded
           const hullImg = battleshipImages.hull;
