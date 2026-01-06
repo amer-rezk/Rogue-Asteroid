@@ -3278,6 +3278,11 @@ function tick() {
             m.turretAngles[t] += Math.sign(angleDiff) * rotateSpeed * DT;
           }
           
+          // DEBUG: Log turret rotation occasionally
+          if (t === 0 && Math.random() < 0.01) {
+            console.log(`Battleship ${m.id.slice(0,6)} turret[0]: ${(m.turretAngles[0]*180/Math.PI).toFixed(0)}° (target: ${(targetAngle*180/Math.PI).toFixed(0)}°)`);
+          }
+          
           // Update cooldown and fire
           m.turretCooldowns[t] -= DT;
           if (m.turretCooldowns[t] <= 0 && nearestBullet) {

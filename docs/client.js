@@ -4050,6 +4050,11 @@
             // Ship image is 240px wide, doubled size: scale = (diameter*2 / width) = 112/240
             const shipScale = (r * 4) / 240; // Doubled from (r * 2) / 240
             
+            // DEBUG: Log scale once per 60 frames
+            if (Math.random() < 0.016) {
+              console.log(`Battleship render: r=${r.toFixed(2)}, shipScale=${shipScale.toFixed(3)}, hullW=${(240*shipScale).toFixed(1)}px`);
+            }
+            
             // FTL effect for battleship - phasing in effect
             if (m.inFTL) {
               // Draw FTL streaks behind the ship
@@ -4089,6 +4094,12 @@
             if (turretImg.complete && turretImg.naturalWidth > 0 && !m.inFTL) {
               // Get turret angles from server - these should update as turrets track targets
               const turretAngles = m.turretAngles || [Math.PI/2, Math.PI/2, Math.PI/2, Math.PI/2];
+              
+              // DEBUG: Log turret angles once per 60 frames  
+              if (Math.random() < 0.016) {
+                console.log(`Battleship turrets: angles=[${turretAngles.map(a => (a*180/Math.PI).toFixed(0)+'°').join(', ')}]`);
+                console.log(`m.turretAngles exists: ${!!m.turretAngles}`);
+              }
               
               for (let t = 0; t < 4; t++) {
                 // Get turret offset in pixels (relative to ship center)
