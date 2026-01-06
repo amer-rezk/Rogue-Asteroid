@@ -3260,11 +3260,13 @@ function tick() {
         // Update each turret
         for (let t = 0; t < 4; t++) {
           // Calculate turret world position
-          // Scale factor: ship diameter (r*2) TRIPLED / ship image width (240)
-          const scale = (m.r * 6) / 240; // TRIPLED from original (m.r * 2) / 240
+          // NO SCALING - turret offsets are in pixels, convert to world space proportionally
+          // Ship image is 240x330 pixels, at 1:1 rendering the visual size is fixed
+          // For physics, we use a simplified ratio based on collision radius
+          const worldScale = m.r / 120; // collision radius / half-ship-width gives world units per pixel
           const offset = config.turretPixelOffsets[t];
-          const turretBaseX = m.x + offset.x * scale;
-          const turretBaseY = m.y + offset.y * scale;
+          const turretBaseX = m.x + offset.x * worldScale;
+          const turretBaseY = m.y + offset.y * worldScale;
           
           // Calculate angle to nearest bullet (or default to pointing down)
           let targetAngle = Math.PI / 2; // Default: point down
@@ -3302,8 +3304,8 @@ function tick() {
             // Pivot is at (18, 17) in the 35x46 turret sprite
             // We need to offset from the turret base by the pivot, rotated by turret angle
             const bulletAngle = m.turretAngles[t];
-            const pivotOffsetX = config.turretPivot.x * scale;
-            const pivotOffsetY = config.turretPivot.y * scale;
+            const pivotOffsetX = config.turretPivot.x * worldScale;
+            const pivotOffsetY = config.turretPivot.y * worldScale;
             
             // Rotate pivot offset by turret angle (subtract PI/2 because sprite points up)
             const adjustedAngle = bulletAngle - Math.PI/2;
