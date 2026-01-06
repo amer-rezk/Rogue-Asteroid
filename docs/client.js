@@ -4047,8 +4047,8 @@
           if (imagesReady) {
             // Calculate proper scale to match world coordinates
             // Ship collision radius is 28, diameter is 56 world units
-            // Ship image is 240px wide, so scale = (diameter / width) = 56/240
-            const shipScale = (r * 2) / 240;
+            // Ship image is 240px wide, doubled size: scale = (diameter*2 / width) = 112/240
+            const shipScale = (r * 4) / 240; // Doubled from (r * 2) / 240
             
             // FTL effect for battleship - phasing in effect
             if (m.inFTL) {
@@ -4087,7 +4087,8 @@
             
             // Draw turrets (only when not in FTL)
             if (turretImg.complete && turretImg.naturalWidth > 0 && !m.inFTL) {
-              const turretAngles = m.turretAngles || cached?.turretAngles || [Math.PI/2, Math.PI/2, Math.PI/2, Math.PI/2];
+              // Get turret angles from server - these should update as turrets track targets
+              const turretAngles = m.turretAngles || [Math.PI/2, Math.PI/2, Math.PI/2, Math.PI/2];
               
               for (let t = 0; t < 4; t++) {
                 // Get turret offset in pixels (relative to ship center)
@@ -4097,15 +4098,23 @@
                 const turretY = offset.y * shipScale;
                 
                 ctx.save();
+                // Move to turret base position
                 ctx.translate(turretX, turretY);
-                // Rotate around the turret's pivot point
-                ctx.rotate(turretAngles[t] - Math.PI/2); // Adjust for turret sprite orientation
+                
+                // Rotate to face the shooting direction
+                // turretAngles[t] is the angle the turret is facing
+                // Subtract PI/2 because the turret sprite points upward (0 degrees = up)
+                const rotationAngle = turretAngles[t] - Math.PI/2;
+                ctx.rotate(rotationAngle);
                 
                 // Draw turret with scale, pivoting at (18, 17)
+                // The pivot point is where the turret rotates around
                 const tw = 35 * shipScale;
                 const th = 46 * shipScale;
                 const pivotX = 18 * shipScale;
                 const pivotY = 17 * shipScale;
+                
+                // Draw with pivot as the rotation center
                 ctx.drawImage(turretImg, -pivotX, -pivotY, tw, th);
                 
                 ctx.restore();

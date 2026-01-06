@@ -3250,8 +3250,8 @@ function tick() {
         // Update each turret
         for (let t = 0; t < 4; t++) {
           // Calculate turret world position
-          // Scale factor: ship diameter (r*2) / ship image width (240)
-          const scale = (m.r * 2) / 240;
+          // Scale factor: ship diameter (r*2) doubled / ship image width (240)
+          const scale = (m.r * 4) / 240; // Doubled from (m.r * 2) / 240
           const offset = config.turretPixelOffsets[t];
           const turretBaseX = m.x + offset.x * scale;
           const turretBaseY = m.y + offset.y * scale;
@@ -3300,7 +3300,7 @@ function tick() {
             const shotY = turretBaseY + rotatedPivotY;
             const bulletSpeed = config.bulletSpeed;
             
-            // Create enemy bullet event for visuals
+            // Create enemy bullet event for visuals ONLY - bullets do nothing
             queueEvent("battleshipShot", {
               x: shotX,
               y: shotY,
@@ -3310,53 +3310,11 @@ function tick() {
               turretIndex: t
             });
             
-            // Add to enemy bullets array - these destroy player bullets
-            if (!m.enemyBullets) m.enemyBullets = [];
-            m.enemyBullets.push({
-              id: uid(),
-              x: shotX,
-              y: shotY,
-              vx: Math.cos(bulletAngle) * bulletSpeed,
-              vy: Math.sin(bulletAngle) * bulletSpeed,
-              r: 6, // Collision radius
-              life: config.bulletLifespan
-            });
+            // NOTE: Removed enemyBullets array - shots are visual only and don't interact
           }
         }
         
-        // Update enemy bullets - check collision with player bullets
-        if (m.enemyBullets) {
-          for (let bi = m.enemyBullets.length - 1; bi >= 0; bi--) {
-            const eb = m.enemyBullets[bi];
-            eb.x += eb.vx * DT;
-            eb.y += eb.vy * DT;
-            eb.life -= DT;
-            
-            // Check collision with player bullets
-            for (let pi = bullets.length - 1; pi >= 0; pi--) {
-              const pb = bullets[pi];
-              const dx = eb.x - pb.x;
-              const dy = eb.y - pb.y;
-              const dist = Math.sqrt(dx * dx + dy * dy);
-              
-              if (dist < eb.r + 4) { // 4 = approximate player bullet radius
-                // Destroy both bullets
-                bullets.splice(pi, 1);
-                m.enemyBullets.splice(bi, 1);
-                queueEvent("bulletDestroyed", { x: eb.x, y: eb.y });
-                break;
-              }
-            }
-            
-            // Remove if expired or off screen
-            if (bi < m.enemyBullets.length) {
-              const ebCheck = m.enemyBullets[bi];
-              if (ebCheck && (ebCheck.life <= 0 || ebCheck.y > WORLD_H + 50 || ebCheck.y < -50 || ebCheck.x < -50 || ebCheck.x > worldW + 50)) {
-                m.enemyBullets.splice(bi, 1);
-              }
-            }
-          }
-        }
+        // Enemy bullets removed - battleship shots are visual only
       }
       
       bounceOffWalls(m);
