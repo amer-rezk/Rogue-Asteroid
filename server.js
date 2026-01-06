@@ -1080,6 +1080,9 @@ function createBattleship(x, y, targetSlot) {
   const extremeScaleMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
   const hp = Math.ceil((config.baseHp + wave * config.hpPerWave) * extremeScaleMult);
   
+  // Each turret has 25% of total ship HP
+  const turretHp = Math.ceil(hp * 0.25);
+  
   // Slow speed
   const vy = config.speed * 30; // Base downward velocity
   const vx = rand(-5, 5);
@@ -1087,13 +1090,18 @@ function createBattleship(x, y, targetSlot) {
   // Initialize turret angles (pointing down initially)
   const turretAngles = [Math.PI/2, Math.PI/2, Math.PI/2, Math.PI/2];
   const turretCooldowns = [0, 0.3, 0.6, 0.9]; // Stagger initial shots
+  const turretHPs = [turretHp, turretHp, turretHp, turretHp]; // Each turret's HP
+  const turretMaxHPs = [turretHp, turretHp, turretHp, turretHp]; // For HP bars
+  const turretDestroyed = [false, false, false, false]; // Track destroyed turrets
   
   // Send spawn event to clients
   queueEvent("spawnBattleship", {
     id, x, y, r: config.size,
     hp,
     targetSlot,
-    turretAngles
+    turretAngles,
+    turretHPs,
+    turretMaxHPs
   });
   
   return {
@@ -1108,6 +1116,9 @@ function createBattleship(x, y, targetSlot) {
     // Turret state
     turretAngles,
     turretCooldowns,
+    turretHPs,
+    turretMaxHPs,
+    turretDestroyed,
     // Movement - faster FTL exit
     inFTL: true,
     ftlThreshold: GROUND_Y * 0.25, // Exit FTL earlier (was 0.15)
@@ -3263,10 +3274,9 @@ function tick() {
         const targetSlot = m.targetSlot;
         const { x0, x1 } = segmentBounds(targetSlot);
         
-        // Initialize turret target positions and stun timers if not set
+        // Initialize turret target positions if not set
         if (!m.turretTargets) {
           m.turretTargets = [];
-          m.turretStunTimers = [0, 0, 0, 0];
           for (let t = 0; t < 4; t++) {
             // Each turret picks a random ground position in the player's lane
             m.turretTargets[t] = {
@@ -3274,6 +3284,11 @@ function tick() {
               y: GROUND_Y
             };
           }
+        }
+        
+        // Ensure turretDestroyed array exists
+        if (!m.turretDestroyed) {
+          m.turretDestroyed = [false, false, false, false];
         }
         
         // Pixel-to-world scale factor
@@ -3285,10 +3300,8 @@ function tick() {
         
         // Update each turret
         for (let t = 0; t < 4; t++) {
-          // Update stun timer
-          if (m.turretStunTimers[t] > 0) {
-            m.turretStunTimers[t] -= DT;
-            // Stunned turrets don't rotate or fire
+          // Skip destroyed turrets - they can't rotate or fire
+          if (m.turretDestroyed && m.turretDestroyed[t]) {
             continue;
           }
           
@@ -3669,18 +3682,21 @@ function tick() {
       if (!slotMissiles) continue;
       
       // ===== BATTLESHIP TURRET COLLISION CHECK =====
-      // Check if this bullet hits any battleship turret (stuns for 1 second)
+      // Check if this bullet hits any battleship turret (deals damage to turret HP)
       const TURRET_HIT_RADIUS = 15; // Collision radius for turrets (pixels ≈ world units)
       for (let mi = 0; mi < slotMissiles.length; mi++) {
         const m = slotMissiles[mi];
         if (!m.isBattleship || m.dead || m.inFTL) continue;
-        if (!m.turretStunTimers) continue;
+        if (!m.turretHPs) continue;
         
         const config = BATTLESHIP_CONFIG;
         const pixelToWorld = 1.0; // Consistent with bullet spawn
         
         // Check each turret
         for (let t = 0; t < 4; t++) {
+          // Skip destroyed turrets
+          if (m.turretDestroyed && m.turretDestroyed[t]) continue;
+          
           const offset = config.turretPixelOffsets[t];
           const turretX = m.x + offset.x * pixelToWorld;
           const turretY = m.y + offset.y * pixelToWorld;
@@ -3690,21 +3706,44 @@ function tick() {
           const hitR = TURRET_HIT_RADIUS + b.r;
           
           if (dx * dx + dy * dy <= hitR * hitR) {
-            // Hit! Stun this turret for 1 second
-            m.turretStunTimers[t] = 1.0;
+            // Apply damage to turret
+            const hitDamage = applyOnHitDamageModifiers(b.dmg, b.modules, m, { totalDistance: b.totalDistance });
+            m.turretHPs[t] -= hitDamage;
             
-            // Visual feedback
-            queueEvent("turretStunned", {
-              shipId: m.id,
-              turretIndex: t,
-              x: turretX,
-              y: turretY
-            });
+            // Show damage number
+            addDamageNumber(turretX, turretY - 10, hitDamage, b.isCrit || false);
             
-            // Bullet is consumed
-            b.dead = true;
-            addDamageNumber(turretX, turretY - 10, "STUN!", false);
-            createExplosion(turretX, turretY, 12, "#ffff00");
+            // Check if turret is destroyed
+            if (m.turretHPs[t] <= 0) {
+              m.turretHPs[t] = 0;
+              m.turretDestroyed[t] = true;
+              
+              // Turret destruction event with cool explosion
+              queueEvent("turretDestroyed", {
+                shipId: m.id,
+                turretIndex: t,
+                x: turretX,
+                y: turretY
+              });
+              
+              // Create big explosion
+              createExplosion(turretX, turretY, 25, "#ff6600");
+              createExplosion(turretX, turretY, 15, "#ffff00");
+            } else {
+              // Small hit spark
+              createExplosion(turretX, turretY, 8, "#ffaa00");
+            }
+            
+            // Bullet is consumed (unless it has pierce/ricochet)
+            if (!b.hitSet) b.hitSet = new Set();
+            b.hitSet.add(m.id + "_turret_" + t);
+            
+            // Check if bullet should die (no pierce through turrets)
+            const bulletModules = b.modules || [];
+            const hasPierce = bulletModules.includes("pierce");
+            if (!hasPierce) {
+              b.dead = true;
+            }
             break;
           }
         }
@@ -4981,7 +5020,9 @@ function broadcastGameState() {
     obj.isBattleship = m.isBattleship || undefined;
     if (m.isBattleship) {
       obj.turretAngles = m.turretAngles;
-      obj.turretStunTimers = m.turretStunTimers; // For visual feedback on stunned turrets
+      obj.turretHPs = m.turretHPs; // Current HP of each turret
+      obj.turretMaxHPs = m.turretMaxHPs; // Max HP for HP bars
+      obj.turretDestroyed = m.turretDestroyed; // Which turrets are destroyed
     }
   }
   // Truncate array to actual size (JSON.stringify respects .length)

@@ -1014,6 +1014,9 @@
             targetSlot: ev.targetSlot,
             isBattleship: true,
             turretAngles: ev.turretAngles || [Math.PI/2, Math.PI/2, Math.PI/2, Math.PI/2],
+            turretHPs: ev.turretHPs || [10, 10, 10, 10],
+            turretMaxHPs: ev.turretMaxHPs || [10, 10, 10, 10],
+            turretDestroyed: [false, false, false, false],
             flameFrame: 0, // For flame animation
             rotation: 0
           });
@@ -1065,23 +1068,69 @@
           }
           break;
         
-        case "turretStunned":
-          // Visual effect when ship turret is stunned by player bullet
+        case "turretDestroyed":
+          // Cool explosion effect when ship turret is destroyed!
           if (!skipVisualEffects) {
-            // Spark explosion at turret
-            for (let i = 0; i < 8; i++) {
-              const angle = (i / 8) * Math.PI * 2;
+            // Big fiery explosion - multiple rings of particles
+            const colors = ['#ff6600', '#ff4400', '#ffaa00', '#ff8800', '#ffcc00'];
+            
+            // Inner explosion burst
+            for (let i = 0; i < 16; i++) {
+              const angle = (i / 16) * Math.PI * 2 + Math.random() * 0.3;
+              const speed = 100 + Math.random() * 80;
               clientParticles.push({
                 x: ev.x,
                 y: ev.y,
-                vx: Math.cos(angle) * 80 + (Math.random() - 0.5) * 40,
-                vy: Math.sin(angle) * 80 + (Math.random() - 0.5) * 40,
-                life: 0.4 + Math.random() * 0.2,
-                maxLife: 0.6,
-                color: '#ffff00',
-                size: 3 + Math.random() * 2
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                life: 0.6 + Math.random() * 0.4,
+                maxLife: 1.0,
+                color: colors[Math.floor(Math.random() * colors.length)],
+                size: 4 + Math.random() * 4
               });
             }
+            
+            // Outer debris ring
+            for (let i = 0; i < 12; i++) {
+              const angle = (i / 12) * Math.PI * 2 + Math.random() * 0.5;
+              const speed = 50 + Math.random() * 40;
+              clientParticles.push({
+                x: ev.x + (Math.random() - 0.5) * 10,
+                y: ev.y + (Math.random() - 0.5) * 10,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed - 20,
+                life: 0.8 + Math.random() * 0.5,
+                maxLife: 1.3,
+                color: '#888888', // Metal debris
+                size: 2 + Math.random() * 3
+              });
+            }
+            
+            // Smoke puffs
+            for (let i = 0; i < 8; i++) {
+              clientParticles.push({
+                x: ev.x + (Math.random() - 0.5) * 20,
+                y: ev.y + (Math.random() - 0.5) * 20,
+                vx: (Math.random() - 0.5) * 30,
+                vy: -30 - Math.random() * 40, // Rise upward
+                life: 1.0 + Math.random() * 0.5,
+                maxLife: 1.5,
+                color: '#444444',
+                size: 6 + Math.random() * 6
+              });
+            }
+            
+            // Central flash
+            clientParticles.push({
+              x: ev.x,
+              y: ev.y,
+              vx: 0,
+              vy: 0,
+              life: 0.15,
+              maxLife: 0.15,
+              color: '#ffffff',
+              size: 25
+            });
           }
           break;
         
@@ -2006,7 +2055,17 @@
                 if (!m.turretAngles) {
                   m.turretAngles = cached.turretAngles;
                 }
-                // turretStunTimers come from server
+                // Turret HP and destroyed state come from server each frame
+                // Fallback to cached values for initial frame
+                if (!m.turretHPs) {
+                  m.turretHPs = cached.turretHPs;
+                }
+                if (!m.turretMaxHPs) {
+                  m.turretMaxHPs = cached.turretMaxHPs;
+                }
+                if (!m.turretDestroyed) {
+                  m.turretDestroyed = cached.turretDestroyed;
+                }
               }
             }
             
@@ -4131,9 +4190,11 @@
             
             // Draw turrets (only when not in FTL)
             if (turretImg.complete && turretImg.naturalWidth > 0 && !m.inFTL) {
-              // Get turret angles from server - these update as turrets track targets
+              // Get turret data from server
               const turretAngles = m.turretAngles || [Math.PI/2, Math.PI/2, Math.PI/2, Math.PI/2];
-              const turretStunTimers = m.turretStunTimers || [0, 0, 0, 0];
+              const turretDestroyed = m.turretDestroyed || [false, false, false, false];
+              const turretHPs = m.turretHPs || [10, 10, 10, 10];
+              const turretMaxHPs = m.turretMaxHPs || [10, 10, 10, 10];
               
               // Turret sprite is 35x46 pixels
               const turretW = 35;
@@ -4142,42 +4203,83 @@
               for (let t = 0; t < 4; t++) {
                 // Get turret offset in pixels (relative to ship center, no scaling)
                 const offset = BATTLESHIP_TURRET_OFFSETS[t];
-                const isStunned = turretStunTimers[t] > 0;
+                const isDestroyed = turretDestroyed[t];
                 
                 ctx.save();
                 // Move to turret base position
                 ctx.translate(offset.x, offset.y);
                 
-                // Rotate to face the shooting direction
-                // turretAngles[t] is the angle the turret is facing
-                // Subtract PI/2 because the turret sprite points upward (0 degrees = up)
-                const rotationAngle = turretAngles[t] - Math.PI/2;
-                ctx.rotate(rotationAngle);
-                
-                // Apply stun visual effect (red tint and flicker)
-                if (isStunned) {
-                  ctx.globalAlpha = 0.5 + Math.sin(Date.now() / 50) * 0.3; // Flicker
-                  // Draw red overlay effect
-                  ctx.filter = 'hue-rotate(-60deg) saturate(2)';
-                }
-                
-                // Draw turret with pivot at (18, 17) as the rotation center
-                ctx.drawImage(turretImg, -TURRET_PIVOT.x, -TURRET_PIVOT.y, turretW, turretH);
-                
-                // Reset filter
-                ctx.filter = 'none';
-                ctx.globalAlpha = 1;
-                
-                // Draw stun indicator (spark effect)
-                if (isStunned) {
-                  ctx.fillStyle = "#ffff00";
+                if (isDestroyed) {
+                  // Draw smoking wreckage for destroyed turret
+                  ctx.globalAlpha = 0.6;
+                  
+                  // Damaged base (dark, charred)
+                  ctx.fillStyle = "#222";
                   ctx.beginPath();
-                  const sparkSize = 3 + Math.sin(Date.now() / 30) * 2;
-                  ctx.arc(0, -10, sparkSize, 0, Math.PI * 2);
+                  ctx.ellipse(0, 0, 12, 8, 0, 0, Math.PI * 2);
                   ctx.fill();
+                  
+                  // Debris pieces
+                  ctx.fillStyle = "#444";
+                  ctx.fillRect(-8, -5, 6, 4);
+                  ctx.fillRect(3, -3, 5, 3);
+                  ctx.fillRect(-4, 2, 7, 3);
+                  
+                  // Animated smoke rising from wreckage
+                  const smokeTime = Date.now() / 200;
+                  ctx.globalAlpha = 0.3 + Math.sin(smokeTime + t) * 0.1;
+                  ctx.fillStyle = "#555";
+                  for (let s = 0; s < 3; s++) {
+                    const smokeY = -10 - s * 8 - (smokeTime % 1) * 10;
+                    const smokeSize = 4 + s * 2;
+                    const smokeX = Math.sin(smokeTime * 2 + s + t) * 3;
+                    ctx.beginPath();
+                    ctx.arc(smokeX, smokeY, smokeSize, 0, Math.PI * 2);
+                    ctx.fill();
+                  }
+                  
+                  // Occasional sparks
+                  if (Math.sin(Date.now() / 100 + t * 1.5) > 0.7) {
+                    ctx.fillStyle = "#ff6600";
+                    ctx.globalAlpha = 0.8;
+                    ctx.beginPath();
+                    ctx.arc(Math.random() * 10 - 5, Math.random() * 6 - 3, 2, 0, Math.PI * 2);
+                    ctx.fill();
+                  }
+                } else {
+                  // Active turret - rotate and draw
+                  const rotationAngle = turretAngles[t] - Math.PI/2;
+                  ctx.rotate(rotationAngle);
+                  
+                  // Draw turret with pivot at (18, 17) as the rotation center
+                  ctx.drawImage(turretImg, -TURRET_PIVOT.x, -TURRET_PIVOT.y, turretW, turretH);
+                  
+                  ctx.globalAlpha = 1;
                 }
                 
                 ctx.restore();
+                
+                // Draw HP bar above active turrets
+                if (!isDestroyed && turretHPs[t] < turretMaxHPs[t]) {
+                  const hpPercent = turretHPs[t] / turretMaxHPs[t];
+                  const barW = 24;
+                  const barH = 3;
+                  const barX = offset.x - barW / 2;
+                  const barY = offset.y - 28;
+                  
+                  // Background
+                  ctx.fillStyle = "rgba(0,0,0,0.7)";
+                  ctx.fillRect(barX, barY, barW, barH);
+                  
+                  // HP fill
+                  ctx.fillStyle = hpPercent > 0.5 ? "#00ff88" : (hpPercent > 0.25 ? "#ffaa00" : "#ff4444");
+                  ctx.fillRect(barX, barY, barW * hpPercent, barH);
+                  
+                  // Border
+                  ctx.strokeStyle = "#fff";
+                  ctx.lineWidth = 0.5;
+                  ctx.strokeRect(barX, barY, barW, barH);
+                }
               }
             }
             
