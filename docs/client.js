@@ -1064,6 +1064,46 @@
             createClientParticle(ev.x, ev.y, "#ff0000", 8, 1.2);
           }
           break;
+        
+        case "turretStunned":
+          // Visual effect when ship turret is stunned by player bullet
+          if (!skipVisualEffects) {
+            // Spark explosion at turret
+            for (let i = 0; i < 8; i++) {
+              const angle = (i / 8) * Math.PI * 2;
+              clientParticles.push({
+                x: ev.x,
+                y: ev.y,
+                vx: Math.cos(angle) * 80 + (Math.random() - 0.5) * 40,
+                vy: Math.sin(angle) * 80 + (Math.random() - 0.5) * 40,
+                life: 0.4 + Math.random() * 0.2,
+                maxLife: 0.6,
+                color: '#ffff00',
+                size: 3 + Math.random() * 2
+              });
+            }
+          }
+          break;
+        
+        case "playerTurretStunned":
+          // Visual effect when player turret is stunned by enemy bullet
+          if (!skipVisualEffects) {
+            // Orange spark explosion at player turret
+            for (let i = 0; i < 10; i++) {
+              const angle = (i / 10) * Math.PI * 2;
+              clientParticles.push({
+                x: ev.x,
+                y: ev.y,
+                vx: Math.cos(angle) * 60 + (Math.random() - 0.5) * 30,
+                vy: Math.sin(angle) * 60 - 30 + (Math.random() - 0.5) * 20,
+                life: 0.5 + Math.random() * 0.3,
+                maxLife: 0.8,
+                color: '#ff6600',
+                size: 3 + Math.random() * 3
+              });
+            }
+          }
+          break;
           
         case "explosion":
           // Skip visual effects if tab was hidden
@@ -1966,6 +2006,7 @@
                 if (!m.turretAngles) {
                   m.turretAngles = cached.turretAngles;
                 }
+                // turretStunTimers come from server
               }
             }
             
@@ -4092,12 +4133,7 @@
             if (turretImg.complete && turretImg.naturalWidth > 0 && !m.inFTL) {
               // Get turret angles from server - these update as turrets track targets
               const turretAngles = m.turretAngles || [Math.PI/2, Math.PI/2, Math.PI/2, Math.PI/2];
-              
-              // DEBUG: Log turret angles once per 60 frames  
-              if (Math.random() < 0.016) {
-                console.log(`Battleship turrets: angles=[${turretAngles.map(a => (a*180/Math.PI).toFixed(0)+'°').join(', ')}]`);
-                console.log(`m.turretAngles exists: ${!!m.turretAngles}`);
-              }
+              const turretStunTimers = m.turretStunTimers || [0, 0, 0, 0];
               
               // Turret sprite is 35x46 pixels
               const turretW = 35;
@@ -4106,6 +4142,7 @@
               for (let t = 0; t < 4; t++) {
                 // Get turret offset in pixels (relative to ship center, no scaling)
                 const offset = BATTLESHIP_TURRET_OFFSETS[t];
+                const isStunned = turretStunTimers[t] > 0;
                 
                 ctx.save();
                 // Move to turret base position
@@ -4117,8 +4154,28 @@
                 const rotationAngle = turretAngles[t] - Math.PI/2;
                 ctx.rotate(rotationAngle);
                 
+                // Apply stun visual effect (red tint and flicker)
+                if (isStunned) {
+                  ctx.globalAlpha = 0.5 + Math.sin(Date.now() / 50) * 0.3; // Flicker
+                  // Draw red overlay effect
+                  ctx.filter = 'hue-rotate(-60deg) saturate(2)';
+                }
+                
                 // Draw turret with pivot at (18, 17) as the rotation center
                 ctx.drawImage(turretImg, -TURRET_PIVOT.x, -TURRET_PIVOT.y, turretW, turretH);
+                
+                // Reset filter
+                ctx.filter = 'none';
+                ctx.globalAlpha = 1;
+                
+                // Draw stun indicator (spark effect)
+                if (isStunned) {
+                  ctx.fillStyle = "#ffff00";
+                  ctx.beginPath();
+                  const sparkSize = 3 + Math.sin(Date.now() / 30) * 2;
+                  ctx.arc(0, -10, sparkSize, 0, Math.PI * 2);
+                  ctx.fill();
+                }
                 
                 ctx.restore();
               }
@@ -4680,52 +4737,64 @@
         drawBullet(b, sx, sy, baseColor);
       }
       
-      // Render enemy bullets (from battleships)
-      if (window.enemyBullets && window.enemyBullets.length > 0) {
-        const dt = 1/60; // Approximate delta time
-        for (let i = window.enemyBullets.length - 1; i >= 0; i--) {
-          const eb = window.enemyBullets[i];
-          // Update position
+      // Render enemy bullets (from battleships) - use server data if available
+      const serverEnemyBullets = lastSnap.enemyBullets || [];
+      const clientEnemyBullets = window.enemyBullets || [];
+      
+      // Prefer server-provided bullets (more accurate)
+      const enemyBulletsToRender = serverEnemyBullets.length > 0 ? serverEnemyBullets : clientEnemyBullets;
+      
+      // Clean up client-side bullets if server has taken over
+      if (serverEnemyBullets.length > 0) {
+        window.enemyBullets = [];
+      }
+      
+      for (let i = enemyBulletsToRender.length - 1; i >= 0; i--) {
+        const eb = enemyBulletsToRender[i];
+        
+        // For client-side bullets, update position and lifetime
+        if (serverEnemyBullets.length === 0) {
+          const dt = 1/60;
           eb.x += eb.vx * dt;
           eb.y += eb.vy * dt;
           eb.life -= dt;
           
           // Remove if expired or off screen
           if (eb.life <= 0 || eb.y > world.height + 50 || eb.x < -50 || eb.x > world.width + 50) {
-            window.enemyBullets.splice(i, 1);
+            clientEnemyBullets.splice(i, 1);
             continue;
           }
-          
-          // Draw enemy bullet
-          const bx = eb.x * sx;
-          const by = eb.y * sy;
-          
-          ctx.save();
-          ctx.translate(bx, by);
-          
-          // Rotate to face direction of travel
-          const angle = Math.atan2(eb.vy, eb.vx);
-          ctx.rotate(angle);
-          
-          // Red glowing bullet
-          ctx.shadowColor = "#ff4400";
-          ctx.shadowBlur = 8;
-          
-          // Bullet body (elongated)
-          ctx.fillStyle = "#ff6644";
-          ctx.beginPath();
-          ctx.ellipse(0, 0, 6 * sx, 3 * sx, 0, 0, Math.PI * 2);
-          ctx.fill();
-          
-          // Bright core
-          ctx.fillStyle = "#ffaa88";
-          ctx.beginPath();
-          ctx.ellipse(0, 0, 3 * sx, 1.5 * sx, 0, 0, Math.PI * 2);
-          ctx.fill();
-          
-          ctx.shadowBlur = 0;
-          ctx.restore();
         }
+        
+        // Draw enemy bullet
+        const bx = eb.x * sx;
+        const by = eb.y * sy;
+        
+        ctx.save();
+        ctx.translate(bx, by);
+        
+        // Rotate to face direction of travel
+        const angle = Math.atan2(eb.vy || 1, eb.vx || 0);
+        ctx.rotate(angle);
+        
+        // Red glowing bullet
+        ctx.shadowColor = "#ff4400";
+        ctx.shadowBlur = 8;
+        
+        // Bullet body (elongated)
+        ctx.fillStyle = "#ff6644";
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 6 * sx, 3 * sx, 0, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Bright core
+        ctx.fillStyle = "#ffaa88";
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 3 * sx, 1.5 * sx, 0, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.shadowBlur = 0;
+        ctx.restore();
       }
 
       // Damage numbers
@@ -4786,6 +4855,7 @@
         // Main turret using sprites
         const turretAlpha = isDead ? 0.3 : 1;
         const groundY = 560 * sy; // Base of playing field
+        const mainStunned = (p.mainTurretStun || 0) > 0;
         
         // Check if turret images are loaded
         const hasBase = turretImages.base.complete && turretImages.base.naturalWidth > 0;
@@ -4809,11 +4879,18 @@
           const turretCenterY = groundY - baseH / 2; // Center of base for barrel rotation
           
           ctx.save();
-          ctx.globalAlpha = turretAlpha;
+          ctx.globalAlpha = mainStunned ? (0.4 + Math.sin(Date.now() / 50) * 0.2) : turretAlpha;
+          
+          // Apply stun filter
+          if (mainStunned) {
+            ctx.filter = 'hue-rotate(-60deg) saturate(1.5)';
+          }
           
           // Draw glow effect behind turret
-          if (!isDead) {
+          if (!isDead && !mainStunned) {
             setShadow(ctx, color.main, 15);
+          } else if (mainStunned) {
+            setShadow(ctx, "#ff4400", 15);
           }
           
           // Draw the base first (below barrel) - bottom at ground level
@@ -4829,7 +4906,19 @@
           ctx.drawImage(turretImages.barrel, -barrelW / 2, -barrelH * 0.75, barrelW, barrelH);
           ctx.restore();
           
+          ctx.filter = 'none';
           ctx.restore();
+          
+          // Draw stun spark above turret
+          if (mainStunned) {
+            ctx.save();
+            ctx.fillStyle = "#ffff00";
+            const sparkSize = 4 + Math.sin(Date.now() / 30) * 2;
+            ctx.beginPath();
+            ctx.arc(cx, baseY - 5, sparkSize, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          }
         } else {
           // Fallback to procedural rendering if sprites not loaded
           const baseW = 24 * sx;
@@ -4884,15 +4973,22 @@
             if (typeInfo) {
               const tColor = typeInfo.color || "#fff";
               const level = t.level || 1;
-              const towerAlpha = isDead ? 0.3 : 1;
+              const towerStunned = p.towerStuns && (p.towerStuns[i] || 0) > 0;
+              const towerAlpha = isDead ? 0.3 : (towerStunned ? (0.4 + Math.sin(Date.now() / 50) * 0.2) : 1);
               const towerAngle = t.angle !== undefined ? t.angle : -Math.PI / 2;
               const scale = 0.6; // Make towers smaller
 
               // Platform (doesn't rotate)
               const platformW = 22 * sx * scale;
               const platformH = 6 * sy * scale;
+              
+              // Apply stun filter to platform
+              if (towerStunned) {
+                ctx.filter = 'hue-rotate(-60deg) saturate(1.5)';
+              }
+              
               ctx.fillStyle = hexToRgba("#333", 0.9 * towerAlpha);
-              ctx.strokeStyle = hexToRgba(tColor, 0.6 * towerAlpha);
+              ctx.strokeStyle = hexToRgba(towerStunned ? "#ff4400" : tColor, 0.6 * towerAlpha);
               ctx.lineWidth = 2;
                 ctx.beginPath();
                 ctx.roundRect(tx - platformW / 2, ty - platformH, platformW, platformH, 2);
@@ -5026,6 +5122,18 @@
                   }
                   ctx.restore();
                   clearShadow(ctx);
+                  ctx.filter = 'none'; // Reset filter after tower rendering
+                }
+                
+                // Draw stun spark above tower
+                if (towerStunned) {
+                  ctx.save();
+                  ctx.fillStyle = "#ffff00";
+                  const sparkSize = 3 + Math.sin(Date.now() / 30) * 2;
+                  ctx.beginPath();
+                  ctx.arc(tx, ty - platformH - 25 * scale, sparkSize, 0, Math.PI * 2);
+                  ctx.fill();
+                  ctx.restore();
                 }
                 
                 // Drone Command: Render orbiting drone for this tower

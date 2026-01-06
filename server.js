@@ -512,6 +512,7 @@ let wave = 0;
 
 let missiles = [];
 let bullets = [];
+let enemyBullets = []; // Battleship bullets that can hit player turrets
 let shieldExplosions = []; // Active shield explosions that deal damage
 let ghostAllies = []; // Necromancer ghost allies flying upward
 let gravityWells = []; // Active gravity wells pulling enemies
@@ -1114,12 +1115,19 @@ function createBattleship(x, y, targetSlot) {
 function spawnWave() {
   missiles = [];
   bullets = [];
+  enemyBullets = []; // Clear battleship bullets
   shieldExplosions = [];
   ghostAllies = [];
   gravityWells = [];
   spawnQueue = [];
   spawnTimer = 0;
   waveElapsedTime = 0; // Reset gravity timer for new wave
+  
+  // Clear player stun timers at wave start
+  for (const [id, p] of players) {
+    p.mainTurretStun = 0;
+    p.towerStuns = [0, 0, 0, 0];
+  }
 
   // NEW: BOSS ROUND CHECK (Every 10 waves)
   if (wave % 10 === 0) {
@@ -2858,6 +2866,14 @@ function tick() {
       if (!p || p.hp <= 0) continue;
 
       p.cooldown = Math.max(0, (p.cooldown ?? 0) - DT);
+      
+      // Update stun timers
+      if (p.mainTurretStun > 0) p.mainTurretStun = Math.max(0, p.mainTurretStun - DT);
+      if (p.towerStuns) {
+        for (let ti = 0; ti < p.towerStuns.length; ti++) {
+          if (p.towerStuns[ti] > 0) p.towerStuns[ti] = Math.max(0, p.towerStuns[ti] - DT);
+        }
+      }
 
       const slot = p.slot;
       const { x0, x1 } = segmentBounds(slot);
@@ -2892,7 +2908,10 @@ function tick() {
         targetY = clamped.y;
       }
       p.turretAngle = clamped.angle;
-      const shouldFire = p.manualShooting || mainTarget; // Reuse stored target
+      
+      // Check if main turret is stunned
+      const mainTurretStunned = (p.mainTurretStun || 0) > 0;
+      const shouldFire = (p.manualShooting || mainTarget) && !mainTurretStunned;
       if (shouldFire && p.cooldown <= 0) {
         p.cooldown = baseCooldown;
         fireWithMultishot(p, pos.main.x, pos.main.y, clamped.x, clamped.y, p.manualShooting);
@@ -2904,6 +2923,14 @@ function tick() {
         for (let idx = 0; idx < towers.length; idx++) {
           const tower = towers[idx];
           if (!tower) continue;
+          
+          // Check if this tower is stunned
+          if (p.towerStuns && p.towerStuns[idx] > 0) {
+            // Tower is stunned - still update cooldown but don't fire
+            tower.cd = Math.max(0, (tower.cd ?? 0) - DT);
+            continue;
+          }
+          
           const towerPos = pos.slots[idx];
           if (!towerPos) continue;
 
@@ -3230,51 +3257,45 @@ function tick() {
       if (m.isBattleship && !m.inFTL && !m.dead) {
         const config = BATTLESHIP_CONFIG;
         const targetSlot = m.targetSlot;
+        const { x0, x1 } = segmentBounds(targetSlot);
         
-        // DEBUG: Log that we're updating this battleship
-        if (Math.random() < 0.02) {
-          console.log(`Updating battleship ${m.id.slice(0,6)}: inFTL=${m.inFTL}, dead=${m.dead}, targetSlot=${targetSlot}`);
-        }
-        
-        // Find nearest player bullet to aim at
-        let nearestBullet = null;
-        let nearestDist = Infinity;
-        
-        for (const b of bullets) {
-          // Only target bullets in this battleship's lane
-          if (b.ownerSlot !== targetSlot) continue;
-          const dx = b.x - m.x;
-          const dy = b.y - m.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < nearestDist && dist < 300) { // Only target bullets within range
-            nearestDist = dist;
-            nearestBullet = b;
+        // Initialize turret target positions and stun timers if not set
+        if (!m.turretTargets) {
+          m.turretTargets = [];
+          m.turretStunTimers = [0, 0, 0, 0];
+          for (let t = 0; t < 4; t++) {
+            // Each turret picks a random ground position in the player's lane
+            m.turretTargets[t] = {
+              x: x0 + rand(20, SEGMENT_W - 20),
+              y: GROUND_Y
+            };
           }
         }
         
-        // DEBUG: Log nearest bullet
-        if (Math.random() < 0.02) {
-          console.log(`  Nearest bullet: ${nearestBullet ? `dist=${nearestDist.toFixed(1)}` : 'none'}, total bullets=${bullets.length}`);
-        }
+        // World scale for turret positions (collision radius / half-ship-width)
+        const worldScale = m.r / 120;
         
         // Update each turret
         for (let t = 0; t < 4; t++) {
-          // Calculate turret world position
-          // NO SCALING - turret offsets are in pixels, convert to world space proportionally
-          // Ship image is 240x330 pixels, at 1:1 rendering the visual size is fixed
-          // For physics, we use a simplified ratio based on collision radius
-          const worldScale = m.r / 120; // collision radius / half-ship-width gives world units per pixel
+          // Update stun timer
+          if (m.turretStunTimers[t] > 0) {
+            m.turretStunTimers[t] -= DT;
+            // Stunned turrets don't rotate or fire
+            continue;
+          }
+          
+          // Calculate turret world position for targeting calculations
           const offset = config.turretPixelOffsets[t];
           const turretBaseX = m.x + offset.x * worldScale;
           const turretBaseY = m.y + offset.y * worldScale;
           
-          // Calculate angle to nearest bullet (or default to pointing down)
-          let targetAngle = Math.PI / 2; // Default: point down
-          if (nearestBullet) {
-            const dx = nearestBullet.x - turretBaseX;
-            const dy = nearestBullet.y - turretBaseY;
-            targetAngle = Math.atan2(dy, dx);
-          }
+          // Get target ground position for this turret
+          const target = m.turretTargets[t];
+          
+          // Calculate angle to target ground position
+          const dx = target.x - turretBaseX;
+          const dy = target.y - turretBaseY;
+          const targetAngle = Math.atan2(dy, dx);
           
           // Smoothly rotate turret towards target
           let currentAngle = m.turretAngles[t];
@@ -3282,27 +3303,26 @@ function tick() {
           // Normalize angle difference
           while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
           while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-          // Rotate at 3 radians per second (faster tracking)
-          const rotateSpeed = 3.0;
+          // Rotate at 2 radians per second
+          const rotateSpeed = 2.0;
           if (Math.abs(angleDiff) < rotateSpeed * DT) {
             m.turretAngles[t] = targetAngle;
           } else {
             m.turretAngles[t] += Math.sign(angleDiff) * rotateSpeed * DT;
           }
           
-          // DEBUG: Log turret rotation occasionally
-          if (t === 0 && Math.random() < 0.01) {
-            console.log(`Battleship ${m.id.slice(0,6)} turret[0]: ${(m.turretAngles[0]*180/Math.PI).toFixed(0)}° (target: ${(targetAngle*180/Math.PI).toFixed(0)}°)`);
-          }
-          
           // Update cooldown and fire
           m.turretCooldowns[t] -= DT;
-          if (m.turretCooldowns[t] <= 0 && nearestBullet) {
+          if (m.turretCooldowns[t] <= 0) {
             m.turretCooldowns[t] = config.turretCooldown;
             
+            // Pick a NEW random ground target for next shot
+            m.turretTargets[t] = {
+              x: x0 + rand(20, SEGMENT_W - 20),
+              y: GROUND_Y
+            };
+            
             // Calculate shot spawn position from turret pivot point
-            // Pivot is at (18, 17) in the 35x46 turret sprite
-            // We need to offset from the turret base by the pivot, rotated by turret angle
             const bulletAngle = m.turretAngles[t];
             const pivotOffsetX = config.turretPivot.x * worldScale;
             const pivotOffsetY = config.turretPivot.y * worldScale;
@@ -3312,26 +3332,38 @@ function tick() {
             const rotatedPivotX = pivotOffsetX * Math.cos(adjustedAngle) - pivotOffsetY * Math.sin(adjustedAngle);
             const rotatedPivotY = pivotOffsetX * Math.sin(adjustedAngle) + pivotOffsetY * Math.cos(adjustedAngle);
             
-            // Final shot spawn position
+            // Final shot spawn position (from turret barrel tip)
             const shotX = turretBaseX + rotatedPivotX;
             const shotY = turretBaseY + rotatedPivotY;
             const bulletSpeed = config.bulletSpeed;
+            const vx = Math.cos(bulletAngle) * bulletSpeed;
+            const vy = Math.sin(bulletAngle) * bulletSpeed;
             
-            // Create enemy bullet event for visuals ONLY - bullets do nothing
-            queueEvent("battleshipShot", {
+            // Create actual enemy bullet that can hit player turrets
+            enemyBullets.push({
+              id: uid(),
               x: shotX,
               y: shotY,
-              vx: Math.cos(bulletAngle) * bulletSpeed,
-              vy: Math.sin(bulletAngle) * bulletSpeed,
+              vx: vx,
+              vy: vy,
+              r: 4,
+              life: config.bulletLifespan,
+              targetSlot: targetSlot,
               shipId: m.id,
               turretIndex: t
             });
             
-            // NOTE: Removed enemyBullets array - shots are visual only and don't interact
+            // Create enemy bullet event for visuals
+            queueEvent("battleshipShot", {
+              x: shotX,
+              y: shotY,
+              vx: vx,
+              vy: vy,
+              shipId: m.id,
+              turretIndex: t
+            });
           }
         }
-        
-        // Enemy bullets removed - battleship shots are visual only
       }
       
       bounceOffWalls(m);
@@ -3629,6 +3661,50 @@ function tick() {
       const slot = b.ownerSlot;
       const slotMissiles = missilesBySlot[slot];
       if (!slotMissiles) continue;
+      
+      // ===== BATTLESHIP TURRET COLLISION CHECK =====
+      // Check if this bullet hits any battleship turret (stuns for 1 second)
+      const TURRET_HIT_RADIUS = 12; // Collision radius for turrets
+      for (let mi = 0; mi < slotMissiles.length; mi++) {
+        const m = slotMissiles[mi];
+        if (!m.isBattleship || m.dead || m.inFTL) continue;
+        if (!m.turretStunTimers) continue;
+        
+        const config = BATTLESHIP_CONFIG;
+        const worldScale = m.r / 120;
+        
+        // Check each turret
+        for (let t = 0; t < 4; t++) {
+          const offset = config.turretPixelOffsets[t];
+          const turretX = m.x + offset.x * worldScale;
+          const turretY = m.y + offset.y * worldScale;
+          
+          const dx = turretX - b.x;
+          const dy = turretY - b.y;
+          const hitR = TURRET_HIT_RADIUS + b.r;
+          
+          if (dx * dx + dy * dy <= hitR * hitR) {
+            // Hit! Stun this turret for 1 second
+            m.turretStunTimers[t] = 1.0;
+            
+            // Visual feedback
+            queueEvent("turretStunned", {
+              shipId: m.id,
+              turretIndex: t,
+              x: turretX,
+              y: turretY
+            });
+            
+            // Bullet is consumed
+            b.dead = true;
+            addDamageNumber(turretX, turretY - 10, "STUN!", false);
+            createExplosion(turretX, turretY, 12, "#ffff00");
+            break;
+          }
+        }
+        if (b.dead) break;
+      }
+      if (b.dead) continue;
       
       for (let mi = 0; mi < slotMissiles.length; mi++) {
         const m = slotMissiles[mi];
@@ -4485,6 +4561,90 @@ function tick() {
     }
     ghostAllies.length = gaWriteIdx;
     
+    // ===== ENEMY BULLET UPDATE (Battleship shots) =====
+    // Move enemy bullets and check for collision with player turrets
+    const PLAYER_TURRET_HIT_RADIUS = 15; // Collision radius for player turrets
+    for (let ebi = 0; ebi < enemyBullets.length; ebi++) {
+      const eb = enemyBullets[ebi];
+      
+      // Move bullet
+      eb.x += eb.vx * DT;
+      eb.y += eb.vy * DT;
+      eb.life -= DT;
+      
+      // Skip if expired or off-screen
+      if (eb.life <= 0 || eb.y > GROUND_Y + 50 || eb.y < -50) {
+        eb.dead = true;
+        continue;
+      }
+      
+      // Get target player
+      const targetSlot = eb.targetSlot;
+      if (targetSlot === undefined || targetSlot < 0 || targetSlot >= lockedSlots.length) continue;
+      const playerId = lockedSlots[targetSlot];
+      const p = playerId ? players.get(playerId) : null;
+      if (!p || p.hp <= 0) continue;
+      
+      // Get turret positions for this player
+      const pos = turretPositions(targetSlot);
+      
+      // Initialize stun timers if not set
+      if (p.mainTurretStun === undefined) p.mainTurretStun = 0;
+      if (!p.towerStuns) p.towerStuns = [0, 0, 0, 0];
+      
+      // Check collision with main turret (if not stunned, still check for hit)
+      const mainDx = pos.main.x - eb.x;
+      const mainDy = pos.main.y - eb.y;
+      const mainHitR = PLAYER_TURRET_HIT_RADIUS + eb.r;
+      if (mainDx * mainDx + mainDy * mainDy <= mainHitR * mainHitR) {
+        // Hit main turret! Stun for 1 second
+        p.mainTurretStun = 1.0;
+        eb.dead = true;
+        queueEvent("playerTurretStunned", {
+          playerId: p.id,
+          slot: targetSlot,
+          turretType: "main",
+          x: pos.main.x,
+          y: pos.main.y
+        });
+        createExplosion(pos.main.x, pos.main.y - 20, 15, "#ff4400");
+        continue;
+      }
+      
+      // Check collision with tower turrets
+      if (p.towers) {
+        for (let ti = 0; ti < p.towers.length && ti < pos.slots.length; ti++) {
+          if (!p.towers[ti]) continue; // No tower in this slot
+          const towerPos = pos.slots[ti];
+          const towerDx = towerPos.x - eb.x;
+          const towerDy = towerPos.y - eb.y;
+          if (towerDx * towerDx + towerDy * towerDy <= mainHitR * mainHitR) {
+            // Hit tower turret! Stun for 1 second
+            p.towerStuns[ti] = 1.0;
+            eb.dead = true;
+            queueEvent("playerTurretStunned", {
+              playerId: p.id,
+              slot: targetSlot,
+              turretType: "tower",
+              towerIndex: ti,
+              x: towerPos.x,
+              y: towerPos.y
+            });
+            createExplosion(towerPos.x, towerPos.y - 15, 12, "#ff4400");
+            break;
+          }
+        }
+      }
+    }
+    // Remove dead enemy bullets
+    let ebWriteIdx = 0;
+    for (let i = 0; i < enemyBullets.length; i++) {
+      if (!enemyBullets[i].dead) {
+        enemyBullets[ebWriteIdx++] = enemyBullets[i];
+      }
+    }
+    enemyBullets.length = ebWriteIdx;
+    
     // Gravity Well update - pull nearby enemies
     // PERFORMANCE: Added quick bounding box rejection before distance check
     // DIMINISHING RETURNS: Asteroids become resistant to gravity the longer they're exposed
@@ -4815,6 +4975,7 @@ function broadcastGameState() {
     obj.isBattleship = m.isBattleship || undefined;
     if (m.isBattleship) {
       obj.turretAngles = m.turretAngles;
+      obj.turretStunTimers = m.turretStunTimers; // For visual feedback on stunned turrets
     }
   }
   // Truncate array to actual size (JSON.stringify respects .length)
@@ -4824,6 +4985,24 @@ function broadcastGameState() {
   // We do NOT send the full bullet list. Clients simulate bullets locally based on 
   // 'bulletSpawn' and 'bulletDeaths' events. This saves massive bandwidth.
   broadcastState.bullets.length = 0;
+  
+  // Fill enemy bullets (battleship shots)
+  if (!broadcastState.enemyBullets) broadcastState.enemyBullets = [];
+  const ebCount = enemyBullets.length;
+  while (broadcastState.enemyBullets.length < ebCount) {
+    broadcastState.enemyBullets.push({});
+  }
+  for (let i = 0; i < ebCount; i++) {
+    const eb = enemyBullets[i];
+    const obj = broadcastState.enemyBullets[i];
+    obj.id = eb.id;
+    obj.x = Math.round(eb.x);
+    obj.y = Math.round(eb.y);
+    obj.vx = Math.round(eb.vx);
+    obj.vy = Math.round(eb.vy);
+    obj.r = eb.r;
+  }
+  broadcastState.enemyBullets.length = ebCount;
   
   // Events - just reference the queue (will be cleared after)
   broadcastState.events = eventQueue;
@@ -4910,6 +5089,8 @@ function broadcastGameState() {
     obj.waveDamage = p.waveDamage || 0;
     obj.lastInterest = p.lastInterest || 0;
     obj.totalIncome = p.lastInterest || 0; // Total income earned last wave (for display to other players)
+    obj.mainTurretStun = p.mainTurretStun || 0; // Main turret stun timer
+    obj.towerStuns = p.towerStuns || [0, 0, 0, 0]; // Tower turret stun timers
     obj.shieldActive = u.shieldActive || 0;
     obj.slowfield = !!u.slowfield;
     // Reuse upgrades object
