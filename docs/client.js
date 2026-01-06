@@ -4047,8 +4047,8 @@
           if (imagesReady) {
             // Calculate proper scale to match world coordinates
             // Ship collision radius is 28, diameter is 56 world units
-            // Ship image is 240px wide, doubled size: scale = (diameter*2 / width) = 112/240
-            const shipScale = (r * 4) / 240; // Doubled from (r * 2) / 240
+            // Ship image is 240px wide, TRIPLED size: scale = (diameter*3 / width) = 168/240
+            const shipScale = (r * 6) / 240; // TRIPLED from original (r * 2) / 240
             
             // DEBUG: Log scale once per 60 frames
             if (Math.random() < 0.016) {
@@ -7834,4 +7834,4 @@
       send({ t: "forceStart" });
     }
   };
-})(); 
+})();

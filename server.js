@@ -3231,6 +3231,11 @@ function tick() {
         const config = BATTLESHIP_CONFIG;
         const targetSlot = m.targetSlot;
         
+        // DEBUG: Log that we're updating this battleship
+        if (Math.random() < 0.02) {
+          console.log(`Updating battleship ${m.id.slice(0,6)}: inFTL=${m.inFTL}, dead=${m.dead}, targetSlot=${targetSlot}`);
+        }
+        
         // Find nearest player bullet to aim at
         let nearestBullet = null;
         let nearestDist = Infinity;
@@ -3247,11 +3252,16 @@ function tick() {
           }
         }
         
+        // DEBUG: Log nearest bullet
+        if (Math.random() < 0.02) {
+          console.log(`  Nearest bullet: ${nearestBullet ? `dist=${nearestDist.toFixed(1)}` : 'none'}, total bullets=${bullets.length}`);
+        }
+        
         // Update each turret
         for (let t = 0; t < 4; t++) {
           // Calculate turret world position
-          // Scale factor: ship diameter (r*2) doubled / ship image width (240)
-          const scale = (m.r * 4) / 240; // Doubled from (m.r * 2) / 240
+          // Scale factor: ship diameter (r*2) TRIPLED / ship image width (240)
+          const scale = (m.r * 6) / 240; // TRIPLED from original (m.r * 2) / 240
           const offset = config.turretPixelOffsets[t];
           const turretBaseX = m.x + offset.x * scale;
           const turretBaseY = m.y + offset.y * scale;
@@ -5732,4 +5742,4 @@ setInterval(() => {
 }, 1000 / TICK_RATE);
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => { console.log(`Rogue Asteroid PvP (OPTIMIZED v2 - 15Hz): http://localhost:${PORT}`); }); 
+server.listen(PORT, () => { console.log(`Rogue Asteroid PvP (OPTIMIZED v2 - 15Hz): http://localhost:${PORT}`); });
