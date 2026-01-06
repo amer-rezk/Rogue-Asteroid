@@ -1,0 +1,13 @@
+# Mark audio as binary so Git doesn't try to read it as text
+*.mp3 binary
+*.wav binary
+*.ogg binary
+
+# Mark images as binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+
+# Mark the lock file as binary to prevent massive diffs
+package-lock.json binary
