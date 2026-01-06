@@ -1025,7 +1025,7 @@
           if (!skipVisualEffects) {
             // Muzzle flash
             createClientParticle(ev.x, ev.y, "#ff4400", 4, 0.8);
-            // Track enemy bullet for rendering
+            // Track enemy bullet for rendering (fallback if server data not used)
             if (!window.enemyBullets) window.enemyBullets = [];
             window.enemyBullets.push({
               id: ev.shipId + "_" + ev.turretIndex + "_" + Date.now(),
@@ -1033,7 +1033,7 @@
               y: ev.y,
               vx: ev.vx,
               vy: ev.vy,
-              life: 2.0
+              life: 8.0 // Long enough to reach ground from any position
             });
           }
           break;

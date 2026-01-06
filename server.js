@@ -124,9 +124,9 @@ const BATTLESHIP_CONFIG = {
   size: 28, // Radius for collision (was 45, now ~50% smaller)
   turretCount: 4,
   turretCooldown: 3.0, // Seconds between shots (was 1.5, now 50% slower)
-  turretDamage: 0, // Turrets don't deal damage, they destroy bullets
-  bulletSpeed: 150, // Faster bullets for intercepting
-  bulletLifespan: 2.0, // Shorter lifespan
+  turretDamage: 0, // Turrets don't deal damage, they stun player turrets
+  bulletSpeed: 250, // Speed to reach ground from top
+  bulletLifespan: 8.0, // Long enough to reach ground from any position
   // Turret positions in pixels relative to center (240x330 ship image)
   // These will be scaled to world coordinates: pixel * (radius*2/240)
   turretPixelOffsets: [
@@ -135,8 +135,12 @@ const BATTLESHIP_CONFIG = {
     { x: -49, y: 48 },   // Third turret
     { x: 47, y: 48 }     // Fourth turret
   ],
-  // Turret pivot point in the 35x46 turret sprite (where shots spawn from)
-  turretPivot: { x: 18, y: 17 }
+  // Turret pivot point in the 35x46 turret sprite
+  turretPivot: { x: 18, y: 17 },
+  // Barrel length - distance from pivot to muzzle tip (in turret sprite pixels)
+  // The turret sprite is 46px tall, pivot is at y=17, barrel tip at y=0
+  // So barrel extends 17 pixels from pivot toward the tip
+  barrelLength: 17
 };
 
 // ===== Tower Modules (Boss Rewards) =====
@@ -3272,8 +3276,12 @@ function tick() {
           }
         }
         
-        // World scale for turret positions (collision radius / half-ship-width)
-        const worldScale = m.r / 120;
+        // Pixel-to-world scale factor
+        // The client renders at fixed pixel size - ship is 240x330 pixels
+        // We need to convert pixel offsets to world coordinates
+        // Using a fixed scale that assumes canvas width ≈ world width (720)
+        // This makes pixel offsets approximately equal to world units
+        const pixelToWorld = 1.0; // 1 pixel ≈ 1 world unit
         
         // Update each turret
         for (let t = 0; t < 4; t++) {
@@ -3284,10 +3292,11 @@ function tick() {
             continue;
           }
           
-          // Calculate turret world position for targeting calculations
+          // Calculate turret world position
+          // Turret offsets are in pixels, convert to world coords
           const offset = config.turretPixelOffsets[t];
-          const turretBaseX = m.x + offset.x * worldScale;
-          const turretBaseY = m.y + offset.y * worldScale;
+          const turretBaseX = m.x + offset.x * pixelToWorld;
+          const turretBaseY = m.y + offset.y * pixelToWorld;
           
           // Get target ground position for this turret
           const target = m.turretTargets[t];
@@ -3322,19 +3331,16 @@ function tick() {
               y: GROUND_Y
             };
             
-            // Calculate shot spawn position from turret pivot point
+            // Calculate shot spawn position at barrel tip (muzzle)
+            // The barrel extends from the turret base in the direction it's pointing
+            // Barrel length in pixels, converted to world units
             const bulletAngle = m.turretAngles[t];
-            const pivotOffsetX = config.turretPivot.x * worldScale;
-            const pivotOffsetY = config.turretPivot.y * worldScale;
+            const barrelLengthWorld = config.barrelLength * pixelToWorld;
             
-            // Rotate pivot offset by turret angle (subtract PI/2 because sprite points up)
-            const adjustedAngle = bulletAngle - Math.PI/2;
-            const rotatedPivotX = pivotOffsetX * Math.cos(adjustedAngle) - pivotOffsetY * Math.sin(adjustedAngle);
-            const rotatedPivotY = pivotOffsetX * Math.sin(adjustedAngle) + pivotOffsetY * Math.cos(adjustedAngle);
+            // Spawn at turret base + full barrel length in firing direction
+            const shotX = turretBaseX + Math.cos(bulletAngle) * barrelLengthWorld;
+            const shotY = turretBaseY + Math.sin(bulletAngle) * barrelLengthWorld;
             
-            // Final shot spawn position (from turret barrel tip)
-            const shotX = turretBaseX + rotatedPivotX;
-            const shotY = turretBaseY + rotatedPivotY;
             const bulletSpeed = config.bulletSpeed;
             const vx = Math.cos(bulletAngle) * bulletSpeed;
             const vy = Math.sin(bulletAngle) * bulletSpeed;
@@ -3664,20 +3670,20 @@ function tick() {
       
       // ===== BATTLESHIP TURRET COLLISION CHECK =====
       // Check if this bullet hits any battleship turret (stuns for 1 second)
-      const TURRET_HIT_RADIUS = 12; // Collision radius for turrets
+      const TURRET_HIT_RADIUS = 15; // Collision radius for turrets (pixels ≈ world units)
       for (let mi = 0; mi < slotMissiles.length; mi++) {
         const m = slotMissiles[mi];
         if (!m.isBattleship || m.dead || m.inFTL) continue;
         if (!m.turretStunTimers) continue;
         
         const config = BATTLESHIP_CONFIG;
-        const worldScale = m.r / 120;
+        const pixelToWorld = 1.0; // Consistent with bullet spawn
         
         // Check each turret
         for (let t = 0; t < 4; t++) {
           const offset = config.turretPixelOffsets[t];
-          const turretX = m.x + offset.x * worldScale;
-          const turretY = m.y + offset.y * worldScale;
+          const turretX = m.x + offset.x * pixelToWorld;
+          const turretY = m.y + offset.y * pixelToWorld;
           
           const dx = turretX - b.x;
           const dy = turretY - b.y;
