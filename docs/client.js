@@ -750,6 +750,23 @@
       b.y += b.vy * dt;
       
       b.lifespan -= dt;
+      
+      // DISSIPATING SLUG: Track distance and shrink bullet over time
+      if (b.hasDissipatingSlug) {
+        const lx = b.lastX !== undefined ? b.lastX : b.x;
+        const ly = b.lastY !== undefined ? b.lastY : b.y;
+        const ddx = b.x - lx;
+        const ddy = b.y - ly;
+        const distThisTick = Math.sqrt(ddx * ddx + ddy * ddy);
+        b.totalDistance = (b.totalDistance || 0) + distThisTick;
+        b.lastX = b.x;
+        b.lastY = b.y;
+        
+        // Shrink from max to base size over 300 pixels
+        const DECAY_DISTANCE = 300;
+        const decayProgress = Math.min(1, b.totalDistance / DECAY_DISTANCE);
+        b.r = b.maxBulletR - (b.maxBulletR - b.baseBulletR) * decayProgress;
+      }
 
       // Calculate lane boundaries for this bullet's owner
       // Default to 360 if world isn't loaded yet
@@ -1348,7 +1365,15 @@
             sourceX: ev.x,
             sourceY: ev.y,
             maxLifespan: ev.lifespan || 3.0,
-            returning: false
+            returning: false,
+            
+            // Dissipating Slug (Caliber) - visual shrinking
+            hasDissipatingSlug: ev.hasDissipatingSlug || false,
+            baseBulletR: ev.baseBulletR || ev.r || 3,
+            maxBulletR: ev.maxBulletR || ev.r || 3,
+            totalDistance: 0,
+            lastX: ev.x,
+            lastY: ev.y
           });
           break;
 

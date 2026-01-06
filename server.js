@@ -808,7 +808,7 @@ const UPGRADE_DEFS = [
   { id: "multi", name: "Multishot", cat: "offense", icon: "⚔️", desc: "+{val} Bullets (-{penalty}% dmg)", stat: "multishot", base: 1, type: "multishot" },
   { id: "crit", name: "Crit Scope", cat: "offense", icon: "🎯", desc: "+{val}% Crit Chance", stat: "critChance", base: 0.05, type: "add_cap", cap: 1.0 },
   { id: "boom", name: "Explosive", cat: "offense", icon: "💣", desc: "Explosions size +{val}", stat: "explosive", base: 1, type: "add" },
-  { id: "caliber", name: "Caliber", cat: "offense", icon: "⚫", desc: "+{val}% Bullet Size", stat: "bulletSize", base: 0.1125, type: "mult" },
+  { id: "caliber", name: "Dissipating Slug", cat: "offense", icon: "💥", desc: "3x size & dmg up close, shrinks over distance", stat: "bulletSize", base: 0.1125, type: "mult" },
   { id: "rico", name: "Ricochet", cat: "utility", icon: "🎱", desc: "Chains to {val} enemies (-10% dmg each)", stat: "ricochet", base: 1, type: "add" },
   { id: "pierce", name: "Railgun", cat: "utility", icon: "📌", desc: "Pierces {val} enemies", stat: "pierce", base: 1, type: "add" },
   { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "{val}% chance for Lightning", stat: "chainChance", base: 0.02, type: "add_cap", cap: 0.30 },
@@ -2093,11 +2093,23 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
   const moduleDmgResult = applyModuleDamage(finalDmg, modules, ownerGold, originX, originY);
   finalDmg = moduleDmgResult.damage;
   
-  // Apply bullet size upgrade (mult type like bulletSpeedMult, starts at 1)
-  if (!overrideProps && owner.upgrades?.bulletSize) {
-    bulletR *= owner.upgrades.bulletSize;
-  } else if (overrideProps?.inheritedUpgrades && overrideProps.bulletSize) {
-    bulletR *= overrideProps.bulletSize;
+  // Store base bullet size before any modifications
+  const baseBulletR = bulletR;
+  
+  // DISSIPATING SLUG (Caliber redesign):
+  // Bullets start at 3x size and shrink as they travel, dealing more damage up close
+  // Size and damage decay from 3x to 1x over ~300 pixels of travel
+  let hasDissipatingSlug = false;
+  let maxBulletR = bulletR;
+  
+  if (!overrideProps && owner.upgrades?.bulletSize && owner.upgrades.bulletSize > 1) {
+    hasDissipatingSlug = true;
+    maxBulletR = baseBulletR * 3; // Start at 3x size
+    bulletR = maxBulletR; // Initial size is max
+  } else if (overrideProps?.inheritedUpgrades && overrideProps.bulletSize && overrideProps.bulletSize > 1) {
+    hasDissipatingSlug = true;
+    maxBulletR = baseBulletR * 3;
+    bulletR = maxBulletR;
   }
 
   let dx = targetX - originX;
@@ -2150,6 +2162,10 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     lastY: originY - 6,
     // Temporal Boomerang tracking
     returning: false,
+    // Dissipating Slug (Caliber) - bullets shrink and lose damage over distance
+    hasDissipatingSlug: hasDissipatingSlug,
+    baseBulletR: baseBulletR, // Size without caliber (minimum size)
+    maxBulletR: maxBulletR,   // Starting size (3x base)
   };
   bullets.push(bullet);
   
@@ -2182,6 +2198,10 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
       targetId: bullet.targetId, // Target asteroid ID for homing
       // OPTIMIZED: Send a simple flag instead of the full list to prevent LAG
       isBoomerang: hasBoomerang,
+      // Dissipating Slug (Caliber) - for client-side shrinking visuals
+      hasDissipatingSlug: bullet.hasDissipatingSlug || false,
+      baseBulletR: bullet.baseBulletR,
+      maxBulletR: bullet.maxBulletR,
     });
   }
   // If throttled, bullet still exists on server - client just won't see it immediately
@@ -3657,9 +3677,9 @@ function tick() {
       // FIX 1: Removed death check so bullets don't vanish before returning
       // if (b.lifespan <= 0) { b.dead = true; continue; } 
       
-      // Momentum Lens: Track distance traveled
-      // PERF: Skip check if bullet has no modules
-      if (b.modules && b.modules.length > 0 && b.modules.includes("momentumLens")) {
+      // Track distance traveled (for Momentum Lens and Dissipating Slug)
+      // PERF: Only calculate if needed
+      if ((b.modules && b.modules.length > 0 && b.modules.includes("momentumLens")) || b.hasDissipatingSlug) {
         // FIX: Default to current position if lastX is missing (shards/ricochets)
         const lx = (b.lastX !== undefined) ? b.lastX : b.x;
         const ly = (b.lastY !== undefined) ? b.lastY : b.y;
@@ -3670,6 +3690,16 @@ function tick() {
         const distThisTick = Math.sqrt(ddx * ddx + ddy * ddy);
         b.totalDistance = (b.totalDistance || 0) + distThisTick;
       }
+      
+      // DISSIPATING SLUG: Shrink bullet as it travels (Caliber redesign)
+      // Size decays from 3x to 1x over ~300 pixels
+      if (b.hasDissipatingSlug && b.baseBulletR && b.maxBulletR) {
+        const DECAY_DISTANCE = 300; // Full decay over this distance
+        const decayProgress = Math.min(1, (b.totalDistance || 0) / DECAY_DISTANCE);
+        // Lerp from max to base size
+        b.r = b.maxBulletR - (b.maxBulletR - b.baseBulletR) * decayProgress;
+      }
+      
       b.lastX = b.x;
       b.lastY = b.y;
       
@@ -3840,7 +3870,17 @@ function tick() {
         }
         
         // Apply on-hit damage modifiers (Executioner's Sight, Momentum Lens)
-        const hitDamage = applyOnHitDamageModifiers(b.dmg, b.modules, m, { totalDistance: b.totalDistance });
+        let hitDamage = applyOnHitDamageModifiers(b.dmg, b.modules, m, { totalDistance: b.totalDistance });
+        
+        // DISSIPATING SLUG: Damage bonus based on current size (closer = bigger = more damage)
+        // Size ratio: 3x at close range, 1x at max range, damage scales proportionally
+        if (b.hasDissipatingSlug && b.baseBulletR && b.r) {
+          const sizeRatio = b.r / b.baseBulletR;
+          // Damage multiplier is the size ratio (3x at close, 1x at far)
+          // Never goes below 1x (base damage)
+          const slugMultiplier = Math.max(1, sizeRatio);
+          hitDamage *= slugMultiplier;
+        }
         
         m.hp -= hitDamage;
 
