@@ -1096,10 +1096,14 @@ function createBattleship(x, y, targetSlot, bossHp = null) {
   const turretMaxHPs = [turretHp, turretHp, turretHp, turretHp]; // For HP bars
   const turretDestroyed = [false, false, false, false]; // Track destroyed turrets
   
-  // Hull rotation - oscillates as ship descends for dynamic look
-  const hullRotation = 0;
-  const hullRotationSpeed = 0.3 + Math.random() * 0.2; // Radians per second (randomized slightly)
-  const hullRotationDir = Math.random() < 0.5 ? 1 : -1; // Random initial direction
+  // Hull rotation - organic ship movement like a large vessel
+  const hullRotation = (Math.random() - 0.5) * 0.1; // Start with slight random tilt
+  const hullRotationVelocity = 0; // Angular velocity (rad/s)
+  const hullTargetRotation = (Math.random() - 0.5) * 0.3; // Target angle to rotate toward
+  const hullRotationChangeTimer = 3 + Math.random() * 4; // Time until next direction change
+  
+  // Base velocity - ship moves mostly downward but drifts based on rotation
+  const baseVy = config.speed * 30;
   
   // Send spawn event to clients
   queueEvent("spawnBattleship", {
@@ -1114,7 +1118,7 @@ function createBattleship(x, y, targetSlot, bossHp = null) {
   
   return {
     id,
-    x, y, vx, vy,
+    x, y, vx: 0, vy: baseVy,
     r: config.size,
     type: "battleship",
     hp,
@@ -1127,10 +1131,12 @@ function createBattleship(x, y, targetSlot, bossHp = null) {
     turretHPs,
     turretMaxHPs,
     turretDestroyed,
-    // Hull rotation
+    // Hull rotation - organic movement
     hullRotation,
-    hullRotationSpeed,
-    hullRotationDir,
+    hullRotationVelocity,
+    hullTargetRotation,
+    hullRotationChangeTimer,
+    baseVy,
     // Movement - faster FTL exit
     inFTL: true,
     ftlThreshold: GROUND_Y * 0.25, // Exit FTL earlier (was 0.15)
@@ -2752,8 +2758,26 @@ function addDamageNumber(x, y, amount, isCrit) {
 
 function bounceOffWalls(m) {
   const { x0, x1 } = segmentBounds(m.targetSlot);
-  if (m.x - m.r < x0) { m.x = x0 + m.r; m.vx = Math.abs(m.vx); }
-  if (m.x + m.r > x1) { m.x = x1 - m.r; m.vx = -Math.abs(m.vx); }
+  
+  // Battleship gets soft wall collision - gently push back instead of hard bounce
+  if (m.isBattleship) {
+    const margin = 80; // Keep ship away from edges
+    if (m.x < x0 + margin) {
+      m.vx += 2; // Gently push right
+      if (m.hullTargetRotation < 0) m.hullTargetRotation *= 0.5; // Reduce leftward tilt
+    }
+    if (m.x > x1 - margin) {
+      m.vx -= 2; // Gently push left
+      if (m.hullTargetRotation > 0) m.hullTargetRotation *= 0.5; // Reduce rightward tilt
+    }
+    // Hard clamp as backup
+    if (m.x - m.r < x0) { m.x = x0 + m.r; m.vx = Math.abs(m.vx) * 0.3; }
+    if (m.x + m.r > x1) { m.x = x1 - m.r; m.vx = -Math.abs(m.vx) * 0.3; }
+  } else {
+    // Normal asteroids bounce
+    if (m.x - m.r < x0) { m.x = x0 + m.r; m.vx = Math.abs(m.vx); }
+    if (m.x + m.r > x1) { m.x = x1 - m.r; m.vx = -Math.abs(m.vx); }
+  }
 }
 
 function tick() {
@@ -3280,19 +3304,51 @@ function tick() {
         const targetSlot = m.targetSlot;
         const { x0, x1 } = segmentBounds(targetSlot);
         
-        // Update hull rotation - oscillating rotation for dynamic movement
+        // ===== ORGANIC HULL ROTATION & MOVEMENT =====
+        // Big ships rotate slowly with momentum, and drift in the direction they're tilted
         if (m.hullRotation !== undefined) {
-          m.hullRotation += m.hullRotationSpeed * m.hullRotationDir * DT;
-          
-          // Oscillate between -15 and +15 degrees (±0.26 radians)
-          const maxRotation = 0.26;
-          if (m.hullRotation > maxRotation) {
-            m.hullRotation = maxRotation;
-            m.hullRotationDir = -1;
-          } else if (m.hullRotation < -maxRotation) {
-            m.hullRotation = -maxRotation;
-            m.hullRotationDir = 1;
+          // Update rotation change timer
+          m.hullRotationChangeTimer -= DT;
+          if (m.hullRotationChangeTimer <= 0) {
+            // Pick a new target rotation (max ±20 degrees = ±0.35 radians)
+            m.hullTargetRotation = (Math.random() - 0.5) * 0.35;
+            // Random time until next change (4-8 seconds for slow, ponderous movement)
+            m.hullRotationChangeTimer = 4 + Math.random() * 4;
           }
+          
+          // Calculate torque toward target (spring force)
+          const rotationDiff = m.hullTargetRotation - m.hullRotation;
+          const torque = rotationDiff * 0.3; // Soft spring constant for slow response
+          
+          // Apply torque to angular velocity
+          m.hullRotationVelocity += torque * DT;
+          
+          // Apply angular drag (heavy ship = lots of drag)
+          m.hullRotationVelocity *= 0.98;
+          
+          // Clamp angular velocity (max ~5 degrees/sec = 0.09 rad/s)
+          const maxAngVel = 0.09;
+          m.hullRotationVelocity = Math.max(-maxAngVel, Math.min(maxAngVel, m.hullRotationVelocity));
+          
+          // Update rotation
+          m.hullRotation += m.hullRotationVelocity * DT;
+          
+          // Soft clamp rotation (max ±25 degrees)
+          const maxRot = 0.44;
+          if (m.hullRotation > maxRot) m.hullRotation = maxRot;
+          if (m.hullRotation < -maxRot) m.hullRotation = -maxRot;
+          
+          // ===== DRIFT BASED ON ROTATION =====
+          // Ship drifts sideways in the direction it's tilted
+          const driftStrength = 40; // Pixels/sec per radian of tilt
+          const targetVx = Math.sin(m.hullRotation) * driftStrength;
+          
+          // Smoothly interpolate horizontal velocity (heavy ship = slow to change direction)
+          m.vx = m.vx * 0.95 + targetVx * 0.05;
+          
+          // Vertical speed reduces slightly when rotating (ship is maneuvering)
+          const rotationPenalty = 1 - Math.abs(m.hullRotationVelocity) * 2;
+          m.vy = (m.baseVy || config.speed * 30) * Math.max(0.85, rotationPenalty);
         }
         
         // Initialize turret target positions if not set
