@@ -116,9 +116,9 @@ const ATTACK_TYPES = {
 };
 
 // ===== Battleship Enemy Type =====
-// Large spaceship enemy that spawns after wave 15 with 4 turrets
+// Large spaceship enemy that spawns as boss alternative every 10 waves (50% chance)
 const BATTLESHIP_CONFIG = {
-  baseHp: 20,
+  baseHp: 20, // Fallback only - actual HP comes from boss calculation
   hpPerWave: 3,
   speed: 0.25, // Slow moving
   size: 28, // Radius for collision (was 45, now ~50% smaller)
@@ -135,12 +135,8 @@ const BATTLESHIP_CONFIG = {
     { x: -49, y: 48 },   // Third turret
     { x: 47, y: 48 }     // Fourth turret
   ],
-  // Turret pivot point in the 35x46 turret sprite
-  turretPivot: { x: 18, y: 17 },
-  // Barrel length - distance from pivot to muzzle tip (in turret sprite pixels)
-  // The turret sprite is 46px tall, pivot is at y=17, barrel tip at y=0
-  // So barrel extends 17 pixels from pivot toward the tip
-  barrelLength: 17
+  // Turret pivot point in the 35x46 turret sprite (for rendering)
+  turretPivot: { x: 18, y: 17 }
 };
 
 // ===== Tower Modules (Boss Rewards) =====
@@ -1072,13 +1068,19 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
 }
 
 // ===== BATTLESHIP ENEMY =====
-function createBattleship(x, y, targetSlot) {
+function createBattleship(x, y, targetSlot, bossHp = null) {
   const id = uid();
   const config = BATTLESHIP_CONFIG;
   
-  // Calculate HP based on wave
-  const extremeScaleMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
-  const hp = Math.ceil((config.baseHp + wave * config.hpPerWave) * extremeScaleMult);
+  // Use provided boss HP, or calculate based on wave (fallback)
+  let hp;
+  if (bossHp !== null) {
+    hp = bossHp;
+  } else {
+    // Fallback calculation (shouldn't be used in production)
+    const extremeScaleMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
+    hp = Math.ceil((config.baseHp + wave * config.hpPerWave) * extremeScaleMult);
+  }
   
   // Each turret has 25% of total ship HP
   const turretHp = Math.ceil(hp * 0.25);
@@ -1150,6 +1152,9 @@ function spawnWave() {
     // Use same extreme scaling as normal asteroids for consistency
     const extremeScaleMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
     
+    // 50% chance for battleship boss vs regular boss (same for all players)
+    const isBattleshipWave = Math.random() < 0.5;
+    
     for (let playerIdx = 0; playerIdx < playerCount; playerIdx++) {
       const playerId = lockedSlots[playerIdx];
       const player = players.get(playerId);
@@ -1168,38 +1173,28 @@ function spawnWave() {
       // SCALING ADJUSTMENT: Reduced by 25%
       const bossHp = Math.ceil(baseBossHp * extremeScaleMult * 0.75);
       
-      spawnQueue.push({ 
-        x: x0 + SEGMENT_W / 2, 
-        y: -180, // Start high above screen
-        type: "boss", 
-        hp: bossHp, 
-        targetSlot, 
-        attackType: null 
-      });
+      if (isBattleshipWave) {
+        // Spawn battleship boss with same HP as regular boss would have
+        const battleship = createBattleship(
+          x0 + SEGMENT_W / 2,
+          -80,
+          targetSlot,
+          bossHp // Pass the boss HP
+        );
+        missiles.push(battleship);
+      } else {
+        // Spawn regular boss
+        spawnQueue.push({ 
+          x: x0 + SEGMENT_W / 2, 
+          y: -180, // Start high above screen
+          type: "boss", 
+          hp: bossHp, 
+          targetSlot, 
+          attackType: null 
+        });
+      }
     }
     return; // Skip normal spawns
-  }
-
-  // ===== BATTLESHIP SPAWN (Wave 1 for testing, change to wave >= 15 later) =====
-  // Spawn one battleship per player on applicable waves
-  if (wave >= 1) { // TODO: Change to wave >= 15 for production
-    const playerCount = lockedSlots.length;
-    for (let playerIdx = 0; playerIdx < playerCount; playerIdx++) {
-      const playerId = lockedSlots[playerIdx];
-      const player = players.get(playerId);
-      if (!player || player.hp <= 0) continue;
-      
-      const targetSlot = playerIdx;
-      const { x0, x1 } = segmentBounds(targetSlot);
-      
-      // Spawn battleship in center of lane, above screen
-      const battleship = createBattleship(
-        x0 + (x1 - x0) / 2,
-        -80,
-        targetSlot
-      );
-      missiles.push(battleship);
-    }
   }
 
   for (const id of lockedSlots) {
@@ -3344,15 +3339,10 @@ function tick() {
               y: GROUND_Y
             };
             
-            // Calculate shot spawn position at barrel tip (muzzle)
-            // The barrel extends from the turret base in the direction it's pointing
-            // Barrel length in pixels, converted to world units
+            // Bullets spawn from the CENTER of the turret (turretBaseX/Y is already the turret center)
             const bulletAngle = m.turretAngles[t];
-            const barrelLengthWorld = config.barrelLength * pixelToWorld;
-            
-            // Spawn at turret base + full barrel length in firing direction
-            const shotX = turretBaseX + Math.cos(bulletAngle) * barrelLengthWorld;
-            const shotY = turretBaseY + Math.sin(bulletAngle) * barrelLengthWorld;
+            const shotX = turretBaseX;
+            const shotY = turretBaseY;
             
             const bulletSpeed = config.bulletSpeed;
             const vx = Math.cos(bulletAngle) * bulletSpeed;
