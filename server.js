@@ -59,7 +59,6 @@ const broadcastState = {
   events: [],
   shieldExplosions: [],
   ghostAllies: [],
-  gravityWells: [],
   moduleCardPhase: false,
   modulePickTimer: 0,
   currentModulePicker: null,
@@ -70,7 +69,6 @@ for (let i = 0; i < 250; i++) broadcastState.missiles.push({});
 for (let i = 0; i < 150; i++) broadcastState.bullets.push({});
 for (let i = 0; i < 15; i++) broadcastState.shieldExplosions.push({});
 for (let i = 0; i < 30; i++) broadcastState.ghostAllies.push({});
-for (let i = 0; i < 15; i++) broadcastState.gravityWells.push({});
 for (let i = 0; i < 4; i++) broadcastState.players.push({ upgrades: {} });
 
 const BASE_HP_PER_PLAYER = 20;
@@ -176,14 +174,6 @@ const TOWER_MODULES = {
     desc: "Killing blows create ghost allies that damage enemies",
     effect: "ghostAlly"
   },
-  quantumDisplacer: {
-    id: "quantumDisplacer",
-    name: "Quantum Displacer",
-    icon: "⏳", 
-    color: "#ff44ff",
-    desc: "10% chance to teleport enemy back to top (5% for bosses)",
-    effect: "teleport"
-  },
   russianRoulette: {
     id: "russianRoulette",
     name: "Russian Roulette",
@@ -191,14 +181,6 @@ const TOWER_MODULES = {
     color: "#ff0000",
     desc: "Random 0x-3x damage multiplier per shot",
     effect: "randomDamage"
-  },
-  gravityWell: {
-    id: "gravityWell",
-    name: "Gravity Well",
-    icon: "🕳️",
-    color: "#440088",
-    desc: "Bullets pull nearby enemies together for 2s",
-    effect: "gravity"
   },
   vampiricNanobots: {
     id: "vampiricNanobots",
@@ -515,7 +497,6 @@ let bullets = [];
 let enemyBullets = []; // Battleship bullets that can hit player turrets
 let shieldExplosions = []; // Active shield explosions that deal damage
 let ghostAllies = []; // Necromancer ghost allies flying upward
-let gravityWells = []; // Active gravity wells pulling enemies
 
 // Shield sphere radius (as fraction of segment width)
 const SHIELD_RADIUS_MULT = 0.45;
@@ -1060,7 +1041,6 @@ function createAsteroid(x, y, type, hp, targetSlot, attackType = null, senderId 
     inFTL: (activeGameModifier === "sideswiped" && !isBossType && !isSpawnedMinion) ? false : true,
     ftlThreshold: ftlThreshold,
     ftlTrail: [],
-    gravityExposure: 0, // Track time spent in gravity wells for diminishing returns
     // GAME MODIFIER: Elusiveness tracking
     aliveTime: 0, // Track how long asteroid has been alive
     lastTeleportTime: 0, // Track last teleport for cooldown
@@ -1151,7 +1131,6 @@ function spawnWave() {
   enemyBullets = []; // Clear battleship bullets
   shieldExplosions = [];
   ghostAllies = [];
-  gravityWells = [];
   spawnQueue = [];
   spawnTimer = 0;
   waveElapsedTime = 0; // Reset gravity timer for new wave
@@ -2154,6 +2133,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     maxLifespan: lifespan, // For Temporal Boomerang
     isTowerBullet: !isPlayerBullet,
     bulletType: bulletType,
+    sourceTowerType: originalBulletType, // Original tower type before confetti changes it (for fractal shard homing)
     chainChance: chainChance,
     ricochet: ricochet,
     pierce: pierce,
@@ -2493,20 +2473,6 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
       }
       
       queueEvent("explosion", { x: m.x, y: m.y, color: "#0f0", radius: 20 });
-      
-      // Gravity Well: Create gravity pull effect per copy (STACKS)
-      const gravityRailgunCount = countModule(modules, "gravityWell");
-      if (gravityRailgunCount > 0) {
-        const baseRadius = 100 + (gravityRailgunCount - 1) * 30;
-        const baseStrength = 80 + (gravityRailgunCount - 1) * 40;
-        gravityWells.push({
-          x: m.x, y: m.y,
-          targetId: m.id,
-          life: 2.0, radius: baseRadius, strength: baseStrength,
-          ownerSlot: ownerSlot
-        });
-        queueEvent("gravityWell", { x: m.x, y: m.y });
-      }
     }
     
     queueEvent("hit", { 
@@ -3848,102 +3814,120 @@ function tick() {
         if (m.isPhased && Math.random() > 0.3) continue;
         if (b.hitSet && b.hitSet.has(m.id)) continue; // O(1) Set lookup
         
-        const rr = m.r + b.r;
-        const dx = m.x - b.x;
-        if (dx > rr || dx < -rr) continue; // Quick X reject
-        const dy = m.y - b.y;
-        if (dy > rr || dy < -rr) continue; // Quick Y reject
+        // Battleship uses elliptical hitbox (double height)
+        if (m.isBattleship) {
+          const rx = m.r + b.r; // Horizontal radius
+          const ry = m.r * 2 + b.r; // Vertical radius (doubled)
+          const dx = m.x - b.x;
+          const dy = m.y - b.y;
+          
+          // Quick reject
+          if (dx > rx || dx < -rx) continue;
+          if (dy > ry || dy < -ry) continue;
+          
+          // Ellipse collision: (dx/rx)^2 + (dy/ry)^2 <= 1
+          const normalizedDist = (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry);
+          if (normalizedDist > 1) continue;
+        } else {
+          // Normal circular collision for other enemies
+          const rr = m.r + b.r;
+          const dx = m.x - b.x;
+          if (dx > rr || dx < -rr) continue; // Quick X reject
+          const dy = m.y - b.y;
+          if (dy > rr || dy < -rr) continue; // Quick Y reject
+          
+          if (dx * dx + dy * dy > rr * rr) continue;
+        }
         
-        if (dx * dx + dy * dy <= rr * rr) {
-          // Apply on-hit damage modifiers (Executioner's Sight, Momentum Lens)
-          const hitDamage = applyOnHitDamageModifiers(b.dmg, b.modules, m, { totalDistance: b.totalDistance });
-          
-          m.hp -= hitDamage;
+        // Apply on-hit damage modifiers (Executioner's Sight, Momentum Lens)
+        const hitDamage = applyOnHitDamageModifiers(b.dmg, b.modules, m, { totalDistance: b.totalDistance });
+        
+        m.hp -= hitDamage;
 
-          // BOSS MECHANIC: Spawn 5 minions at 75%, 50%, 25% HP (3 times total)
-          if (m.type === "boss" && m.bossSpawnCount < 3) {
-            const hpPercent = m.hp / m.maxHp;
-            const nextThreshold = 1 - ((m.bossSpawnCount + 1) * 0.25); // 0.75, 0.50, 0.25
-            if (hpPercent <= nextThreshold) {
-              m.bossSpawnCount++;
-              // ENTITY CAP: Limit spawns to available slots
-              const adsToSpawn = Math.min(5, MAX_MISSILES - missiles.length);
-              for(let k=0; k<adsToSpawn; k++) {
-                const bossAdVariant = (k % 5) + 1; // Cycle through 1-5
-                missiles.push(createAsteroid(
-                  m.x + rand(-50, 50), 
-                  m.y + rand(20, 100), 
-                  "medium", 
-                  Math.max(2, wave), 
-                  m.targetSlot,
-                  null,  // attackType
-                  null,  // senderId
-                  null,  // senderSlot
-                  bossAdVariant,  // bossAdVariant (1-5)
-                  false, // Boss ads give 1 gold each
-                  false  // Not a mini-boss
-                ));
-              }
-              createExplosion(m.x, m.y, 60, "#ff0000");
+        // BOSS MECHANIC: Spawn 5 minions at 75%, 50%, 25% HP (3 times total)
+        if (m.type === "boss" && m.bossSpawnCount < 3) {
+          const hpPercent = m.hp / m.maxHp;
+          const nextThreshold = 1 - ((m.bossSpawnCount + 1) * 0.25); // 0.75, 0.50, 0.25
+          if (hpPercent <= nextThreshold) {
+            m.bossSpawnCount++;
+            // ENTITY CAP: Limit spawns to available slots
+            const adsToSpawn = Math.min(5, MAX_MISSILES - missiles.length);
+            for(let k=0; k<adsToSpawn; k++) {
+              const bossAdVariant = (k % 5) + 1; // Cycle through 1-5
+              missiles.push(createAsteroid(
+                m.x + rand(-50, 50), 
+                m.y + rand(20, 100), 
+                "medium", 
+                Math.max(2, wave), 
+                m.targetSlot,
+                null,  // attackType
+                null,  // senderId
+                null,  // senderSlot
+                bossAdVariant,  // bossAdVariant (1-5)
+                false, // Boss ads give 1 gold each
+                false  // Not a mini-boss
+              ));
             }
+            createExplosion(m.x, m.y, 60, "#ff0000");
           }
-          
-          // MINI-BOSS MECHANIC: Spawn 3 smaller minions at 75%, 50%, 25% HP (3 times total)
-          if (m.isMiniBoss && m.bossSpawnCount < 3) {
-            const hpPercent = m.hp / m.maxHp;
-            const nextThreshold = 1 - ((m.bossSpawnCount + 1) * 0.25); // 0.75, 0.50, 0.25
-            if (hpPercent <= nextThreshold) {
-              m.bossSpawnCount++;
-              // ENTITY CAP: Limit spawns to available slots
-              const adsToSpawn = Math.min(3, MAX_MISSILES - missiles.length);
-              for(let k=0; k<adsToSpawn; k++) {
-                // Smaller minions for mini-boss (minibossAd type)
-                const miniAdHp = Math.max(1, Math.ceil(wave * 0.3)); // Less HP than boss ads
-                const miniAd = createAsteroid(
-                  m.x + rand(-25, 25), 
-                  m.y + rand(10, 40), 
-                  "minibossAd", 
-                  miniAdHp, 
-                  m.targetSlot,
-                  null,  // attackType
-                  null,  // senderId
-                  null,  // senderSlot
-                  null,  // bossAdVariant
-                  false, // Gives 1 gold each
-                  false  // Not a mini-boss
-                );
-                miniAd.isMiniBossAd = true;
-                miniAd.inFTL = false; // Spawn immediately
-                missiles.push(miniAd);
-              }
-              createExplosion(m.x, m.y, 30, "#ff4400");
+        }
+        
+        // MINI-BOSS MECHANIC: Spawn 3 smaller minions at 75%, 50%, 25% HP (3 times total)
+        if (m.isMiniBoss && m.bossSpawnCount < 3) {
+          const hpPercent = m.hp / m.maxHp;
+          const nextThreshold = 1 - ((m.bossSpawnCount + 1) * 0.25); // 0.75, 0.50, 0.25
+          if (hpPercent <= nextThreshold) {
+            m.bossSpawnCount++;
+            // ENTITY CAP: Limit spawns to available slots
+            const adsToSpawn = Math.min(3, MAX_MISSILES - missiles.length);
+            for(let k=0; k<adsToSpawn; k++) {
+              // Smaller minions for mini-boss (minibossAd type)
+              const miniAdHp = Math.max(1, Math.ceil(wave * 0.3)); // Less HP than boss ads
+              const miniAd = createAsteroid(
+                m.x + rand(-25, 25), 
+                m.y + rand(10, 40), 
+                "minibossAd", 
+                miniAdHp, 
+                m.targetSlot,
+                null,  // attackType
+                null,  // senderId
+                null,  // senderSlot
+                null,  // bossAdVariant
+                false, // Gives 1 gold each
+                false  // Not a mini-boss
+              );
+              miniAd.isMiniBossAd = true;
+              miniAd.inFTL = false; // Spawn immediately
+              missiles.push(miniAd);
             }
+            createExplosion(m.x, m.y, 30, "#ff4400");
           }
-          
-          // BERSERKER MECHANIC: Speed up when hit (max 2x speed at low HP)
-          if (m.isBerserker && m.hp > 0) {
-            const hpPercent = m.hp / m.maxHp;
-            const speedBoost = 1 + (1 - hpPercent) * 1.5; // 1x at full HP, up to 2.5x at low HP
-            const baseSpeed = Math.abs(m.vy) / speedBoost; // Get original base speed
-            m.vy = (m.vy > 0 ? 1 : -1) * baseSpeed * speedBoost;
-            // Also slightly increase horizontal movement
-            m.vx = m.vx * 1.02;
-          }
+        }
+        
+        // BERSERKER MECHANIC: Speed up when hit (max 2x speed at low HP)
+        if (m.isBerserker && m.hp > 0) {
+          const hpPercent = m.hp / m.maxHp;
+          const speedBoost = 1 + (1 - hpPercent) * 1.5; // 1x at full HP, up to 2.5x at low HP
+          const baseSpeed = Math.abs(m.vy) / speedBoost; // Get original base speed
+          m.vy = (m.vy > 0 ? 1 : -1) * baseSpeed * speedBoost;
+          // Also slightly increase horizontal movement
+          m.vx = m.vx * 1.02;
+        }
 
-          if (!b.hitSet) b.hitSet = new Set();
-          b.hitSet.add(m.id);
-          
-          // ===== TOWER MODULE EFFECTS ON HIT =====
-          // SYNERGY SYSTEM: Modules should work together! When spawning child bullets
-          // (shards, ricochets, etc.), inherit the parent's modules so effects chain.
-          // Example: Fractal Prism + Viral Payload = shards can infect enemies
-          // Example: Fractal Prism + Taxman = shards generate gold on hit
-          // IMPORTANT: Always pass modules to child bullets to enable creative combos!
-          const bulletModules = b.modules || [];
-          const owner = players.get(b.ownerId);
-          
-          // PERF: Skip all module checks if bullet has no modules
-          const hasModules = bulletModules.length > 0;
+        if (!b.hitSet) b.hitSet = new Set();
+        b.hitSet.add(m.id);
+        
+        // ===== TOWER MODULE EFFECTS ON HIT =====
+        // SYNERGY SYSTEM: Modules should work together! When spawning child bullets
+        // (shards, ricochets, etc.), inherit the parent's modules so effects chain.
+        // Example: Fractal Prism + Viral Payload = shards can infect enemies
+        // Example: Fractal Prism + Taxman = shards generate gold on hit
+        // IMPORTANT: Always pass modules to child bullets to enable creative combos!
+        const bulletModules = b.modules || [];
+        const owner = players.get(b.ownerId);
+        
+        // PERF: Skip all module checks if bullet has no modules
+        const hasModules = bulletModules.length > 0;
           
           // 🎉 CONFETTI CANNON: Party explosion on hit!
           if (hasModules && bulletModules.includes("confettiCannon")) {
@@ -3972,7 +3956,8 @@ function tick() {
             }
             
             // Check if parent bullet was from missile tower - shards will be homing!
-            const isMissileShard = b.bulletType === "missile";
+            // Use sourceTowerType to check original tower type (before confetti changes bulletType)
+            const isMissileShard = (b.sourceTowerType === "missile") || (b.bulletType === "missile");
             
             // Find targets for homing shards (missile tower only)
             let homingTargets = [];
@@ -4013,9 +3998,10 @@ function tick() {
                 dmg: b.dmg * 0.3,
                 isCrit: false,
                 explosive: Math.floor(b.explosive * 0.5), // Half explosive power
-                lifespan: 1.5, // 50% increased range
+                lifespan: 1.0, // Consistent short lifespan for all shard types
                 isTowerBullet: b.isTowerBullet,
                 bulletType: b.bulletType, // VISUAL: Inherit parent's bullet type (gatling/sniper/missile/main)
+                sourceTowerType: b.sourceTowerType || b.bulletType, // Preserve original tower type for nested effects
                 chainChance: b.chainChance, // Inherit chain lightning chance
                 ricochet: b.ricochet, // Inherit ricochet stacks - shards can chain too!
                 pierce: b.pierce, // Inherit pierce - shards can pierce too!
@@ -4049,40 +4035,6 @@ function tick() {
                 targetId: shard.targetId, // Target for homing
               });
             }
-          }
-          
-          // Quantum Displacer: teleport chance per copy (STACKS ADDITIVELY)
-          // SYNERGY: Inherited by shards/ricochets - each child bullet has teleport chance!
-          // 1x = 10% (5% boss), 2x = 20% (10% boss), 3x = 30% (15% boss)
-          const quantumCount = countModule(bulletModules, "quantumDisplacer");
-          if (quantumCount > 0 && m.hp > 0) {
-            const teleportChance = (m.type === "boss" || m.isBoss) 
-              ? 0.05 * quantumCount 
-              : 0.10 * quantumCount;
-            if (Math.random() < teleportChance) {
-              m.y = -m.r - 20;
-              m.inFTL = true;
-              queueEvent("teleport", { x: m.x, y: m.y });
-            }
-          }
-          
-          // Gravity Well: Create gravity pull effect per copy (STACKS)
-          // SYNERGY: Shards can create multiple gravity wells, ricochets leave wells at each bounce!
-          // 1x = 100 radius, 80 strength. 2x = 130 radius, 120 strength. 3x = 160 radius, 160 strength
-          const gravityCount = countModule(bulletModules, "gravityWell");
-          if (gravityCount > 0 && m.hp > 0) {
-            const baseRadius = 100 + (gravityCount - 1) * 30;
-            const baseStrength = 80 + (gravityCount - 1) * 40;
-            gravityWells.push({
-              x: m.x,
-              y: m.y,
-              targetId: m.id,
-              life: 2.0,
-              radius: baseRadius,
-              strength: baseStrength,
-              ownerSlot: b.ownerSlot
-            });
-            queueEvent("gravityWell", { x: m.x, y: m.y });
           }
           
           // Vampiric Nanobots: Accumulate damage for healing (STACKS)
@@ -4192,6 +4144,7 @@ function tick() {
                       lifespan: 3.0,
                       isTowerBullet: b.isTowerBullet,
                       bulletType: b.bulletType,
+                      sourceTowerType: b.sourceTowerType || b.bulletType, // Preserve original tower type
                       chainChance: b.chainChance,
                       ricochet: b.ricochet - 1,
                       pierce: b.pierce,
@@ -4236,6 +4189,7 @@ function tick() {
                     lifespan: 3.0,
                     isTowerBullet: b.isTowerBullet,
                     bulletType: b.bulletType,
+                    sourceTowerType: b.sourceTowerType || b.bulletType, // Preserve original tower type
                     chainChance: b.chainChance, // Inherit chain lightning
                     ricochet: b.ricochet - 1, // Decrement ricochet counter
                     pierce: b.pierce, // Inherit pierce (used after ricochet depleted)
@@ -4604,7 +4558,6 @@ function tick() {
           }
           createExplosion(b.x, b.y, 15, b.isCrit ? "#ff0" : "#0ff");
           if (b.dead) break;
-        }
       }
     }
 
@@ -4781,82 +4734,6 @@ function tick() {
       }
     }
     enemyBullets.length = ebWriteIdx;
-    
-    // Gravity Well update - pull nearby enemies
-    // PERFORMANCE: Added quick bounding box rejection before distance check
-    // DIMINISHING RETURNS: Asteroids become resistant to gravity the longer they're exposed
-    // PERF: Traditional for loop
-    for (let gwi = 0; gwi < gravityWells.length; gwi++) {
-      const well = gravityWells[gwi];
-      well.life -= DT;
-      const radius = well.radius;
-      const radiusSq = radius * radius;
-      
-      // Pull nearby enemies toward the well center - use slot bucket
-      const wellSlotMissiles = missilesBySlot[well.ownerSlot];
-      if (wellSlotMissiles) {
-        for (let wi = 0; wi < wellSlotMissiles.length; wi++) {
-          const m = wellSlotMissiles[wi];
-          if (m.dead) continue;
-          
-          const dx = well.x - m.x;
-          if (dx > radius || dx < -radius) continue; // Quick X reject
-          const dy = well.y - m.y;
-          if (dy > radius || dy < -radius) continue; // Quick Y reject
-          
-          const distSq = dx * dx + dy * dy;
-          
-          // Quick squared distance check before expensive sqrt
-          if (distSq < radiusSq && distSq > 25) { // 25 = 5*5
-            const dist = Math.sqrt(distSq);
-            
-            // DIMINISHING RETURNS: effectiveness = 1 / sqrt(1 + exposure/threshold)
-            // After 1 second: ~71% effectiveness
-            // After 2 seconds: ~58% effectiveness
-            // After 4 seconds: ~45% effectiveness
-            const exposureThreshold = 1.0; // Seconds before diminishing kicks in hard
-            const diminishFactor = 1 / Math.sqrt(1 + m.gravityExposure / exposureThreshold);
-            
-            // Calculate pull strength
-            const pullAccel = (well.strength / dist) * diminishFactor * 2;
-            
-            // Apply horizontal pull (can pull left/right freely)
-            m.vx += (dx / dist) * pullAccel * DT;
-            
-            // Apply vertical pull with restrictions:
-            // - Can slow down asteroids (reduce vy magnitude toward 0)
-            // - Can speed up asteroids going down (increase positive vy)
-            // - NEVER reverse direction to go upward (vy must stay >= 0)
-            const vyPull = (dy / dist) * pullAccel * DT;
-            const newVy = m.vy + vyPull;
-            
-            // Only apply if it doesn't make asteroid go upward
-            if (newVy >= 0) {
-              m.vy = newVy;
-            } else {
-              // Clamp to 0 - asteroid stops vertically but doesn't reverse
-              m.vy = Math.max(0, m.vy * 0.95); // Slow down instead
-            }
-            
-            // Small horizontal position pull for visual feedback
-            const posPull = (well.strength / dist) * DT * diminishFactor * 0.3;
-            m.x += (dx / dist) * posPull;
-            // No vertical position pull - let velocity handle it
-            
-            // Track exposure time
-            m.gravityExposure += DT;
-          }
-        }
-      }
-    }
-    // OPTIMIZED: O(1) removal for gravity wells
-    let gwWriteIdx = 0;
-    for (let i = 0; i < gravityWells.length; i++) {
-      if (gravityWells[i].life > 0) {
-        gravityWells[gwWriteIdx++] = gravityWells[i];
-      }
-    }
-    gravityWells.length = gwWriteIdx;
     
     // Chain Reaction - check for static charged asteroid collisions
     // OPTIMIZED: Only check within same slot (missiles can't leave their slot)
@@ -5181,21 +5058,6 @@ function broadcastGameState() {
     obj.ownerSlot = g.ownerSlot;
   }
   broadcastState.ghostAllies.length = gaCount;
-  
-  // Fill gravityWells
-  const gwCount = gravityWells.length;
-  while (broadcastState.gravityWells.length < gwCount) {
-    broadcastState.gravityWells.push({});
-  }
-  for (let i = 0; i < gwCount; i++) {
-    const w = gravityWells[i];
-    const obj = broadcastState.gravityWells[i];
-    obj.x = Math.round(w.x);
-    obj.y = Math.round(w.y);
-    obj.radius = w.radius;
-    obj.life = Math.round(w.life * 10) / 10;
-  }
-  broadcastState.gravityWells.length = gwCount;
   
   // Fill players
   const playerCount = lockedSlots.length;

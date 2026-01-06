@@ -3894,40 +3894,6 @@
           ctx.shadowBlur = 0;
         }
       }
-      
-      // Gravity Wells
-      if (lastSnap.gravityWells) {
-        for (const well of lastSnap.gravityWells) {
-          const alpha = Math.min(1, well.life / 0.5);
-          const x = well.x * sx;
-          const y = well.y * sy;
-          const r = well.radius * sx;
-          
-          // Swirling effect
-          ctx.save();
-          ctx.translate(x, y);
-          
-          const time = Date.now() * 0.003;
-          for (let ring = 0; ring < 3; ring++) {
-            const ringR = r * (0.3 + ring * 0.25);
-            const ringAlpha = alpha * (1 - ring * 0.3);
-            
-            ctx.strokeStyle = hexToRgba("#440088", ringAlpha);
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.arc(0, 0, ringR, time + ring, time + ring + Math.PI * 1.5);
-            ctx.stroke();
-          }
-          
-          // Center dot
-          ctx.fillStyle = hexToRgba("#8800ff", alpha);
-          ctx.beginPath();
-          ctx.arc(0, 0, 5, 0, Math.PI * 2);
-          ctx.fill();
-          
-          ctx.restore();
-        }
-      }
 
       // Particles
       if (lastSnap.particles) {
