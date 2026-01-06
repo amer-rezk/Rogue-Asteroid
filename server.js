@@ -9,6 +9,14 @@
 // - Asteroid vertices/rotation cached client-side from spawn events
 // - PREDICTIVE AIMING: No homing - bullets aim at intercept point
 // - Multishot bullets can target different asteroids
+// ARCHITECTURE:
+// - Server physics at 60Hz, broadcasts at ~30Hz (optimized for dedicated hosting)
+// - Client renders with interpolation for smooth visuals
+// - This eliminates all desync - client always matches server
+// - Particles/damage numbers are client-side (visual only)
+// - Asteroid vertices/rotation cached client-side from spawn events
+// - PREDICTIVE AIMING: No homing - bullets aim at intercept point
+// - Multishot bullets can target different asteroids
 
 const express = require("express");
 const http = require("http");
