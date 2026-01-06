@@ -3339,10 +3339,20 @@ function tick() {
               y: GROUND_Y
             };
             
-            // Bullets spawn from the CENTER of the turret (turretBaseX/Y is already the turret center)
+            // Bullets spawn from the CENTER of the turret IMAGE
+            // Turret sprite is 35x46, pivot is at (18, 17), center is at (17.5, 23)
+            // Offset from pivot to image center: (-0.5, 6) in sprite-local coords
             const bulletAngle = m.turretAngles[t];
-            const shotX = turretBaseX;
-            const shotY = turretBaseY;
+            const rotationAngle = bulletAngle - Math.PI / 2; // Same rotation as rendering
+            
+            // Rotate the pivot-to-center offset by the turret's rotation
+            const pivotToCenterX = -0.5;
+            const pivotToCenterY = 6;
+            const rotatedOffsetX = pivotToCenterX * Math.cos(rotationAngle) - pivotToCenterY * Math.sin(rotationAngle);
+            const rotatedOffsetY = pivotToCenterX * Math.sin(rotationAngle) + pivotToCenterY * Math.cos(rotationAngle);
+            
+            const shotX = turretBaseX + rotatedOffsetX;
+            const shotY = turretBaseY + rotatedOffsetY;
             
             const bulletSpeed = config.bulletSpeed;
             const vx = Math.cos(bulletAngle) * bulletSpeed;
