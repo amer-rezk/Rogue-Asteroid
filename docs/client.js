@@ -67,6 +67,8 @@
     { main: "#ff00ff", dark: "#660066", name: "MAGENTA" },
     { main: "#00ff88", dark: "#006633", name: "GREEN" },
     { main: "#ffaa00", dark: "#664400", name: "ORANGE" },
+    { main: "#ff4444", dark: "#660000", name: "RED" },
+    { main: "#8844ff", dark: "#330066", name: "PURPLE" },
   ];
 
   // Tower Config (must match server)
@@ -3570,13 +3572,18 @@
       if (!lastSnap) return;
 
       // ===== OPPONENT SCALING =====
-      // Scale down opponent segments by 50% to give more space and improve performance
+      // Scale down opponent segments by 50% when there are 4+ players
+      // With 3 or fewer players, keep normal scaling for everyone
       const myPlayer = lastSnap.players?.find(p => p.id === myId);
       const mySlot = myPlayer ? myPlayer.slot : -1;
+      const playerCount = lastSnap.players?.length || 0;
       
-      // Get scale multiplier for a given slot (1.0 for local player, 0.5 for opponents)
+      // Get scale multiplier for a given slot
+      // 1-3 players: everyone stays 1.0 (normal)
+      // 4+ players: local player 1.0, opponents 0.5
       const getSlotScale = (slot) => {
-        return (slot === mySlot) ? 1.0 : 0.5;
+        if (playerCount <= 3) return 1.0; // Normal scaling with 3 or fewer players
+        return (slot === mySlot) ? 1.0 : 0.5; // Scale opponents when 4+ players
       };
 
 
@@ -5398,7 +5405,7 @@
         ctx.textAlign = "left";
       }
       
-      const myPlayer = lastSnap.players.find(p => p.id === myId);
+      myPlayer = lastSnap.players.find(p => p.id === myId);
       if (myPlayer) {
         // Gold display (positioned after modifier or at base position)
         const goldX = Math.max(hudNextX, 160);
@@ -7178,7 +7185,7 @@
         }
         
         // Reroll button to the right of cards
-        const myPlayer = lastSnap?.players.find(p => p.id === myId);
+        myPlayer = lastSnap?.players.find(p => p.id === myId);
         const myGold = myPlayer?.gold || 0;
         const canAffordReroll = myGold >= currentRerollCost;
         
