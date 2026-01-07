@@ -39,7 +39,7 @@ const MAX_BULLET_EVENTS_LARGE = 80;   // Max bullet spawn events with 3+ players
 const MAX_VISUAL_EVENTS = 30;         // Max explosion/damage events per tick (was 20)
 
 // ===== Game constants =====
-const MAX_PLAYERS = 4;
+const MAX_PLAYERS = 6;
 
 const WORLD_H = 600;
 const GROUND_Y = 560;
@@ -69,7 +69,7 @@ for (let i = 0; i < 250; i++) broadcastState.missiles.push({});
 for (let i = 0; i < 150; i++) broadcastState.bullets.push({});
 for (let i = 0; i < 15; i++) broadcastState.shieldExplosions.push({});
 for (let i = 0; i < 30; i++) broadcastState.ghostAllies.push({});
-for (let i = 0; i < 4; i++) broadcastState.players.push({ upgrades: {} });
+for (let i = 0; i < 6; i++) broadcastState.players.push({ upgrades: {} });
 
 const BASE_HP_PER_PLAYER = 20;
 
@@ -92,6 +92,8 @@ const PLAYER_COLORS = [
   { main: "#00ffff", dark: "#006666", name: "CYAN" },
   { main: "#ff00ff", dark: "#660066", name: "MAGENTA" },
   { main: "#00ff88", dark: "#006633", name: "GREEN" },
+  { main: "#ff4444", dark: "#660000", name: "RED" },
+  { main: "#8844ff", dark: "#330066", name: "PURPLE" },
   { main: "#ffaa00", dark: "#664400", name: "ORANGE" },
 ];
 
