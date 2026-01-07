@@ -808,7 +808,7 @@ const UPGRADE_DEFS = [
   { id: "multi", name: "Multishot", cat: "offense", icon: "⚔️", desc: "+{val} Bullets (-{penalty}% dmg)", stat: "multishot", base: 1, type: "multishot" },
   { id: "crit", name: "Crit Scope", cat: "offense", icon: "🎯", desc: "+{val}% Crit Chance", stat: "critChance", base: 0.05, type: "add_cap", cap: 1.0 },
   { id: "boom", name: "Explosive", cat: "offense", icon: "💣", desc: "Explosions size +{val}", stat: "explosive", base: 1, type: "add" },
-  { id: "caliber", name: "Dissipating Slug", cat: "offense", icon: "⚫", desc: "3x size & dmg up close, shrinks over distance", stat: "bulletSize", base: 0.1125, type: "mult" },
+  { id: "caliber", name: "Dissipating Slug", cat: "offense", icon: "⚫", desc: "+{val}% slug chance", stat: "slugChance", base: 2.5, type: "add" },
   { id: "rico", name: "Ricochet", cat: "utility", icon: "🎱", desc: "Chains to {val} enemies (-10% dmg each)", stat: "ricochet", base: 1, type: "add" },
   { id: "pierce", name: "Railgun", cat: "utility", icon: "📌", desc: "Pierces {val} enemies", stat: "pierce", base: 1, type: "add" },
   { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "{val}% chance for Lightning", stat: "chainChance", base: 0.02, type: "add_cap", cap: 0.30 },
@@ -2098,19 +2098,21 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
   const baseBulletR = bulletR;
   
   // DISSIPATING SLUG (Caliber redesign):
-  // Bullets start at 3x size and shrink as they travel, dealing more damage up close
+  // Chance to fire a massive bullet that shrinks and loses damage over distance
+  // 2.5% / 5% / 7.5% / 10% chance per stack
   // Size and damage decay from 3x to 1x over ~300 pixels of travel
   let hasDissipatingSlug = false;
   let maxBulletR = bulletR;
   
-  if (!overrideProps && owner.upgrades?.bulletSize && owner.upgrades.bulletSize > 1) {
+  // Get slug chance from upgrades (stored as percentage, e.g. 2.5, 5, 7.5, 10)
+  const slugChancePct = !overrideProps 
+    ? (owner.upgrades?.slugChance || 0)
+    : (overrideProps?.inheritedUpgrades ? (overrideProps.slugChance || 0) : 0);
+  
+  if (slugChancePct > 0 && Math.random() < slugChancePct / 100) {
     hasDissipatingSlug = true;
     maxBulletR = baseBulletR * 3; // Start at 3x size
     bulletR = maxBulletR; // Initial size is max
-  } else if (overrideProps?.inheritedUpgrades && overrideProps.bulletSize && overrideProps.bulletSize > 1) {
-    hasDissipatingSlug = true;
-    maxBulletR = baseBulletR * 3;
-    bulletR = maxBulletR;
   }
 
   let dx = targetX - originX;
@@ -3047,7 +3049,7 @@ function tick() {
                     bulletSpeedMult: 1 + ((p.upgrades?.bulletSpeedMult ?? 1) - 1) * 0.75,
                     critChance: (p.upgrades?.critChance ?? 0) * 0.75,
                     explosive: Math.floor((p.upgrades?.explosive ?? 0) * 0.75),
-                    bulletSize: 1 + ((p.upgrades?.bulletSize ?? 1) - 1) * 0.75,
+                    slugChance: (p.upgrades?.slugChance ?? 0) * 0.75,
                     ricochet: Math.floor((p.upgrades?.ricochet ?? 0) * 0.75),
                     pierce: Math.floor((p.upgrades?.pierce ?? 0) * 0.75),
                     chainChance: (p.upgrades?.chainChance ?? 0) * 0.75,
@@ -3080,7 +3082,7 @@ function tick() {
                     bulletSpeedMult: 1 + ((u.bulletSpeedMult ?? 1) - 1) * 0.5,
                     critChance: (u.critChance ?? 0) * 0.5,
                     explosive: (stats.explosive || 0) + Math.floor((u.explosive ?? 0) * 0.5),
-                    bulletSize: 1 + ((u.bulletSize ?? 1) - 1) * 0.5,
+                    slugChance: (u.slugChance ?? 0) * 0.5,
                     lifespanAdd: (u.lifespanAdd ?? 0) * 0.5,
                     ricochet: Math.floor((u.ricochet ?? 0) * 0.5),
                     pierce: Math.floor((u.pierce ?? 0) * 0.5),
@@ -5148,7 +5150,7 @@ function broadcastGameState() {
     obj.upgrades.multishot = u.multishot || 1;
     obj.upgrades.critChance = u.critChance || 0;
     obj.upgrades.explosive = u.explosive || 0;
-    obj.upgrades.bulletSize = u.bulletSize || 1;
+    obj.upgrades.slugChance = u.slugChance || 0;
     obj.upgrades.pierce = u.pierce || 0;
 	obj.upgrades.slowfield = u.slowfield || 0;
     obj.upgrades.ricochet = u.ricochet || 0;
