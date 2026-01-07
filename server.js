@@ -802,7 +802,7 @@ const RARITY_CONFIG = {
 };
 
 const UPGRADE_DEFS = [
-  { id: "volatile", name: "Volatile Payload", cat: "offense", icon: "☠️", desc: "Kills explode for {val}% enemy HP", stat: "volatile", base: 15, type: "add" },
+  { id: "volatile", name: "Volatile Payload", cat: "offense", icon: "☠️", desc: "Kills explode for {val}% enemy HP", stat: "volatile", base: 8, type: "add" },
   { id: "dmg", name: "Heavy Rounds", cat: "offense", icon: "💥", desc: "+{val} Damage", stat: "damageAdd", base: 0.5, type: "add" },
   { id: "spd", name: "Velocity", cat: "offense", icon: "💨", desc: "+{val}% Bullet Speed", stat: "bulletSpeedMult", base: 0.08, type: "mult" },
   { id: "fire", name: "Rapid Fire", cat: "offense", icon: "🔥", desc: "+{val}% Fire Rate", stat: "fireRateMult", base: 0.05, type: "mult" },
@@ -4707,6 +4707,8 @@ function tick() {
           
           if (b.explosive > 0) {
             createExplosion(b.x, b.y, 35, "#fa0");
+            // Scale explosion damage with bullet damage and explosive level
+            const explosionDamage = b.dmg * 0.3 * b.explosive;
             // Use slot bucket instead of all missiles
             const explosiveSlotMissiles = missilesBySlot[b.ownerSlot];
             for (let ei = 0; ei < explosiveSlotMissiles.length; ei++) {
@@ -4716,7 +4718,7 @@ function tick() {
               const dy = m2.y - b.y;
               const touchR = 35 + m2.r;
               if (dx * dx + dy * dy < touchR * touchR) { 
-                m2.hp -= 1; 
+                m2.hp -= explosionDamage; 
                 if (m2.hp <= 0) {
                   m2.dead = true;
                   checkBossKill(m2, players.get(b.ownerId)); // <--- Add credit here
