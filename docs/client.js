@@ -3574,7 +3574,7 @@
       // ===== OPPONENT SCALING =====
       // Scale down opponent segments by 50% when there are 4+ players
       // With 3 or fewer players, keep normal scaling for everyone
-      const myPlayer = lastSnap.players?.find(p => p.id === myId);
+      let myPlayer = lastSnap.players?.find(p => p.id === myId);
       const mySlot = myPlayer ? myPlayer.slot : -1;
       const playerCount = lastSnap.players?.length || 0;
       
