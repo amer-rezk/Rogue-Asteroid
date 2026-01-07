@@ -2564,8 +2564,16 @@ function fireWithMultishot(owner, originX, originY, targetX, targetY, isManual =
   const targets = findMultipleTargets(originX, originY, owner.slot, shots);
   
   if (targets.length === 0) {
-    // No targets, fire at default position
-    fireBullet(owner, originX, originY, targetX, targetY, 0);
+    // FIX: Fire all multishot bullets in a spread if no targets found
+    if (shots <= 1) {
+      fireBullet(owner, originX, originY, targetX, targetY, 0);
+    } else {
+      const spread = 0.05; // Slight spread for auto-fire
+      for (let i = 0; i < shots; i++) {
+        const offset = (i - (shots - 1) / 2) * spread;
+        fireBullet(owner, originX, originY, targetX, targetY, offset);
+      }
+    }
     return;
   }
   
@@ -4152,6 +4160,10 @@ function tick() {
                 targetId: shard.targetId, // Target for homing
               });
             }
+            // FIX: Force the bullet to die to simulate "shattering"
+            b.dead = true; 
+            b.pierce = 0; // Stop it from piercing
+            b.ricochet = 0; // Stop it from bouncing
           }
           
           // Vampiric Nanobots: Accumulate damage for healing (STACKS)
