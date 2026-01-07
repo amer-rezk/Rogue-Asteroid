@@ -343,14 +343,6 @@ let activeDeathMods = {
 // ===== GAME MODIFIERS SYSTEM =====
 // Random game-altering rules selected at the start of each game
 const GAME_MODIFIERS = {
-  volatile: {
-    id: "volatile",
-    name: "Volatile Payload",
-    icon: "☠️", 
-    color: "#ff4400",
-    desc: "Enemies EXPLODE on death, damaging everything nearby!",
-    flavor: "\"Pop one, pop 'em all.\""
-  },
   noMobs: {
     id: "noMobs",
     name: "Pacifist Protocol",
@@ -810,6 +802,7 @@ const RARITY_CONFIG = {
 };
 
 const UPGRADE_DEFS = [
+  { id: "volatile", name: "Volatile Payload", cat: "offense", icon: "☠️", desc: "Kills explode for {val}% enemy HP", stat: "volatile", base: 15, type: "add" },
   { id: "dmg", name: "Heavy Rounds", cat: "offense", icon: "💥", desc: "+{val} Damage", stat: "damageAdd", base: 0.5, type: "add" },
   { id: "spd", name: "Velocity", cat: "offense", icon: "💨", desc: "+{val}% Bullet Speed", stat: "bulletSpeedMult", base: 0.08, type: "mult" },
   { id: "fire", name: "Rapid Fire", cat: "offense", icon: "🔥", desc: "+{val}% Fire Rate", stat: "fireRateMult", base: 0.05, type: "mult" },
@@ -4542,35 +4535,31 @@ function tick() {
             owner.waveDamage = (owner.waveDamage || 0) + hitDamage;
           }
           
-          // MODIFIER: Volatile Payload (Explode on death)
-            if (activeGameModifier === "volatile" && !m.isBoss && !m.isBattleship) {
-              // Visual boom (Orange explosion)
-              createExplosion(m.x, m.y, 70, "#ff6600");
+          if (m.hp <= 0) {
+            m.dead = true;
+            triggerBioBloom(m); // <--- ADD THIS
+            createExplosion(m.x, m.y, 25, ATTACK_TYPES[m.attackType]?.color || "#fa0");
+            // WAVE CARD: Volatile Payload (Explodes based on player upgrade)
+            // Checks if the KILLER (owner) has the upgrade
+            if (owner && owner.upgrades.volatile > 0) {
+              createExplosion(m.x, m.y, 70, "#ff4400"); // Visual Boom
               
-              // Damage neighbors logic
-              const volRange = 100; // Radius of explosion
-              const volDmg = m.maxHp * 0.5; // Deals 50% of the dead enemy's Max HP as damage
+              const volRadius = 100; // 100px Range
+              const volDmg = m.maxHp * (owner.upgrades.volatile / 100); // Damage % of Enemy Max HP
               
-              // Only check enemies in the same lane (optimization)
-              const slotMissilesVol = missilesBySlot[m.targetSlot];
-              if (slotMissilesVol) {
-                for (let vi = 0; vi < slotMissilesVol.length; vi++) {
-                  const mv = slotMissilesVol[vi];
-                  // Don't damage self or dead enemies
-                  if (mv.dead || mv.id === m.id) continue;
-                  
-                  // Check distance
-                  const dx = mv.x - m.x;
-                  const dy = mv.y - m.y;
-                  if (dx*dx + dy*dy < volRange*volRange) {
-                    mv.hp -= volDmg;
-                    addDamageNumber(mv.x, mv.y - 15, volDmg, true);
-                    // If this kills them, they will explode next tick (Chain Reaction!)
-                  }
+              // Damage nearby enemies
+              const neighbors = missilesBySlot[m.targetSlot] || [];
+              for (const n of neighbors) {
+                if (n.dead || n.id === m.id) continue; // Skip dead or self
+                
+                // Check distance squared (faster performance)
+                const distSq = (n.x - m.x)**2 + (n.y - m.y)**2;
+                if (distSq < volRadius**2) {
+                  n.hp -= volDmg;
+                  addDamageNumber(n.x, n.y - 15, volDmg, true);
                 }
               }
             }
-            
             // Necromancer Drive: Create ghost allies on kill per copy (STACKS)
             // 1x = 1 ghost, 2x = 2 ghosts, 3x = 3 ghosts
             const necroCount = countModule(bulletModules, "necromancerDrive");
