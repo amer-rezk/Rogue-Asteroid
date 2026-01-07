@@ -67,8 +67,6 @@
     { main: "#ff00ff", dark: "#660066", name: "MAGENTA" },
     { main: "#00ff88", dark: "#006633", name: "GREEN" },
     { main: "#ffaa00", dark: "#664400", name: "ORANGE" },
-    { main: "#ff4444", dark: "#660000", name: "RED" },
-    { main: "#8844ff", dark: "#330066", name: "PURPLE" },
   ];
 
   // Tower Config (must match server)
@@ -3042,43 +3040,20 @@
     }
 
     if (phase === "playing" && lastSnap) {
-      const scaleInfo = getScale();
-      const { sx, sy, offsetX, offsetY, gridMode } = scaleInfo;
+      const { sx, sy, offsetX, offsetY } = getScale();
       const me = lastSnap.players.find(p => p.id === myId);
-      const playerCount = lastSnap.players?.length || 1;
 
       // Only allow tower interaction if player is alive
       if (me && me.hp > 0 && me.towers) {
-        let cx, cy, effectiveScale;
-        
-        if (playerCount >= 4 && gridMode) {
-          // Grid mode: calculate tower positions relative to player's grid cell
-          const col = Math.floor(me.slot / 2);
-          const row = me.slot % 2;
-          const gridScale = 0.5;
-          
-          const segmentWidth = world.segmentWidth * sx * gridScale;
-          const segmentHeight = world.height * sy * gridScale;
-          const segmentX = offsetX + col * segmentWidth;
-          const segmentY = offsetY + row * segmentHeight;
-          
-          cx = segmentX + segmentWidth / 2;
-          cy = segmentY + 560 * sy * gridScale;
-          effectiveScale = sx * gridScale;
-        } else {
-          // Normal mode
-          const segX0 = me.slot * world.segmentWidth;
-          cx = (segX0 + world.segmentWidth / 2) * sx + offsetX;
-          cy = 560 * sy + offsetY;
-          effectiveScale = sx;
-        }
-        
+        const segX0 = me.slot * world.segmentWidth;
+        const cx = (segX0 + world.segmentWidth / 2) * sx + offsetX;
+        const cy = 560 * sy + offsetY;
         const offsets = [-110, -50, 50, 110];
 
         for (let i = 0; i < 4; i++) {
-          const tx = cx + offsets[i] * effectiveScale;
-          const clickRadius = me.towers[i] ? 25 * effectiveScale : 20 * effectiveScale;
-          if (Math.hypot(mouseX - tx, mouseY - (cy - 18 * effectiveScale)) < clickRadius) {
+          const tx = cx + offsets[i] * sx;
+          const clickRadius = me.towers[i] ? 25 * sx : 20 * sx;
+          if (Math.hypot(mouseX - tx, mouseY - (cy - 18 * sy)) < clickRadius) {
             buildMenuOpen = {
               slotIndex: i,
               x: tx,
@@ -3098,40 +3073,8 @@
   function sendInput() {
     if (phase !== "playing" || !lastSnap || isSpectator) return;
     const scale = getScale();
-    const playerCount = lastSnap?.players?.length || 1;
-    
-    let worldX, worldY;
-    
-    if (playerCount >= 4 && scale.gridMode) {
-      // Grid mode: convert screen coords to the player's own segment
-      // First find the current player's slot and grid position
-      const myPlayer = lastSnap.players?.find(p => p.id === myId);
-      const mySlot = myPlayer ? myPlayer.slot : 0;
-      
-      // Calculate grid position for player's segment
-      const col = Math.floor(mySlot / 2);
-      const row = mySlot % 2;
-      const gridScale = 0.5;
-      
-      // Segment screen position
-      const segmentWidth = world.segmentWidth * scale.sx * gridScale;
-      const segmentHeight = world.height * scale.sy * gridScale;
-      const segmentX = scale.offsetX + col * segmentWidth;
-      const segmentY = scale.offsetY + row * segmentHeight;
-      
-      // Convert mouse position to local segment coordinates
-      const localX = (mouseX - segmentX) / (scale.sx * gridScale);
-      const localY = (mouseY - segmentY) / (scale.sy * gridScale);
-      
-      // Convert to world coordinates (add slot offset)
-      worldX = localX + mySlot * world.segmentWidth;
-      worldY = localY;
-    } else {
-      // Normal mode: direct conversion
-      worldX = (mouseX - scale.offsetX) / scale.sx;
-      worldY = (mouseY - scale.offsetY) / scale.sy;
-    }
-    
+    const worldX = (mouseX - scale.offsetX) / scale.sx;
+    const worldY = (mouseY - scale.offsetY) / scale.sy;
     const shooting = mouseDown && !buildMenuOpen && !uiHovered;
     
     // Only send if position changed significantly or shooting state changed
@@ -3150,53 +3093,20 @@
   function getScale() {
     const sw = canvas.width;
     const sh = canvas.height;
-    const playerCount = lastSnap?.players?.length || 1;
-    
-    // Reserve space for the right panel in multiplayer (when panel would be shown)
-    const panelReserve = (playerCount > 1) ? 195 : 0; // 175 panel + 20 margin
-    const availableWidth = sw - panelReserve;
-    
-    // For 4+ players: use grid layout (2 players per column, all at 50% scale)
-    // This prevents the right panel from cutting into player viewports
-    if (playerCount >= 4) {
-      const numColumns = Math.ceil(playerCount / 2);
-      const numRows = Math.min(playerCount, 2);
-      
-      // Effective world dimensions for the grid layout
-      // Each segment is at 50% scale, arranged in columns
-      const effectiveWidth = numColumns * world.segmentWidth * 0.5;
-      const effectiveHeight = numRows * world.height * 0.5;
-      
-      const scale = Math.min(availableWidth / effectiveWidth, sh / effectiveHeight);
-      const renderW = effectiveWidth * scale;
-      const renderH = effectiveHeight * scale;
-      const offsetX = (availableWidth - renderW) / 2;
-      const offsetY = (sh - renderH) / 2;
-      
-      return { 
-        sx: scale, 
-        sy: scale, 
-        offsetX, 
-        offsetY, 
-        renderW, 
-        renderH, 
-        panelReserve,
-        gridMode: true,
-        numColumns,
-        numRows
-      };
-    }
-    
-    // Normal layout for 1-3 players
     const ww = world.width;
     const wh = world.height;
+    
+    // Reserve space for the right panel in multiplayer (when panel would be shown)
+    const playerCount = lastSnap?.players?.length || 1;
+    const panelReserve = (playerCount > 1) ? 195 : 0; // 175 panel + 20 margin
+    const availableWidth = sw - panelReserve;
     
     const scale = Math.min(availableWidth / ww, sh / wh);
     const renderW = ww * scale;
     const renderH = wh * scale;
     const offsetX = (availableWidth - renderW) / 2;
     const offsetY = (sh - renderH) / 2;
-    return { sx: scale, sy: scale, offsetX, offsetY, renderW, renderH, panelReserve, gridMode: false };
+    return { sx: scale, sy: scale, offsetX, offsetY, renderW, renderH, panelReserve };
   }
 
   function drawNeonText(text, x, y, color, size, align = "left") {
@@ -3657,98 +3567,18 @@
         return;
       }
 
-
-      // ===== GRID-BASED SEGMENT LAYOUT FOR 4+ PLAYERS =====
-      // With 4+ players, display all segments at 50% scale in a grid layout
-      // Maximum 2 players per column (stacked vertically)
-      let myPlayer = lastSnap.players?.find(p => p.id === myId);
-      const mySlot = myPlayer ? myPlayer.slot : -1;
-      const playerCount = lastSnap.players?.length || 0;
-      const scaleInfo = getScale();
-      const isGridMode = scaleInfo.gridMode || false;
-      
-      // Get visual scale for rendering
-      const getVisualScale = (slot) => {
-        if (playerCount <= 3) return 1.0; // Normal size with 3 or fewer
-        return 0.5; // All players at 50% scale in grid mode
-      };
-      
-      // Calculate rendering position for each segment
-      // For 4+ players: grid layout with 2 players per column
-      const getSegmentRenderPos = (slot) => {
-        if (playerCount <= 3) {
-          // Normal positioning - horizontal layout
-          return {
-            x: slot * world.segmentWidth * sx,
-            y: 0,
-            scale: 1.0
-          };
-        }
-        
-        // Grid layout for 4+ players
-        // Column = slot / 2 (integer division)
-        // Row = slot % 2 (0 = top, 1 = bottom)
-        const col = Math.floor(slot / 2);
-        const row = slot % 2;
-        const gridScale = 0.5;
-        
-        // Each segment in the grid
-        const segmentWidth = world.segmentWidth * sx * gridScale;
-        const segmentHeight = world.height * sy * gridScale;
-        
-        const gridX = col * segmentWidth;
-        const gridY = row * segmentHeight;
-        
-        return {
-          x: gridX,
-          y: gridY,
-          scale: gridScale
-        };
-      };
-      
-      // Draw segment backgrounds and borders (for grid view)
-      const drawSegmentBackgrounds = () => {
-        if (playerCount <= 3) return; // No special rendering needed
-        
-        // Draw backgrounds for all players in grid mode
-        lastSnap.players.forEach(p => {
-          const segmentPos = getSegmentRenderPos(p.slot);
-          const width = world.segmentWidth * sx * segmentPos.scale;
-          const height = world.height * sy * segmentPos.scale;
-          
-          // Dark background
-          ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
-          ctx.fillRect(segmentPos.x, segmentPos.y, width, height);
-          
-          // Border - highlight current player's segment
-          const color = PLAYER_COLORS[p.slot]?.main || "#0ff";
-          const isMySegment = p.slot === mySlot;
-          ctx.strokeStyle = hexToRgba(color, isMySegment ? 1.0 : 0.6);
-          ctx.lineWidth = isMySegment ? 3 : 2;
-          ctx.strokeRect(segmentPos.x, segmentPos.y, width, height);
-          
-          // Ground line for this segment
-          const groundY = segmentPos.y + (560 * sy * segmentPos.scale);
-          ctx.strokeStyle = hexToRgba(color, 0.4);
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(segmentPos.x, groundY);
-          ctx.lineTo(segmentPos.x + width, groundY);
-          ctx.stroke();
-          
-          // Player name label in corner for grid mode
-          if (playerCount >= 4) {
-            ctx.font = "bold 11px Orbitron, sans-serif";
-            ctx.fillStyle = hexToRgba(color, 0.9);
-            ctx.textAlign = "left";
-            ctx.textBaseline = "top";
-            const label = p.name || `P${p.slot + 1}`;
-            ctx.fillText(label, segmentPos.x + 5, segmentPos.y + 5);
-          }
-        });
-      };
-
       if (!lastSnap) return;
+
+      // ===== OPPONENT SCALING =====
+      // Scale down opponent segments by 50% to give more space and improve performance
+      const myPlayer = lastSnap.players?.find(p => p.id === myId);
+      const mySlot = myPlayer ? myPlayer.slot : -1;
+      
+      // Get scale multiplier for a given slot (1.0 for local player, 0.5 for opponents)
+      const getSlotScale = (slot) => {
+        return (slot === mySlot) ? 1.0 : 0.5;
+      };
+
 
       // Reset UI hover state - will be set true if mouse is over any UI element
       uiHovered = false;
@@ -3813,130 +3643,98 @@
       ctx.save();
       ctx.translate(offsetX, offsetY);
 
-      // Draw segment backgrounds (for 4+ players grid mode)
-      drawSegmentBackgrounds();
-
-      // Grid - skip in grid mode (handled by segment backgrounds)
-      if (playerCount < 4) {
-        ctx.strokeStyle = "rgba(0,255,255,0.03)";
-        ctx.lineWidth = 1;
-        for (let x = 0; x < world.width; x += 30) {
-          ctx.beginPath();
-          ctx.moveTo(x * sx, 0);
-          ctx.lineTo(x * sx, world.height * sy);
-          ctx.stroke();
-        }
-        for (let y = 0; y < world.height; y += 30) {
-          ctx.beginPath();
-          ctx.moveTo(0, y * sy);
-          ctx.lineTo(world.width * sx, y * sy);
-          ctx.stroke();
-        }
+      // Grid
+      ctx.strokeStyle = "rgba(0,255,255,0.03)";
+      ctx.lineWidth = 1;
+      for (let x = 0; x < world.width; x += 30) {
+        ctx.beginPath();
+        ctx.moveTo(x * sx, 0);
+        ctx.lineTo(x * sx, world.height * sy);
+        ctx.stroke();
+      }
+      for (let y = 0; y < world.height; y += 30) {
+        ctx.beginPath();
+        ctx.moveTo(0, y * sy);
+        ctx.lineTo(world.width * sx, y * sy);
+        ctx.stroke();
       }
 
-      // Segment dividers - solid walls between players (skip in grid mode)
-      if (playerCount < 4) {
-        const segCount = Math.round(world.width / world.segmentWidth);
-        for (let i = 1; i < segCount; i++) {
-          const x = i * world.segmentWidth * sx;
+      // Segment dividers - solid walls between players
+      const segCount = Math.round(world.width / world.segmentWidth);
+      for (let i = 1; i < segCount; i++) {
+        const x = i * world.segmentWidth * sx;
         
-          // Wall glow effect
-          const gradient = ctx.createLinearGradient(x - 15, 0, x + 15, 0);
-          gradient.addColorStop(0, "rgba(160,0,255,0)");
-          gradient.addColorStop(0.5, "rgba(160,0,255,0.15)");
-          gradient.addColorStop(1, "rgba(160,0,255,0)");
-          ctx.fillStyle = gradient;
-          ctx.fillRect(x - 15, 0, 30, world.height * sy);
+        // Wall glow effect
+        const gradient = ctx.createLinearGradient(x - 15, 0, x + 15, 0);
+        gradient.addColorStop(0, "rgba(160,0,255,0)");
+        gradient.addColorStop(0.5, "rgba(160,0,255,0.15)");
+        gradient.addColorStop(1, "rgba(160,0,255,0)");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(x - 15, 0, 30, world.height * sy);
         
-          // Main wall line
-          ctx.strokeStyle = "rgba(160,0,255,0.8)";
-          ctx.lineWidth = 3;
-          setShadow(ctx, "#a000ff", 15);
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, world.height * sy);
-          ctx.stroke();
-          clearShadow(ctx);
-        
-          // Energy pulse effect
-          const pulseY = ((time * 100) % (world.height * sy));
-          ctx.fillStyle = "rgba(200,100,255,0.6)";
-          ctx.beginPath();
-          ctx.arc(x, pulseY, 4, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(x, world.height * sy - pulseY, 4, 0, Math.PI * 2);
-          ctx.fill();
-        }
-
-        // Ground line (only in non-grid mode - grid mode draws per segment)
-        const groundY = 560 * sy;
-        ctx.strokeStyle = "#0ff";
+        // Main wall line
+        ctx.strokeStyle = "rgba(160,0,255,0.8)";
         ctx.lineWidth = 3;
-        setShadow(ctx, "#0ff", 20);
+        setShadow(ctx, "#a000ff", 15);
         ctx.beginPath();
-        ctx.moveTo(0, groundY);
-        ctx.lineTo(world.width * sx, groundY);
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, world.height * sy);
         ctx.stroke();
         clearShadow(ctx);
+        
+        // Energy pulse effect
+        const pulseY = ((time * 100) % (world.height * sy));
+        ctx.fillStyle = "rgba(200,100,255,0.6)";
+        ctx.beginPath();
+        ctx.arc(x, pulseY, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(x, world.height * sy - pulseY, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
-        // Player effects (slowfield, shield) - non-grid mode positioning
-        for (const p of lastSnap.players) {
-          if (p.slowfield) {
-            ctx.fillStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.04);
-            ctx.fillRect(p.slot * world.segmentWidth * sx, 0, world.segmentWidth * sx, 560 * sy);
-          }
+      // Ground line
+      const groundY = 560 * sy;
+      ctx.strokeStyle = "#0ff";
+      ctx.lineWidth = 3;
+      setShadow(ctx, "#0ff", 20);
+      ctx.beginPath();
+      ctx.moveTo(0, groundY);
+      ctx.lineTo(world.width * sx, groundY);
+      ctx.stroke();
+      clearShadow(ctx);
+
+      // Player effects (slowfield, shield)
+      for (const p of lastSnap.players) {
+        if (p.slowfield) {
+          const slotScale = getSlotScale(p.slot);
+          ctx.fillStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.04);
+          ctx.fillRect(p.slot * world.segmentWidth * sx * slotScale, 0, world.segmentWidth * sx * slotScale, 560 * sy * slotScale);
         }
-        for (const p of lastSnap.players) {
-          if (p.shieldActive > 0) {
-            const cx = (p.slot * world.segmentWidth + world.segmentWidth / 2) * sx;
-            ctx.strokeStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.5);
-            ctx.lineWidth = 3;
-            ctx.shadowColor = PLAYER_COLORS[p.slot]?.main;
-            ctx.shadowBlur = 15;
-            ctx.beginPath();
-            ctx.arc(cx, groundY, world.segmentWidth * sx * 0.45, Math.PI, 0);
-            ctx.stroke();
-            ctx.shadowBlur = 0;
-          }
-        }
-      } else {
-        // Grid mode: Draw player effects with grid positioning
-        for (const p of lastSnap.players) {
-          const segmentPos = getSegmentRenderPos(p.slot);
-          const segWidth = world.segmentWidth * sx * segmentPos.scale;
-          const segHeight = world.height * sy * segmentPos.scale;
-          const groundY = segmentPos.y + 560 * sy * segmentPos.scale;
-          
-          if (p.slowfield) {
-            ctx.fillStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.04);
-            ctx.fillRect(segmentPos.x, segmentPos.y, segWidth, 560 * sy * segmentPos.scale);
-          }
-          
-          if (p.shieldActive > 0) {
-            const cx = segmentPos.x + segWidth / 2;
-            ctx.strokeStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.5);
-            ctx.lineWidth = 2;
-            ctx.shadowColor = PLAYER_COLORS[p.slot]?.main;
-            ctx.shadowBlur = 10;
-            ctx.beginPath();
-            ctx.arc(cx, groundY, segWidth * 0.45, Math.PI, 0);
-            ctx.stroke();
-            ctx.shadowBlur = 0;
-          }
+      }
+      for (const p of lastSnap.players) {
+        if (p.shieldActive > 0) {
+          const slotScale = getSlotScale(p.slot);
+          const cx = (p.slot * world.segmentWidth + world.segmentWidth / 2) * sx * slotScale;
+          ctx.strokeStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.5);
+          ctx.lineWidth = 3;
+          ctx.shadowColor = PLAYER_COLORS[p.slot]?.main;
+          ctx.shadowBlur = 15;
+          ctx.beginPath();
+          ctx.arc(cx, groundY, world.segmentWidth * sx * slotScale * 0.45, Math.PI, 0);
+          ctx.stroke();
+          ctx.shadowBlur = 0;
         }
       }
 
       // Shield Explosions (expanding damage circles)
       if (lastSnap.shieldExplosions) {
         for (const exp of lastSnap.shieldExplosions) {
-          const segmentPos = getSegmentRenderPos(exp.slot);
-          const localX = exp.x - (exp.slot * world.segmentWidth);
-          
+          const slotScale = getSlotScale(exp.slot);
           const alpha = (exp.life / exp.duration) * 0.6;
-          const x = segmentPos.x + (localX * sx * segmentPos.scale);
-          const y = segmentPos.y + (exp.y * sy * segmentPos.scale);
-          const r = exp.radius * sx * segmentPos.scale;
+          const x = exp.x * sx * slotScale;
+          const y = exp.y * sy * slotScale;
+          const r = exp.radius * sx * slotScale;
           
           // Outer glow ring
           ctx.strokeStyle = hexToRgba(exp.color, alpha);
@@ -3968,13 +3766,11 @@
       // Ghost Allies (Necromancer Drive)
       if (lastSnap.ghostAllies) {
         for (const ghost of lastSnap.ghostAllies) {
-          const segmentPos = getSegmentRenderPos(ghost.ownerSlot);
-          const localX = ghost.x - (ghost.ownerSlot * world.segmentWidth);
-          
+          const slotScale = getSlotScale(ghost.ownerSlot);
           const alpha = Math.min(1, ghost.life / 2);
-          const x = segmentPos.x + (localX * sx * segmentPos.scale);
-          const y = segmentPos.y + (ghost.y * sy * segmentPos.scale);
-          const r = ghost.r * sx * segmentPos.scale;
+          const x = ghost.x * sx * slotScale;
+          const y = ghost.y * sy * slotScale;
+          const r = ghost.r * sx * slotScale;
           
           // Ghostly glow
           ctx.shadowColor = "#8844ff";
@@ -4004,21 +3800,18 @@
       if (lastSnap.particles) {
         for (let i = 0; i < lastSnap.particles.length; i++) {
           const p = lastSnap.particles[i];
-          // Determine which segment this particle is in for visual scaling
-          const particleSlot = Math.floor(p.x / world.segmentWidth);
-          const visualScale = getVisualScale(particleSlot);
           
-          // Skip some particles on opponent segments for performance (4+ players only)
-          if (playerCount >= 4 && particleSlot !== mySlot && i % 2 === 0) continue;
+          // Determine which slot this particle belongs to based on x-coordinate
+          const particleSlot = Math.floor(p.x / world.segmentWidth);
+          const slotScale = getSlotScale(particleSlot);
+          
+          // PERFORMANCE: Skip 50% of particles on opponent segments
+          if (particleSlot !== mySlot && i % 2 === 0) continue;
           
           const alpha = p.life / (p.maxLife || 0.5);
-          
-          // Get segment render position (stacked for opponents)
-          const segmentPos = getSegmentRenderPos(particleSlot);
-          const localX = p.x - (particleSlot * world.segmentWidth);
-          const px = segmentPos.x + (localX * sx * segmentPos.scale);
-          const py = segmentPos.y + (p.y * sy * segmentPos.scale);
-          const pSize = (p.size || 2) * sx * visualScale; // Apply visual scaling
+          const px = p.x * sx * slotScale;
+          const py = p.y * sy * slotScale;
+          const pSize = (p.size || 2) * sx * slotScale;
           
           // Special confetti particle rendering! 🎉
           if (p.isConfetti) {
@@ -4199,17 +3992,11 @@
       const renderHeight = world.height * sy;
       
       for (const m of lastSnap.missiles) {
-        // Get segment render position (stacked for opponents)
-        const segmentPos = getSegmentRenderPos(m.targetSlot);
-        const visualScale = getVisualScale(m.targetSlot);
-        
-        // Convert world position to local segment position, then to screen position
-        const localX = m.x - (m.targetSlot * world.segmentWidth);
-        const localY = m.y;
-        
-        const x = segmentPos.x + (localX * sx * segmentPos.scale);
-        const y = segmentPos.y + (localY * sy * segmentPos.scale);
-        const r = m.r * sx * visualScale; // Scale size visually
+        // Apply slot-based scaling for opponents
+        const slotScale = getSlotScale(m.targetSlot);
+        const x = m.x * sx * slotScale;
+        const y = m.y * sy * slotScale;
+        const r = m.r * sx * slotScale;
 
         // PERFORMANCE: Skip missiles that are completely off-screen
         // This helps during spawn when many asteroids are above the viewport
@@ -4928,25 +4715,11 @@
         }
       }
 
-      // Render local bullets (per-segment with stacking support)
+      // Render local bullets
       for (const b of clientBullets) {
         const baseColor = PLAYER_COLORS[b.slot]?.main || "#0ff";
-        const segmentSlot = Math.floor(b.x / world.segmentWidth);
-        const segmentPos = getSegmentRenderPos(segmentSlot);
-        
-        ctx.save();
-        ctx.translate(segmentPos.x, segmentPos.y);
-        ctx.scale(segmentPos.scale, segmentPos.scale);
-        
-        // Adjust bullet position to be relative to segment
-        const localB = {
-          ...b,
-          x: b.x - (segmentSlot * world.segmentWidth),
-          y: b.y
-        };
-        
-        drawBullet(localB, sx, sy, baseColor);
-        ctx.restore();
+        const slotScale = getSlotScale(b.ownerSlot);
+        drawBullet(b, sx * slotScale, sy * slotScale, baseColor);
       }
       
       // Render enemy bullets (from battleships) - use server data if available
@@ -4978,17 +4751,12 @@
           }
         }
         
-        // Draw enemy bullet with segment stacking
-        const segmentSlot = Math.floor(eb.x / world.segmentWidth);
-        const segmentPos = getSegmentRenderPos(segmentSlot);
-        const localX = eb.x - (segmentSlot * world.segmentWidth);
-        
-        const bx = segmentPos.x + (localX * sx * segmentPos.scale);
-        const by = segmentPos.y + (eb.y * sy * segmentPos.scale);
+        // Draw enemy bullet
+        const bx = eb.x * sx;
+        const by = eb.y * sy;
         
         ctx.save();
         ctx.translate(bx, by);
-        ctx.scale(segmentPos.scale, segmentPos.scale);
         
         // Rotate to face direction of travel
         const angle = Math.atan2(eb.vy || 1, eb.vx || 0);
@@ -5017,12 +4785,7 @@
       // Damage numbers
       if (showDamageNumbers && lastSnap.damageNumbers) {
         for (const d of lastSnap.damageNumbers) {
-          // Determine which segment for visual scaling
-          const damageSlot = Math.floor(d.x / world.segmentWidth);
-          const visualScale = getVisualScale(damageSlot);
-          
-          const fontSize = (d.isCrit ? 16 : 12) * visualScale;
-          ctx.font = `bold ${fontSize}px 'Courier New', monospace`;
+          ctx.font = `bold ${d.isCrit ? 16 : 12}px 'Courier New', monospace`;
           ctx.textAlign = "center";
           // Use custom color if provided, otherwise default crit/normal colors
           if (d.customColor) {
@@ -5039,13 +4802,10 @@
             displayText = Number.isInteger(rounded) ? rounded.toString() : rounded.toFixed(2).replace(/\.?0+$/, '');
           }
           
-          // Get segment render position (stacked for opponents)
-          const segmentPos = getSegmentRenderPos(damageSlot);
-          const localX = d.x - (damageSlot * world.segmentWidth);
-          const screenX = segmentPos.x + (localX * sx * segmentPos.scale);
-          const screenY = segmentPos.y + (d.y * sy * segmentPos.scale);
-          
-          ctx.fillText(displayText, screenX, screenY);
+          // Apply slot-based scaling
+          const damageSlot = Math.floor(d.x / world.segmentWidth);
+          const slotScale = getSlotScale(damageSlot);
+          ctx.fillText(displayText, d.x * sx * slotScale, d.y * sy * slotScale);
         }
       }
 
@@ -5054,57 +4814,42 @@
       for (const p of lastSnap.players) {
         if (p.slot < 0) continue;
         const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
-        const visualScale = getVisualScale(p.slot);
-        const segmentPos = getSegmentRenderPos(p.slot);
+        const slotScale = getSlotScale(p.slot);
         
-        // Calculate center x using segment position (stacked for opponents)
-        const localCenterX = world.segmentWidth / 2;
-        const cx = segmentPos.x + (localCenterX * sx * segmentPos.scale);
-        const groundY = segmentPos.y + (560 * sy * segmentPos.scale);
+        // Apply slot scaling to sxScaled/syScaled for this player segment
+        const sxScaled = sxScaled * slotScale;
+        const syScaled = syScaled * slotScale;
+        
+        const cx = (p.slot * world.segmentWidth + world.segmentWidth / 2) * sxScaled;
         const isDead = p.hp <= 0;
 
         // Aim line for current player
         if (p.id === myId && mouseDown && !buildMenuOpen && !isDead) {
-          const turretY = groundY - 14 * sy * segmentPos.scale;
-          
-          // Calculate mouse position relative to player's segment
-          let worldMouseX, worldMouseY;
-          if (playerCount >= 4 && isGridMode) {
-            // Grid mode: convert mouse coords relative to player's grid cell
-            const localMouseX = (mouseX - segmentPos.x - offsetX) / (sx * segmentPos.scale);
-            const localMouseY = (mouseY - segmentPos.y - offsetY) / (sy * segmentPos.scale);
-            worldMouseX = localMouseX + p.slot * world.segmentWidth;
-            worldMouseY = localMouseY;
-          } else {
-            worldMouseX = (mouseX - offsetX) / sx;
-            worldMouseY = (mouseY - offsetY) / sy;
-          }
-          
+          const turretX = cx;
+          const turretY = (560 - 14) * syScaled;
+          const worldMouseX = (mouseX - offsetX) / sxScaled;
+          const worldMouseY = (mouseY - offsetY) / syScaled;
           const dx = worldMouseX - (p.slot * world.segmentWidth + world.segmentWidth / 2);
           const dy = worldMouseY - 560;
           let angle = Math.atan2(dy, dx);
           const maxAngle = (80 * Math.PI) / 180;
           const clampedAngle = -Math.PI / 2 + Math.max(-maxAngle, Math.min(maxAngle, angle - (-Math.PI / 2)));
-          
-          // Calculate end point in local segment coordinates, then convert to screen
-          const localEndX = world.segmentWidth / 2 + Math.cos(clampedAngle) * 500;
-          const localEndY = 560 + Math.sin(clampedAngle) * 500;
-          const screenEndX = segmentPos.x + (localEndX * sx * segmentPos.scale);
-          const screenEndY = segmentPos.y + (localEndY * sy * segmentPos.scale);
-          
+          const endX = (p.slot * world.segmentWidth + world.segmentWidth / 2) + Math.cos(clampedAngle) * 500;
+          const endY = 560 + Math.sin(clampedAngle) * 500;
           ctx.save();
           ctx.strokeStyle = hexToRgba(color.main, 0.4);
           ctx.lineWidth = 2;
           ctx.setLineDash([8, 8]);
           ctx.beginPath();
-          ctx.moveTo(cx, turretY);
-          ctx.lineTo(screenEndX, screenEndY);
+          ctx.moveTo(turretX, turretY);
+          ctx.lineTo(endX * sxScaled, endY * syScaled);
           ctx.stroke();
           ctx.restore();
         }
 
         // Main turret using sprites
         const turretAlpha = isDead ? 0.3 : 1;
+        const groundY = 560 * syScaled; // Base of playing field
         const mainStunned = (p.mainTurretStun || 0) > 0;
         
         // Check if turret images are loaded
@@ -5112,14 +4857,14 @@
         const hasBarrel = turretImages.barrel.complete && turretImages.barrel.naturalWidth > 0;
         
         if (hasBase && hasBarrel) {
-          // Calculate base size preserving aspect ratio (apply visual scaling)
+          // Calculate base size preserving aspect ratio
           const baseAspect = turretImages.base.naturalWidth / turretImages.base.naturalHeight;
-          const baseW = 43.75 * sx * visualScale; // Width with visual scaling
+          const baseW = 43.75 * sxScaled; // Width (35 * 1.25 = 25% bigger)
           const baseH = baseW / baseAspect; // Height calculated from aspect ratio
           
-          // Barrel dimensions (preserve aspect ratio, apply visual scaling)
+          // Barrel dimensions (preserve aspect ratio)
           const barrelAspect = turretImages.barrel.naturalWidth / turretImages.barrel.naturalHeight;
-          const barrelH = 35 * sy * visualScale;
+          const barrelH = 35 * syScaled;
           const barrelW = barrelH * barrelAspect;
           
           // Position: bottom of base at ground, horizontally centered
@@ -5171,21 +4916,21 @@
           }
         } else {
           // Fallback to procedural rendering if sprites not loaded
-          const baseW = 24 * sx;
-          const baseH = 14 * sy;
+          const baseW = 24 * sxScaled;
+          const baseH = 14 * syScaled;
           ctx.fillStyle = hexToRgba(color.main, turretAlpha);
           ctx.strokeStyle = color.main;
           ctx.lineWidth = 1.5;
           if (!isDead) setShadow(ctx, color.main, 15);
           ctx.beginPath();
-          ctx.roundRect(cx - baseW / 2, 560 * sy - baseH, baseW, baseH, 3);
+          ctx.roundRect(cx - baseW / 2, 560 * syScaled - baseH, baseW, baseH, 3);
           ctx.fill();
           ctx.stroke();
           ctx.save();
-          ctx.translate(cx, 560 * sy - baseH / 2);
+          ctx.translate(cx, 560 * syScaled - baseH / 2);
           ctx.rotate(p.turretAngle + Math.PI / 2);
           ctx.fillStyle = hexToRgba(color.main, turretAlpha);
-          ctx.fillRect(-2.5 * sx, -22 * sy, 5 * sx, 22 * sy);
+          ctx.fillRect(-2.5 * sxScaled, -22 * syScaled, 5 * sxScaled, 22 * syScaled);
           ctx.restore();
           clearShadow(ctx);
         }
@@ -5194,16 +4939,16 @@
         const offsets = [-110, -50, 50, 110];
         const towers = p.towers || [null, null, null, null];
         towers.forEach((t, i) => {
-          const tx = cx + offsets[i] * sx;
-          const ty = 560 * sy;
+          const tx = cx + offsets[i] * sxScaled * slotScale;
+          const ty = 560 * syScaled * slotScale;
           
           // Check hover for OPPONENT towers (not own)
           // Note: tx/ty are in translated coordinates, mouseX/mouseY are screen coords
           // Need to add offsetX/offsetY to convert tx/ty to screen coords
           if (t && p.id !== myId) {
             const screenTx = tx + offsetX;
-            const screenTy = (ty - 15 * sy) + offsetY;
-            const hoverRadius = 20 * sx;
+            const screenTy = (ty - 15 * syScaled) + offsetY;
+            const hoverRadius = 20 * sxScaled;
             const dist = Math.sqrt((mouseX - screenTx) ** 2 + (mouseY - screenTy) ** 2);
             if (dist < hoverRadius) {
               hoveredOpponentTower = {
@@ -5226,11 +4971,11 @@
               const towerStunned = p.towerStuns && (p.towerStuns[i] || 0) > 0;
               const towerAlpha = isDead ? 0.3 : (towerStunned ? (0.4 + Math.sin(Date.now() / 50) * 0.2) : 1);
               const towerAngle = t.angle !== undefined ? t.angle : -Math.PI / 2;
-              const scale = 0.6 * visualScale; // Make towers smaller, apply visual scaling
+              const scale = 0.6; // Make towers smaller
 
               // Platform (doesn't rotate)
-              const platformW = 22 * sx * scale;
-              const platformH = 6 * sy * scale;
+              const platformW = 22 * sxScaled * scale;
+              const platformH = 6 * syScaled * scale;
               
               // Apply stun filter to platform
               if (towerStunned) {
@@ -5256,11 +5001,11 @@
                   if (hasBase && hasBarrel) {
                     const miniScale = 0.5; // 50% of main turret size
                     const baseAspect = turretImages.base.naturalWidth / turretImages.base.naturalHeight;
-                    const baseW = 43.75 * sx * miniScale;
+                    const baseW = 43.75 * sxScaled * miniScale;
                     const baseH = baseW / baseAspect;
                     
                     const barrelAspect = turretImages.barrel.naturalWidth / turretImages.barrel.naturalHeight;
-                    const barrelH = 35 * sy * miniScale;
+                    const barrelH = 35 * syScaled * miniScale;
                     const barrelW = barrelH * barrelAspect;
                     
                     // Position mini turret on the platform
@@ -5295,7 +5040,7 @@
                     ctx.translate(tx, ty - platformH);
                     ctx.rotate(towerAngle + Math.PI / 2);
                     ctx.fillStyle = hexToRgba(color.main, towerAlpha);
-                    ctx.fillRect(-3 * sx * scale, -20 * sy * scale, 6 * sx * scale, 20 * sy * scale);
+                    ctx.fillRect(-3 * sxScaled * scale, -20 * syScaled * scale, 6 * sxScaled * scale, 20 * syScaled * scale);
                     ctx.restore();
                     clearShadow(ctx);
                   }
@@ -5309,8 +5054,8 @@
                   ctx.rotate(towerAngle + Math.PI / 2);
 
                   if (typeInfo.name === "Gatling") {
-                    const bodyW = 14 * sx * scale;
-                    const bodyH = 12 * sy * scale;
+                    const bodyW = 14 * sxScaled * scale;
+                    const bodyH = 12 * syScaled * scale;
                     ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
                     ctx.strokeStyle = hexToRgba(tColor, towerAlpha);
                     ctx.lineWidth = 1;
@@ -5321,11 +5066,11 @@
                     // Triple barrels
                     for (let b = -1; b <= 1; b++) {
                       ctx.fillStyle = hexToRgba(tColor, towerAlpha);
-                      ctx.fillRect(b * 3 * sx * scale - 1 * sx * scale, -bodyH - 10 * sy * scale, 2 * sx * scale, 12 * sy * scale);
+                      ctx.fillRect(b * 3 * sxScaled * scale - 1 * sxScaled * scale, -bodyH - 10 * syScaled * scale, 2 * sxScaled * scale, 12 * syScaled * scale);
                     }
                   } else if (typeInfo.name === "Railgun") {
-                    const bodyW = 10 * sx * scale;
-                    const bodyH = 14 * sy * scale;
+                    const bodyW = 10 * sxScaled * scale;
+                    const bodyH = 14 * syScaled * scale;
                     ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
                     ctx.strokeStyle = hexToRgba(tColor, towerAlpha);
                     ctx.lineWidth = 1;
@@ -5335,19 +5080,19 @@
                     ctx.stroke();
                     // Long barrel (railgun coils)
                     ctx.fillStyle = hexToRgba(tColor, towerAlpha);
-                    ctx.fillRect(-2 * sx * scale, -bodyH - 16 * sy * scale, 4 * sx * scale, 18 * sy * scale);
+                    ctx.fillRect(-2 * sxScaled * scale, -bodyH - 16 * syScaled * scale, 4 * sxScaled * scale, 18 * syScaled * scale);
                     // Energy coils
                     ctx.strokeStyle = hexToRgba("#00ffff", towerAlpha * 0.8);
-                    ctx.lineWidth = 1.5 * sx * scale;
+                    ctx.lineWidth = 1.5 * sxScaled * scale;
                     for (let ring = 0; ring < 3; ring++) {
-                      const ringY = -bodyH - 4 * sy * scale - ring * 5 * sy * scale;
+                      const ringY = -bodyH - 4 * syScaled * scale - ring * 5 * syScaled * scale;
                       ctx.beginPath();
-                      ctx.arc(0, ringY, 3.5 * sx * scale, 0, Math.PI * 2);
+                      ctx.arc(0, ringY, 3.5 * sxScaled * scale, 0, Math.PI * 2);
                       ctx.stroke();
                     }
                   } else if (typeInfo.name === "Missile") {
-                    const bodyW = 16 * sx * scale;
-                    const bodyH = 12 * sy * scale;
+                    const bodyW = 16 * sxScaled * scale;
+                    const bodyH = 12 * syScaled * scale;
                     ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
                     ctx.strokeStyle = hexToRgba(tColor, towerAlpha);
                     ctx.lineWidth = 1;
@@ -5359,14 +5104,14 @@
                     ctx.fillStyle = "#222";
                     for (let m = -1; m <= 1; m += 2) {
                       ctx.beginPath();
-                      ctx.arc(m * 4 * sx * scale, -bodyH / 2, 3 * sx * scale, 0, Math.PI * 2);
+                      ctx.arc(m * 4 * sxScaled * scale, -bodyH / 2, 3 * sxScaled * scale, 0, Math.PI * 2);
                       ctx.fill();
                     }
                     // Missile tips
                     ctx.fillStyle = hexToRgba("#ff6600", towerAlpha);
                     for (let m = -1; m <= 1; m += 2) {
                       ctx.beginPath();
-                      ctx.arc(m * 4 * sx * scale, -bodyH - 2 * sy * scale, 2 * sx * scale, 0, Math.PI * 2);
+                      ctx.arc(m * 4 * sxScaled * scale, -bodyH - 2 * syScaled * scale, 2 * sxScaled * scale, 0, Math.PI * 2);
                       ctx.fill();
                     }
                   }
@@ -5388,9 +5133,9 @@
                 
                 // Drone Command: Render orbiting drone for this tower
                 if (t.dronePos) {
-                  const droneX = t.dronePos.x * sx;
-                  const droneY = t.dronePos.y * sy;
-                  const droneSize = 6 * sx;
+                  const droneX = t.dronePos.x * sxScaled;
+                  const droneY = t.dronePos.y * syScaled;
+                  const droneSize = 6 * sxScaled;
                   
                   ctx.save();
                   ctx.translate(droneX, droneY);
@@ -5415,8 +5160,8 @@
                   const dronePulse = Math.sin(Date.now() / 100 + i) * 0.3 + 0.7;
                   ctx.fillStyle = `rgba(255, 255, 100, ${dronePulse * (isDead ? 0.3 : 1)})`;
                   ctx.beginPath();
-                  ctx.arc(-droneSize * 0.6, 0, 1.5 * sx, 0, Math.PI * 2);
-                  ctx.arc(droneSize * 0.6, 0, 1.5 * sx, 0, Math.PI * 2);
+                  ctx.arc(-droneSize * 0.6, 0, 1.5 * sxScaled, 0, Math.PI * 2);
+                  ctx.arc(droneSize * 0.6, 0, 1.5 * sxScaled, 0, Math.PI * 2);
                   ctx.fill();
                   
                   ctx.restore();
@@ -5425,11 +5170,11 @@
               // Level stars
               if (level > 1) {
                 ctx.fillStyle = "#ffd700";
-                ctx.font = `bold ${8 * sx}px sans-serif`;
+                ctx.font = `bold ${8 * sxScaled}px sans-serif`;
                 ctx.textAlign = "center";
                 ctx.textBaseline = "middle";
                 const levelText = "★".repeat(Math.min(level - 1, 4));
-                ctx.fillText(levelText, tx, ty + 8 * sy);
+                ctx.fillText(levelText, tx, ty + 8 * syScaled);
               }
 
               // Upgrade indicator
@@ -5439,7 +5184,7 @@
                 ctx.lineWidth = 2;
                 ctx.setLineDash([3, 3]);
                 ctx.beginPath();
-                ctx.arc(tx, ty - 20 * sy, 18 * sx, 0, Math.PI * 2);
+                ctx.arc(tx, ty - 20 * syScaled, 18 * sxScaled, 0, Math.PI * 2);
                 ctx.stroke();
                 ctx.setLineDash([]);
               }
@@ -5452,21 +5197,21 @@
             ctx.lineWidth = 2;
             ctx.setLineDash([4, 4]);
             ctx.beginPath();
-            ctx.roundRect(tx - 14 * sx, ty - 8 * sy, 28 * sx, 8 * sy, 3);
+            ctx.roundRect(tx - 14 * sxScaled, ty - 8 * syScaled, 28 * sxScaled, 8 * syScaled, 3);
             ctx.stroke();
             ctx.setLineDash([]);
             ctx.fillStyle = `rgba(0, 255, 136, ${0.15 + pulse * 0.25})`;
             ctx.strokeStyle = `rgba(0, 255, 136, ${0.4 + pulse * 0.4})`;
             ctx.lineWidth = 2;
             ctx.beginPath();
-            ctx.arc(tx, ty - 18 * sy, 12 * sx, 0, Math.PI * 2);
+            ctx.arc(tx, ty - 18 * syScaled, 12 * sxScaled, 0, Math.PI * 2);
             ctx.fill();
             ctx.stroke();
             ctx.fillStyle = "#fff";
-            ctx.font = `bold ${16 * sx}px sans-serif`;
+            ctx.font = `bold ${16 * sxScaled}px sans-serif`;
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
-            ctx.fillText("+", tx, ty - 18 * sy);
+            ctx.fillText("+", tx, ty - 18 * syScaled);
             ctx.restore();
           }
         });
@@ -5478,8 +5223,8 @@
         ctx.fillText(isDead ? `${p.name} 💀` : p.name, cx, groundY + 14);
 
         // Individual HP bar for PvP
-        const hpBarW = 60 * sx;
-        const hpBarH = 6 * sy;
+        const hpBarW = 60 * sxScaled;
+        const hpBarH = 6 * syScaled;
         const hpBarX = cx - hpBarW / 2;
         const hpBarY = groundY + 20;
         ctx.fillStyle = "rgba(0,0,0,0.5)";
@@ -5488,19 +5233,19 @@
         ctx.fillRect(hpBarX, hpBarY, hpBarW * Math.max(0, p.hp / p.maxHp), hpBarH);
         ctx.strokeStyle = isDead ? "#444" : color.main;
         ctx.strokeRect(hpBarX, hpBarY, hpBarW, hpBarH);
-        ctx.font = `bold ${8 * sx}px 'Courier New', monospace`;
+        ctx.font = `bold ${8 * sxScaled}px 'Courier New', monospace`;
         ctx.fillStyle = "#fff";
         ctx.fillText(`${p.hp}/${p.maxHp}`, cx, hpBarY + hpBarH / 2 + 1);
         
         // Gold display under HP bar
         if (!isDead) {
-          ctx.font = `bold ${10 * sx}px 'Courier New', monospace`;
+          ctx.font = `bold ${10 * sxScaled}px 'Courier New', monospace`;
           ctx.fillStyle = "#ffd700";
           ctx.fillText(`${p.gold} 🟡`, cx, hpBarY + hpBarH + 12);
           
           // Total income display (what they earned last wave)
           if (p.totalIncome > 0) {
-            ctx.font = `bold ${9 * sx}px 'Courier New', monospace`;
+            ctx.font = `bold ${9 * sxScaled}px 'Courier New', monospace`;
             ctx.fillStyle = "#7fff7f";
             ctx.fillText(`+${p.totalIncome}/wave`, cx, hpBarY + hpBarH + 24);
           }
@@ -5653,7 +5398,7 @@
         ctx.textAlign = "left";
       }
       
-      myPlayer = lastSnap.players.find(p => p.id === myId);
+      const myPlayer = lastSnap.players.find(p => p.id === myId);
       if (myPlayer) {
         // Gold display (positioned after modifier or at base position)
         const goldX = Math.max(hudNextX, 160);
@@ -5740,7 +5485,7 @@
           let isScoreLeader = true;
           let leaderName = "";
           if (lastSnap && lastSnap.players && lastSnap.players.length > 1) {
-            myPlayer = lastSnap.players.find(p => p.id === myId);
+            const myPlayer = lastSnap.players.find(p => p.id === myId);
             let maxDamage = -1;
             let leader = null;
             for (const p of lastSnap.players) {
@@ -7433,7 +7178,7 @@
         }
         
         // Reroll button to the right of cards
-        myPlayer = lastSnap?.players.find(p => p.id === myId);
+        const myPlayer = lastSnap?.players.find(p => p.id === myId);
         const myGold = myPlayer?.gold || 0;
         const canAffordReroll = myGold >= currentRerollCost;
         
