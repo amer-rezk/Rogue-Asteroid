@@ -5405,7 +5405,7 @@
         ctx.textAlign = "left";
       }
       
-      const myPlayer = lastSnap.players.find(p => p.id === myId);
+      myPlayer = lastSnap.players.find(p => p.id === myId);
       if (myPlayer) {
         // Gold display (positioned after modifier or at base position)
         const goldX = Math.max(hudNextX, 160);
@@ -7185,7 +7185,7 @@
         }
         
         // Reroll button to the right of cards
-        const myPlayer = lastSnap?.players.find(p => p.id === myId);
+        myPlayer = lastSnap?.players.find(p => p.id === myId);
         const myGold = myPlayer?.gold || 0;
         const canAffordReroll = myGold >= currentRerollCost;
         
