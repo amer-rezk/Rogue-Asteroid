@@ -98,8 +98,8 @@ const PLAYER_COLORS = [
 // ===== Tower Definitions =====
 const TOWER_TYPES = {
   0: { name: "Gatling", cost: 50, damage: 0.5, cooldown: 0.25, rangeMult: 0.8, color: "#ffff00", upgradeCost: 40, bulletType: "gatling" },
-  1: { name: "Railgun", cost: 120, damage: 4, cooldown: 1.4, rangeMult: 1.5, color: "#00ff00", upgradeCost: 80, bulletType: "sniper" },
-  2: { name: "Missile", cost: 250, damage: 8, cooldown: 2.0, rangeMult: 1.0, color: "#ff0000", explosive: 1, upgradeCost: 150, bulletType: "missile" }
+  1: { name: "Railgun", cost: 120, damage: 8, cooldown: 1.4, rangeMult: 1.5, color: "#00ff00", upgradeCost: 80, bulletType: "sniper" },
+  2: { name: "Missile", cost: 250, damage: 16, cooldown: 2.0, rangeMult: 1.0, color: "#ff0000", explosive: 1, upgradeCost: 150, bulletType: "missile" }
 };
 const MAX_TOWER_LEVEL = 5;
 
@@ -841,6 +841,7 @@ function makeUpgradeOptions(player) {
     if (opts.find(o => o.defId === def.id)) { i--; continue; }
     if (def.type === "bool" && player.upgrades[def.stat]) { i--; continue; }
     if (def.stat === "critChance" && (player.upgrades.critChance || 0) >= 1) { i--; continue; }
+    if (def.stat === "slugChance" && (player.upgrades.slugChance || 0) >= 100) { i--; continue; }
 
     let rarityKey = rollRarity();
     
@@ -2105,9 +2106,10 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
   let maxBulletR = bulletR;
   
   // Get slug chance from upgrades (stored as percentage, e.g. 2.5, 5, 7.5, 10)
-  const slugChancePct = !overrideProps 
+  let slugChancePct = !overrideProps 
     ? (owner.upgrades?.slugChance || 0)
     : (overrideProps?.inheritedUpgrades ? (overrideProps.slugChance || 0) : 0);
+  slugChancePct = Math.min(100, slugChancePct); // Cap at 100%
   
   if (slugChancePct > 0 && Math.random() < slugChancePct / 100) {
     hasDissipatingSlug = true;
