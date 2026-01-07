@@ -3042,20 +3042,43 @@
     }
 
     if (phase === "playing" && lastSnap) {
-      const { sx, sy, offsetX, offsetY } = getScale();
+      const scaleInfo = getScale();
+      const { sx, sy, offsetX, offsetY, gridMode } = scaleInfo;
       const me = lastSnap.players.find(p => p.id === myId);
+      const playerCount = lastSnap.players?.length || 1;
 
       // Only allow tower interaction if player is alive
       if (me && me.hp > 0 && me.towers) {
-        const segX0 = me.slot * world.segmentWidth;
-        const cx = (segX0 + world.segmentWidth / 2) * sx + offsetX;
-        const cy = 560 * sy + offsetY;
+        let cx, cy, effectiveScale;
+        
+        if (playerCount >= 4 && gridMode) {
+          // Grid mode: calculate tower positions relative to player's grid cell
+          const col = Math.floor(me.slot / 2);
+          const row = me.slot % 2;
+          const gridScale = 0.5;
+          
+          const segmentWidth = world.segmentWidth * sx * gridScale;
+          const segmentHeight = world.height * sy * gridScale;
+          const segmentX = offsetX + col * segmentWidth;
+          const segmentY = offsetY + row * segmentHeight;
+          
+          cx = segmentX + segmentWidth / 2;
+          cy = segmentY + 560 * sy * gridScale;
+          effectiveScale = sx * gridScale;
+        } else {
+          // Normal mode
+          const segX0 = me.slot * world.segmentWidth;
+          cx = (segX0 + world.segmentWidth / 2) * sx + offsetX;
+          cy = 560 * sy + offsetY;
+          effectiveScale = sx;
+        }
+        
         const offsets = [-110, -50, 50, 110];
 
         for (let i = 0; i < 4; i++) {
-          const tx = cx + offsets[i] * sx;
-          const clickRadius = me.towers[i] ? 25 * sx : 20 * sx;
-          if (Math.hypot(mouseX - tx, mouseY - (cy - 18 * sy)) < clickRadius) {
+          const tx = cx + offsets[i] * effectiveScale;
+          const clickRadius = me.towers[i] ? 25 * effectiveScale : 20 * effectiveScale;
+          if (Math.hypot(mouseX - tx, mouseY - (cy - 18 * effectiveScale)) < clickRadius) {
             buildMenuOpen = {
               slotIndex: i,
               x: tx,
@@ -3075,8 +3098,40 @@
   function sendInput() {
     if (phase !== "playing" || !lastSnap || isSpectator) return;
     const scale = getScale();
-    const worldX = (mouseX - scale.offsetX) / scale.sx;
-    const worldY = (mouseY - scale.offsetY) / scale.sy;
+    const playerCount = lastSnap?.players?.length || 1;
+    
+    let worldX, worldY;
+    
+    if (playerCount >= 4 && scale.gridMode) {
+      // Grid mode: convert screen coords to the player's own segment
+      // First find the current player's slot and grid position
+      const myPlayer = lastSnap.players?.find(p => p.id === myId);
+      const mySlot = myPlayer ? myPlayer.slot : 0;
+      
+      // Calculate grid position for player's segment
+      const col = Math.floor(mySlot / 2);
+      const row = mySlot % 2;
+      const gridScale = 0.5;
+      
+      // Segment screen position
+      const segmentWidth = world.segmentWidth * scale.sx * gridScale;
+      const segmentHeight = world.height * scale.sy * gridScale;
+      const segmentX = scale.offsetX + col * segmentWidth;
+      const segmentY = scale.offsetY + row * segmentHeight;
+      
+      // Convert mouse position to local segment coordinates
+      const localX = (mouseX - segmentX) / (scale.sx * gridScale);
+      const localY = (mouseY - segmentY) / (scale.sy * gridScale);
+      
+      // Convert to world coordinates (add slot offset)
+      worldX = localX + mySlot * world.segmentWidth;
+      worldY = localY;
+    } else {
+      // Normal mode: direct conversion
+      worldX = (mouseX - scale.offsetX) / scale.sx;
+      worldY = (mouseY - scale.offsetY) / scale.sy;
+    }
+    
     const shooting = mouseDown && !buildMenuOpen && !uiHovered;
     
     // Only send if position changed significantly or shooting state changed
@@ -3095,20 +3150,53 @@
   function getScale() {
     const sw = canvas.width;
     const sh = canvas.height;
-    const ww = world.width;
-    const wh = world.height;
+    const playerCount = lastSnap?.players?.length || 1;
     
     // Reserve space for the right panel in multiplayer (when panel would be shown)
-    const playerCount = lastSnap?.players?.length || 1;
     const panelReserve = (playerCount > 1) ? 195 : 0; // 175 panel + 20 margin
     const availableWidth = sw - panelReserve;
+    
+    // For 4+ players: use grid layout (2 players per column, all at 50% scale)
+    // This prevents the right panel from cutting into player viewports
+    if (playerCount >= 4) {
+      const numColumns = Math.ceil(playerCount / 2);
+      const numRows = Math.min(playerCount, 2);
+      
+      // Effective world dimensions for the grid layout
+      // Each segment is at 50% scale, arranged in columns
+      const effectiveWidth = numColumns * world.segmentWidth * 0.5;
+      const effectiveHeight = numRows * world.height * 0.5;
+      
+      const scale = Math.min(availableWidth / effectiveWidth, sh / effectiveHeight);
+      const renderW = effectiveWidth * scale;
+      const renderH = effectiveHeight * scale;
+      const offsetX = (availableWidth - renderW) / 2;
+      const offsetY = (sh - renderH) / 2;
+      
+      return { 
+        sx: scale, 
+        sy: scale, 
+        offsetX, 
+        offsetY, 
+        renderW, 
+        renderH, 
+        panelReserve,
+        gridMode: true,
+        numColumns,
+        numRows
+      };
+    }
+    
+    // Normal layout for 1-3 players
+    const ww = world.width;
+    const wh = world.height;
     
     const scale = Math.min(availableWidth / ww, sh / wh);
     const renderW = ww * scale;
     const renderH = wh * scale;
     const offsetX = (availableWidth - renderW) / 2;
     const offsetY = (sh - renderH) / 2;
-    return { sx: scale, sy: scale, offsetX, offsetY, renderW, renderH, panelReserve };
+    return { sx: scale, sy: scale, offsetX, offsetY, renderW, renderH, panelReserve, gridMode: false };
   }
 
   function drawNeonText(text, x, y, color, size, align = "left") {
@@ -3570,23 +3658,25 @@
       }
 
 
-      // ===== OPPONENT SEGMENT STACKING =====
-      // With 4+ players, stack opponent segments vertically to save horizontal space
+      // ===== GRID-BASED SEGMENT LAYOUT FOR 4+ PLAYERS =====
+      // With 4+ players, display all segments at 50% scale in a grid layout
+      // Maximum 2 players per column (stacked vertically)
       let myPlayer = lastSnap.players?.find(p => p.id === myId);
       const mySlot = myPlayer ? myPlayer.slot : -1;
       const playerCount = lastSnap.players?.length || 0;
+      const scaleInfo = getScale();
+      const isGridMode = scaleInfo.gridMode || false;
       
-      // Get visual scale for rendering (not positioning!)
+      // Get visual scale for rendering
       const getVisualScale = (slot) => {
         if (playerCount <= 3) return 1.0; // Normal size with 3 or fewer
-        return (slot === mySlot) ? 1.0 : 0.5; // Opponents 50% smaller
+        return 0.5; // All players at 50% scale in grid mode
       };
       
       // Calculate rendering position for each segment
-      // Your segment: normal position
-      // Opponent segments: stacked vertically on the right side
+      // For 4+ players: grid layout with 2 players per column
       const getSegmentRenderPos = (slot) => {
-        if (playerCount <= 3 || slot === mySlot) {
+        if (playerCount <= 3) {
           // Normal positioning - horizontal layout
           return {
             x: slot * world.segmentWidth * sx,
@@ -3595,44 +3685,46 @@
           };
         }
         
-        // Stack opponents vertically on the right side
-        // Calculate which opponent number this is (0, 1, 2, etc.)
-        let opponentIndex = 0;
-        for (let s = 0; s < slot; s++) {
-          if (s !== mySlot) opponentIndex++;
-        }
+        // Grid layout for 4+ players
+        // Column = slot / 2 (integer division)
+        // Row = slot % 2 (0 = top, 1 = bottom)
+        const col = Math.floor(slot / 2);
+        const row = slot % 2;
+        const gridScale = 0.5;
         
-        const opponentScale = 0.5;
-        const stackedHeight = world.height * sy * opponentScale;
-        const stackX = canvas.width - (world.segmentWidth * sx * opponentScale) - 200; // 200px for panel
-        const stackY = opponentIndex * stackedHeight;
+        // Each segment in the grid
+        const segmentWidth = world.segmentWidth * sx * gridScale;
+        const segmentHeight = world.height * sy * gridScale;
+        
+        const gridX = col * segmentWidth;
+        const gridY = row * segmentHeight;
         
         return {
-          x: stackX,
-          y: stackY,
-          scale: opponentScale
+          x: gridX,
+          y: gridY,
+          scale: gridScale
         };
       };
       
-      // Draw segment backgrounds and borders (for stacked view)
+      // Draw segment backgrounds and borders (for grid view)
       const drawSegmentBackgrounds = () => {
         if (playerCount <= 3) return; // No special rendering needed
         
+        // Draw backgrounds for all players in grid mode
         lastSnap.players.forEach(p => {
-          if (p.slot === mySlot) return; // Skip local player
-          
           const segmentPos = getSegmentRenderPos(p.slot);
           const width = world.segmentWidth * sx * segmentPos.scale;
           const height = world.height * sy * segmentPos.scale;
           
           // Dark background
-          ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+          ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
           ctx.fillRect(segmentPos.x, segmentPos.y, width, height);
           
-          // Border
+          // Border - highlight current player's segment
           const color = PLAYER_COLORS[p.slot]?.main || "#0ff";
-          ctx.strokeStyle = hexToRgba(color, 0.6);
-          ctx.lineWidth = 2;
+          const isMySegment = p.slot === mySlot;
+          ctx.strokeStyle = hexToRgba(color, isMySegment ? 1.0 : 0.6);
+          ctx.lineWidth = isMySegment ? 3 : 2;
           ctx.strokeRect(segmentPos.x, segmentPos.y, width, height);
           
           // Ground line for this segment
@@ -3643,6 +3735,16 @@
           ctx.moveTo(segmentPos.x, groundY);
           ctx.lineTo(segmentPos.x + width, groundY);
           ctx.stroke();
+          
+          // Player name label in corner for grid mode
+          if (playerCount >= 4) {
+            ctx.font = "bold 11px Orbitron, sans-serif";
+            ctx.fillStyle = hexToRgba(color, 0.9);
+            ctx.textAlign = "left";
+            ctx.textBaseline = "top";
+            const label = p.name || `P${p.slot + 1}`;
+            ctx.fillText(label, segmentPos.x + 5, segmentPos.y + 5);
+          }
         });
       };
 
@@ -3711,88 +3813,117 @@
       ctx.save();
       ctx.translate(offsetX, offsetY);
 
-      // Draw stacked segment backgrounds (for 4+ players)
+      // Draw segment backgrounds (for 4+ players grid mode)
       drawSegmentBackgrounds();
 
-      // Grid
-      ctx.strokeStyle = "rgba(0,255,255,0.03)";
-      ctx.lineWidth = 1;
-      for (let x = 0; x < world.width; x += 30) {
-        ctx.beginPath();
-        ctx.moveTo(x * sx, 0);
-        ctx.lineTo(x * sx, world.height * sy);
-        ctx.stroke();
-      }
-      for (let y = 0; y < world.height; y += 30) {
-        ctx.beginPath();
-        ctx.moveTo(0, y * sy);
-        ctx.lineTo(world.width * sx, y * sy);
-        ctx.stroke();
-      }
-
-      // Segment dividers - solid walls between players
-      const segCount = Math.round(world.width / world.segmentWidth);
-      for (let i = 1; i < segCount; i++) {
-        const x = i * world.segmentWidth * sx;
-        
-        // Wall glow effect
-        const gradient = ctx.createLinearGradient(x - 15, 0, x + 15, 0);
-        gradient.addColorStop(0, "rgba(160,0,255,0)");
-        gradient.addColorStop(0.5, "rgba(160,0,255,0.15)");
-        gradient.addColorStop(1, "rgba(160,0,255,0)");
-        ctx.fillStyle = gradient;
-        ctx.fillRect(x - 15, 0, 30, world.height * sy);
-        
-        // Main wall line
-        ctx.strokeStyle = "rgba(160,0,255,0.8)";
-        ctx.lineWidth = 3;
-        setShadow(ctx, "#a000ff", 15);
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, world.height * sy);
-        ctx.stroke();
-        clearShadow(ctx);
-        
-        // Energy pulse effect
-        const pulseY = ((time * 100) % (world.height * sy));
-        ctx.fillStyle = "rgba(200,100,255,0.6)";
-        ctx.beginPath();
-        ctx.arc(x, pulseY, 4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(x, world.height * sy - pulseY, 4, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Ground line
-      const groundY = 560 * sy;
-      ctx.strokeStyle = "#0ff";
-      ctx.lineWidth = 3;
-      setShadow(ctx, "#0ff", 20);
-      ctx.beginPath();
-      ctx.moveTo(0, groundY);
-      ctx.lineTo(world.width * sx, groundY);
-      ctx.stroke();
-      clearShadow(ctx);
-
-      // Player effects (slowfield, shield)
-      for (const p of lastSnap.players) {
-        if (p.slowfield) {
-          ctx.fillStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.04);
-          ctx.fillRect(p.slot * world.segmentWidth * sx, 0, world.segmentWidth * sx, 560 * sy);
+      // Grid - skip in grid mode (handled by segment backgrounds)
+      if (playerCount < 4) {
+        ctx.strokeStyle = "rgba(0,255,255,0.03)";
+        ctx.lineWidth = 1;
+        for (let x = 0; x < world.width; x += 30) {
+          ctx.beginPath();
+          ctx.moveTo(x * sx, 0);
+          ctx.lineTo(x * sx, world.height * sy);
+          ctx.stroke();
+        }
+        for (let y = 0; y < world.height; y += 30) {
+          ctx.beginPath();
+          ctx.moveTo(0, y * sy);
+          ctx.lineTo(world.width * sx, y * sy);
+          ctx.stroke();
         }
       }
-      for (const p of lastSnap.players) {
-        if (p.shieldActive > 0) {
-          const cx = (p.slot * world.segmentWidth + world.segmentWidth / 2) * sx;
-          ctx.strokeStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.5);
+
+      // Segment dividers - solid walls between players (skip in grid mode)
+      if (playerCount < 4) {
+        const segCount = Math.round(world.width / world.segmentWidth);
+        for (let i = 1; i < segCount; i++) {
+          const x = i * world.segmentWidth * sx;
+        
+          // Wall glow effect
+          const gradient = ctx.createLinearGradient(x - 15, 0, x + 15, 0);
+          gradient.addColorStop(0, "rgba(160,0,255,0)");
+          gradient.addColorStop(0.5, "rgba(160,0,255,0.15)");
+          gradient.addColorStop(1, "rgba(160,0,255,0)");
+          ctx.fillStyle = gradient;
+          ctx.fillRect(x - 15, 0, 30, world.height * sy);
+        
+          // Main wall line
+          ctx.strokeStyle = "rgba(160,0,255,0.8)";
           ctx.lineWidth = 3;
-          ctx.shadowColor = PLAYER_COLORS[p.slot]?.main;
-          ctx.shadowBlur = 15;
+          setShadow(ctx, "#a000ff", 15);
           ctx.beginPath();
-          ctx.arc(cx, groundY, world.segmentWidth * sx * 0.45, Math.PI, 0);
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, world.height * sy);
           ctx.stroke();
-          ctx.shadowBlur = 0;
+          clearShadow(ctx);
+        
+          // Energy pulse effect
+          const pulseY = ((time * 100) % (world.height * sy));
+          ctx.fillStyle = "rgba(200,100,255,0.6)";
+          ctx.beginPath();
+          ctx.arc(x, pulseY, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(x, world.height * sy - pulseY, 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Ground line (only in non-grid mode - grid mode draws per segment)
+        const groundY = 560 * sy;
+        ctx.strokeStyle = "#0ff";
+        ctx.lineWidth = 3;
+        setShadow(ctx, "#0ff", 20);
+        ctx.beginPath();
+        ctx.moveTo(0, groundY);
+        ctx.lineTo(world.width * sx, groundY);
+        ctx.stroke();
+        clearShadow(ctx);
+
+        // Player effects (slowfield, shield) - non-grid mode positioning
+        for (const p of lastSnap.players) {
+          if (p.slowfield) {
+            ctx.fillStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.04);
+            ctx.fillRect(p.slot * world.segmentWidth * sx, 0, world.segmentWidth * sx, 560 * sy);
+          }
+        }
+        for (const p of lastSnap.players) {
+          if (p.shieldActive > 0) {
+            const cx = (p.slot * world.segmentWidth + world.segmentWidth / 2) * sx;
+            ctx.strokeStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.5);
+            ctx.lineWidth = 3;
+            ctx.shadowColor = PLAYER_COLORS[p.slot]?.main;
+            ctx.shadowBlur = 15;
+            ctx.beginPath();
+            ctx.arc(cx, groundY, world.segmentWidth * sx * 0.45, Math.PI, 0);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+          }
+        }
+      } else {
+        // Grid mode: Draw player effects with grid positioning
+        for (const p of lastSnap.players) {
+          const segmentPos = getSegmentRenderPos(p.slot);
+          const segWidth = world.segmentWidth * sx * segmentPos.scale;
+          const segHeight = world.height * sy * segmentPos.scale;
+          const groundY = segmentPos.y + 560 * sy * segmentPos.scale;
+          
+          if (p.slowfield) {
+            ctx.fillStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.04);
+            ctx.fillRect(segmentPos.x, segmentPos.y, segWidth, 560 * sy * segmentPos.scale);
+          }
+          
+          if (p.shieldActive > 0) {
+            const cx = segmentPos.x + segWidth / 2;
+            ctx.strokeStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.5);
+            ctx.lineWidth = 2;
+            ctx.shadowColor = PLAYER_COLORS[p.slot]?.main;
+            ctx.shadowBlur = 10;
+            ctx.beginPath();
+            ctx.arc(cx, groundY, segWidth * 0.45, Math.PI, 0);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+          }
         }
       }
 
@@ -4934,24 +5065,40 @@
 
         // Aim line for current player
         if (p.id === myId && mouseDown && !buildMenuOpen && !isDead) {
-          const turretX = cx;
-          const turretY = (560 - 14) * sy;
-          const worldMouseX = (mouseX - offsetX) / sx;
-          const worldMouseY = (mouseY - offsetY) / sy;
+          const turretY = groundY - 14 * sy * segmentPos.scale;
+          
+          // Calculate mouse position relative to player's segment
+          let worldMouseX, worldMouseY;
+          if (playerCount >= 4 && isGridMode) {
+            // Grid mode: convert mouse coords relative to player's grid cell
+            const localMouseX = (mouseX - segmentPos.x - offsetX) / (sx * segmentPos.scale);
+            const localMouseY = (mouseY - segmentPos.y - offsetY) / (sy * segmentPos.scale);
+            worldMouseX = localMouseX + p.slot * world.segmentWidth;
+            worldMouseY = localMouseY;
+          } else {
+            worldMouseX = (mouseX - offsetX) / sx;
+            worldMouseY = (mouseY - offsetY) / sy;
+          }
+          
           const dx = worldMouseX - (p.slot * world.segmentWidth + world.segmentWidth / 2);
           const dy = worldMouseY - 560;
           let angle = Math.atan2(dy, dx);
           const maxAngle = (80 * Math.PI) / 180;
           const clampedAngle = -Math.PI / 2 + Math.max(-maxAngle, Math.min(maxAngle, angle - (-Math.PI / 2)));
-          const endX = (p.slot * world.segmentWidth + world.segmentWidth / 2) + Math.cos(clampedAngle) * 500;
-          const endY = 560 + Math.sin(clampedAngle) * 500;
+          
+          // Calculate end point in local segment coordinates, then convert to screen
+          const localEndX = world.segmentWidth / 2 + Math.cos(clampedAngle) * 500;
+          const localEndY = 560 + Math.sin(clampedAngle) * 500;
+          const screenEndX = segmentPos.x + (localEndX * sx * segmentPos.scale);
+          const screenEndY = segmentPos.y + (localEndY * sy * segmentPos.scale);
+          
           ctx.save();
           ctx.strokeStyle = hexToRgba(color.main, 0.4);
           ctx.lineWidth = 2;
           ctx.setLineDash([8, 8]);
           ctx.beginPath();
-          ctx.moveTo(turretX, turretY);
-          ctx.lineTo(endX * sx, endY * sy);
+          ctx.moveTo(cx, turretY);
+          ctx.lineTo(screenEndX, screenEndY);
           ctx.stroke();
           ctx.restore();
         }
