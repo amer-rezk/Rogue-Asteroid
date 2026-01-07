@@ -3585,6 +3585,34 @@
         if (playerCount <= 3) return 1.0; // Normal scaling with 3 or fewer players
         return (slot === mySlot) ? 1.0 : 0.5; // Scale opponents when 4+ players
       };
+      
+      // Calculate cumulative x-position for a segment
+      // This accounts for different segment widths when scaling
+      const getSegmentStartX = (targetSlot) => {
+        let cumulativeX = 0;
+        for (let slot = 0; slot < targetSlot; slot++) {
+          const scale = getSlotScale(slot);
+          cumulativeX += world.segmentWidth * sx * scale;
+        }
+        return cumulativeX;
+      };
+      
+      // Convert world X coordinate to screen X coordinate (accounts for segment scaling)
+      const worldXToScreenX = (worldX) => {
+        // Determine which segment this world coordinate is in
+        const slot = Math.floor(worldX / world.segmentWidth);
+        if (slot < 0 || slot >= 6) return worldX * sx; // Fallback
+        
+        // Get the cumulative start position of this segment
+        const segmentStartX = getSegmentStartX(slot);
+        
+        // Get the local x within the segment (0 to segmentWidth)
+        const localX = worldX - (slot * world.segmentWidth);
+        
+        // Apply segment's scale to the local x and add to segment start
+        const slotScale = getSlotScale(slot);
+        return segmentStartX + (localX * sx * slotScale);
+      };
 
 
       // Reset UI hover state - will be set true if mouse is over any UI element
@@ -3715,20 +3743,24 @@
       for (const p of lastSnap.players) {
         if (p.slowfield) {
           const slotScale = getSlotScale(p.slot);
+          const segmentStartX = getSegmentStartX(p.slot);
+          const segmentWidth = world.segmentWidth * sx * slotScale;
           ctx.fillStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.04);
-          ctx.fillRect(p.slot * world.segmentWidth * sx * slotScale, 0, world.segmentWidth * sx * slotScale, 560 * sy * slotScale);
+          ctx.fillRect(segmentStartX, 0, segmentWidth, 560 * sy * slotScale);
         }
       }
       for (const p of lastSnap.players) {
         if (p.shieldActive > 0) {
           const slotScale = getSlotScale(p.slot);
-          const cx = (p.slot * world.segmentWidth + world.segmentWidth / 2) * sx * slotScale;
+          const segmentStartX = getSegmentStartX(p.slot);
+          const segmentWidth = world.segmentWidth * sx * slotScale;
+          const cx = segmentStartX + segmentWidth / 2;
           ctx.strokeStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.5);
           ctx.lineWidth = 3;
           ctx.shadowColor = PLAYER_COLORS[p.slot]?.main;
           ctx.shadowBlur = 15;
           ctx.beginPath();
-          ctx.arc(cx, groundY, world.segmentWidth * sx * slotScale * 0.45, Math.PI, 0);
+          ctx.arc(cx, groundY, segmentWidth * 0.45, Math.PI, 0);
           ctx.stroke();
           ctx.shadowBlur = 0;
         }
@@ -3739,7 +3771,7 @@
         for (const exp of lastSnap.shieldExplosions) {
           const slotScale = getSlotScale(exp.slot);
           const alpha = (exp.life / exp.duration) * 0.6;
-          const x = exp.x * sx * slotScale;
+          const x = worldXToScreenX(exp.x);
           const y = exp.y * sy * slotScale;
           const r = exp.radius * sx * slotScale;
           
@@ -3775,7 +3807,7 @@
         for (const ghost of lastSnap.ghostAllies) {
           const slotScale = getSlotScale(ghost.ownerSlot);
           const alpha = Math.min(1, ghost.life / 2);
-          const x = ghost.x * sx * slotScale;
+          const x = worldXToScreenX(ghost.x);
           const y = ghost.y * sy * slotScale;
           const r = ghost.r * sx * slotScale;
           
@@ -3816,7 +3848,7 @@
           if (particleSlot !== mySlot && i % 2 === 0) continue;
           
           const alpha = p.life / (p.maxLife || 0.5);
-          const px = p.x * sx * slotScale;
+          const px = worldXToScreenX(p.x);
           const py = p.y * sy * slotScale;
           const pSize = (p.size || 2) * sx * slotScale;
           
@@ -3999,9 +4031,9 @@
       const renderHeight = world.height * sy;
       
       for (const m of lastSnap.missiles) {
-        // Apply slot-based scaling for opponents
+        // Convert world coordinates to screen coordinates (accounts for segment scaling)
         const slotScale = getSlotScale(m.targetSlot);
-        const x = m.x * sx * slotScale;
+        const x = worldXToScreenX(m.x);
         const y = m.y * sy * slotScale;
         const r = m.r * sx * slotScale;
 
@@ -4722,11 +4754,10 @@
         }
       }
 
-      // Render local bullets
+      // Render local bullets (keep at normal scale for simplicity)
       for (const b of clientBullets) {
         const baseColor = PLAYER_COLORS[b.slot]?.main || "#0ff";
-        const slotScale = getSlotScale(b.ownerSlot);
-        drawBullet(b, sx * slotScale, sy * slotScale, baseColor);
+        drawBullet(b, sx, sy, baseColor);
       }
       
       // Render enemy bullets (from battleships) - use server data if available
@@ -4812,7 +4843,7 @@
           // Apply slot-based scaling
           const damageSlot = Math.floor(d.x / world.segmentWidth);
           const slotScale = getSlotScale(damageSlot);
-          ctx.fillText(displayText, d.x * sx * slotScale, d.y * sy * slotScale);
+          ctx.fillText(displayText, worldXToScreenX(d.x), d.y * sy * slotScale);
         }
       }
 
@@ -4827,7 +4858,10 @@
         const sxScaled = sx * slotScale;
         const syScaled = sy * slotScale;
         
-        const cx = (p.slot * world.segmentWidth + world.segmentWidth / 2) * sxScaled;
+        // Calculate center x using cumulative position (accounts for different segment widths)
+        const segmentStartX = getSegmentStartX(p.slot);
+        const segmentWidth = world.segmentWidth * sxScaled;
+        const cx = segmentStartX + segmentWidth / 2;
         const isDead = p.hp <= 0;
 
         // Aim line for current player
