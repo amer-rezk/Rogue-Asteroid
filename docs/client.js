@@ -3572,7 +3572,7 @@
 
       // ===== SIMPLE OPPONENT SCALING =====
       // With 4+ players, render opponent content at 50% size to save screen space
-      const myPlayer = lastSnap.players?.find(p => p.id === myId);
+      let myPlayer = lastSnap.players?.find(p => p.id === myId);
       const mySlot = myPlayer ? myPlayer.slot : -1;
       const playerCount = lastSnap.players?.length || 0;
       
@@ -5392,7 +5392,7 @@
         ctx.textAlign = "left";
       }
       
-      const myPlayer = lastSnap.players.find(p => p.id === myId);
+      myPlayer = lastSnap.players.find(p => p.id === myId);
       if (myPlayer) {
         // Gold display (positioned after modifier or at base position)
         const goldX = Math.max(hudNextX, 160);
@@ -5479,7 +5479,7 @@
           let isScoreLeader = true;
           let leaderName = "";
           if (lastSnap && lastSnap.players && lastSnap.players.length > 1) {
-            const myPlayer = lastSnap.players.find(p => p.id === myId);
+            myPlayer = lastSnap.players.find(p => p.id === myId);
             let maxDamage = -1;
             let leader = null;
             for (const p of lastSnap.players) {
@@ -7172,7 +7172,7 @@
         }
         
         // Reroll button to the right of cards
-        const myPlayer = lastSnap?.players.find(p => p.id === myId);
+        myPlayer = lastSnap?.players.find(p => p.id === myId);
         const myGold = myPlayer?.gold || 0;
         const canAffordReroll = myGold >= currentRerollCost;
         
