@@ -808,7 +808,7 @@ const UPGRADE_DEFS = [
   { id: "multi", name: "Multishot", cat: "offense", icon: "⚔️", desc: "+{val} Bullets (-{penalty}% dmg)", stat: "multishot", base: 1, type: "multishot" },
   { id: "crit", name: "Crit Scope", cat: "offense", icon: "🎯", desc: "+{val}% Crit Chance", stat: "critChance", base: 0.05, type: "add_cap", cap: 1.0 },
   { id: "boom", name: "Explosive", cat: "offense", icon: "💣", desc: "Explosions size +{val}", stat: "explosive", base: 1, type: "add" },
-  { id: "caliber", name: "Dissipating Slug", cat: "offense", icon: "💥", desc: "3x size & dmg up close, shrinks over distance", stat: "bulletSize", base: 0.1125, type: "mult" },
+  { id: "caliber", name: "Dissipating Slug", cat: "offense", icon: "⚫", desc: "3x size & dmg up close, shrinks over distance", stat: "bulletSize", base: 0.1125, type: "mult" },
   { id: "rico", name: "Ricochet", cat: "utility", icon: "🎱", desc: "Chains to {val} enemies (-10% dmg each)", stat: "ricochet", base: 1, type: "add" },
   { id: "pierce", name: "Railgun", cat: "utility", icon: "📌", desc: "Pierces {val} enemies", stat: "pierce", base: 1, type: "add" },
   { id: "chain", name: "Tesla Coil", cat: "utility", icon: "⚡", desc: "{val}% chance for Lightning", stat: "chainChance", base: 0.02, type: "add_cap", cap: 0.30 },
@@ -1556,7 +1556,7 @@ function startModuleCardPhase() {
   // Determine pick order:
   // 1. Players who killed their boss (ordered by who killed first via bossKillOrder)
   // 2. Players who didn't kill boss and weren't hit (by slot order)
-  // 3. Players who were hit by boss, randomized (LAST pick - punishment)
+  // 3. Players who were hit by boss AND didn't kill their boss, randomized (LAST pick - punishment)
   const alivePlayerIds = new Set(
     lockedSlots
       .map(id => players.get(id))
@@ -1565,8 +1565,9 @@ function startModuleCardPhase() {
   );
   
   // Start with boss kill order (players who killed their boss, in order they killed)
+  // Boss killers get rewarded even if they got hit
   const bossKillers = bossKillOrder.filter(id => 
-    alivePlayerIds.has(id) && !bossHitPlayers.has(id)
+    alivePlayerIds.has(id)
   );
   
   // Players who didn't kill boss and weren't hit (middle priority, by slot)
@@ -1576,10 +1577,10 @@ function startModuleCardPhase() {
     .sort((a, b) => (a.slot || 0) - (b.slot || 0))
     .map(p => p.id);
   
-  // Players who were hit by boss - randomized and LAST (punishment)
+  // Players who were hit by boss AND didn't kill - randomized and LAST (punishment)
   const hitPlayers = lockedSlots
     .map(id => players.get(id))
-    .filter(p => p && p.hp > 0 && bossHitPlayers.has(p.id))
+    .filter(p => p && p.hp > 0 && bossHitPlayers.has(p.id) && !bossKillOrder.includes(p.id))
     .sort(() => Math.random() - 0.5)
     .map(p => p.id);
   
@@ -2452,7 +2453,7 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
       }
       
       // Track boss kill order
-      if (m.type === "boss" && p && !bossKillOrder.includes(p.id)) {
+      if ((m.type === "boss" || m.isBattleship) && p && !bossKillOrder.includes(p.id)) {
         bossKillOrder.push(p.id);
         broadcast({ t: "bossKilled", killerId: p.id, killerName: p.name, killPosition: bossKillOrder.length });
         
@@ -4432,11 +4433,11 @@ function tick() {
             }
           }
           
-          addDamageNumber(m.x, m.y - m.r, b.dmg, b.isCrit);
+          addDamageNumber(m.x, m.y - m.r, hitDamage, b.isCrit);
           
           if (owner) {
-            owner.damageDealt = (owner.damageDealt || 0) + b.dmg;
-            owner.waveDamage = (owner.waveDamage || 0) + b.dmg;
+            owner.damageDealt = (owner.damageDealt || 0) + hitDamage;
+            owner.waveDamage = (owner.waveDamage || 0) + hitDamage;
           }
           
           if (m.hp <= 0) {
@@ -4485,6 +4486,11 @@ function tick() {
                 owner.gold = (owner.gold || 0) + 8;
                 owner.score = (owner.score || 0) + 150; // Bonus score
                 createExplosion(m.x, m.y, 50, "#88aaff"); // Big blue explosion
+                // Track battleship kill for module pick order (same as boss)
+                if (!bossKillOrder.includes(owner.id)) {
+                  bossKillOrder.push(owner.id);
+                  broadcast({ t: "bossKilled", killerId: owner.id, killerName: owner.name, killPosition: bossKillOrder.length });
+                }
               }
               // Berserker gives 3 gold
               else if (m.isBerserker) {
