@@ -3095,11 +3095,28 @@
   function getScale() {
     const sw = canvas.width;
     const sh = canvas.height;
-    const ww = world.width;
     const wh = world.height;
     
-    // Reserve space for the right panel in multiplayer (when panel would be shown)
+    // Calculate effective world width accounting for segment scaling
     const playerCount = lastSnap?.players?.length || 1;
+    const myPlayer = lastSnap?.players?.find(p => p.id === myId);
+    const mySlot = myPlayer ? myPlayer.slot : -1;
+    
+    // Calculate effective width: sum of all segment widths with their scales
+    let effectiveWorldWidth = 0;
+    for (let slot = 0; slot < playerCount; slot++) {
+      // Apply same scaling logic as in draw function
+      if (playerCount <= 3) {
+        effectiveWorldWidth += world.segmentWidth; // No scaling with 3 or fewer
+      } else {
+        effectiveWorldWidth += world.segmentWidth * (slot === mySlot ? 1.0 : 0.5);
+      }
+    }
+    
+    // Use effective width for scaling calculation
+    const ww = effectiveWorldWidth;
+    
+    // Reserve space for the right panel in multiplayer (when panel would be shown)
     const panelReserve = (playerCount > 1) ? 195 : 0; // 175 panel + 20 margin
     const availableWidth = sw - panelReserve;
     
@@ -3613,6 +3630,17 @@
         const slotScale = getSlotScale(slot);
         return segmentStartX + (localX * sx * slotScale);
       };
+      
+      // Calculate total screen width accounting for all segment scales
+      const getTotalScreenWidth = () => {
+        const numPlayers = lastSnap.players?.length || 4;
+        let totalWidth = 0;
+        for (let slot = 0; slot < numPlayers; slot++) {
+          const scale = getSlotScale(slot);
+          totalWidth += world.segmentWidth * sx * scale;
+        }
+        return totalWidth;
+      };
 
 
       // Reset UI hover state - will be set true if mouse is over any UI element
@@ -3678,26 +3706,39 @@
       ctx.save();
       ctx.translate(offsetX, offsetY);
 
-      // Grid
+      // Grid (draw for each segment with proper scaling)
       ctx.strokeStyle = "rgba(0,255,255,0.03)";
       ctx.lineWidth = 1;
-      for (let x = 0; x < world.width; x += 30) {
-        ctx.beginPath();
-        ctx.moveTo(x * sx, 0);
-        ctx.lineTo(x * sx, world.height * sy);
-        ctx.stroke();
+      
+      const numPlayers = lastSnap.players?.length || 4;
+      for (let slot = 0; slot < numPlayers; slot++) {
+        const slotScale = getSlotScale(slot);
+        const segmentStartX = getSegmentStartX(slot);
+        const segmentWidth = world.segmentWidth * sx * slotScale;
+        
+        // Vertical grid lines within this segment
+        for (let x = 0; x < world.segmentWidth; x += 30) {
+          const screenX = segmentStartX + (x * sx * slotScale);
+          ctx.beginPath();
+          ctx.moveTo(screenX, 0);
+          ctx.lineTo(screenX, world.height * sy);
+          ctx.stroke();
+        }
       }
+      
+      // Horizontal grid lines (same for all segments)
       for (let y = 0; y < world.height; y += 30) {
         ctx.beginPath();
         ctx.moveTo(0, y * sy);
-        ctx.lineTo(world.width * sx, y * sy);
+        ctx.lineTo(getTotalScreenWidth(), y * sy);
         ctx.stroke();
       }
 
-      // Segment dividers - solid walls between players
+      // Segment dividers - solid walls between players (account for scaled segments)
       const segCount = Math.round(world.width / world.segmentWidth);
       for (let i = 1; i < segCount; i++) {
-        const x = i * world.segmentWidth * sx;
+        // Use cumulative position for segment boundaries
+        const x = getSegmentStartX(i);
         
         // Wall glow effect
         const gradient = ctx.createLinearGradient(x - 15, 0, x + 15, 0);
@@ -3728,14 +3769,15 @@
         ctx.fill();
       }
 
-      // Ground line
+      // Ground line (extends across all segments accounting for scaling)
       const groundY = 560 * sy;
+      const totalScreenWidth = getTotalScreenWidth();
       ctx.strokeStyle = "#0ff";
       ctx.lineWidth = 3;
       setShadow(ctx, "#0ff", 20);
       ctx.beginPath();
       ctx.moveTo(0, groundY);
-      ctx.lineTo(world.width * sx, groundY);
+      ctx.lineTo(totalScreenWidth, groundY);
       ctx.stroke();
       clearShadow(ctx);
 
