@@ -343,6 +343,14 @@ let activeDeathMods = {
 // ===== GAME MODIFIERS SYSTEM =====
 // Random game-altering rules selected at the start of each game
 const GAME_MODIFIERS = {
+  volatile: {
+    id: "volatile",
+    name: "Volatile Payload",
+    icon: "☠️", 
+    color: "#ff4400",
+    desc: "Enemies EXPLODE on death, damaging everything nearby!",
+    flavor: "\"Pop one, pop 'em all.\""
+  },
   noMobs: {
     id: "noMobs",
     name: "Pacifist Protocol",
@@ -3760,7 +3768,7 @@ function tick() {
 
       b.lifespan -= DT;
       // FIX 1: Removed death check so bullets don't vanish before returning
-      // if (b.lifespan <= 0) { b.dead = true; continue; } 
+      if (b.lifespan <= 0) { b.dead = true; continue; }
       
       // Track distance traveled (for Momentum Lens and Dissipating Slug)
       // PERF: Only calculate if needed
@@ -4534,10 +4542,34 @@ function tick() {
             owner.waveDamage = (owner.waveDamage || 0) + hitDamage;
           }
           
-          if (m.hp <= 0) {
-            m.dead = true;
-            triggerBioBloom(m); // <--- ADD THIS
-            createExplosion(m.x, m.y, 25, ATTACK_TYPES[m.attackType]?.color || "#fa0");
+          // MODIFIER: Volatile Payload (Explode on death)
+            if (activeGameModifier === "volatile" && !m.isBoss && !m.isBattleship) {
+              // Visual boom (Orange explosion)
+              createExplosion(m.x, m.y, 70, "#ff6600");
+              
+              // Damage neighbors logic
+              const volRange = 100; // Radius of explosion
+              const volDmg = m.maxHp * 0.5; // Deals 50% of the dead enemy's Max HP as damage
+              
+              // Only check enemies in the same lane (optimization)
+              const slotMissilesVol = missilesBySlot[m.targetSlot];
+              if (slotMissilesVol) {
+                for (let vi = 0; vi < slotMissilesVol.length; vi++) {
+                  const mv = slotMissilesVol[vi];
+                  // Don't damage self or dead enemies
+                  if (mv.dead || mv.id === m.id) continue;
+                  
+                  // Check distance
+                  const dx = mv.x - m.x;
+                  const dy = mv.y - m.y;
+                  if (dx*dx + dy*dy < volRange*volRange) {
+                    mv.hp -= volDmg;
+                    addDamageNumber(mv.x, mv.y - 15, volDmg, true);
+                    // If this kills them, they will explode next tick (Chain Reaction!)
+                  }
+                }
+              }
+            }
             
             // Necromancer Drive: Create ghost allies on kill per copy (STACKS)
             // 1x = 1 ghost, 2x = 2 ghosts, 3x = 3 ghosts
