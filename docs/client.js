@@ -3569,6 +3569,17 @@
 
       if (!lastSnap) return;
 
+      // ===== OPPONENT SCALING =====
+      // Scale down opponent segments by 50% to give more space and improve performance
+      const myPlayer = lastSnap.players?.find(p => p.id === myId);
+      const mySlot = myPlayer ? myPlayer.slot : -1;
+      
+      // Get scale multiplier for a given slot (1.0 for local player, 0.5 for opponents)
+      const getSlotScale = (slot) => {
+        return (slot === mySlot) ? 1.0 : 0.5;
+      };
+
+
       // Reset UI hover state - will be set true if mouse is over any UI element
       uiHovered = false;
       
@@ -3696,19 +3707,21 @@
       // Player effects (slowfield, shield)
       for (const p of lastSnap.players) {
         if (p.slowfield) {
+          const slotScale = getSlotScale(p.slot);
           ctx.fillStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.04);
-          ctx.fillRect(p.slot * world.segmentWidth * sx, 0, world.segmentWidth * sx, 560 * sy);
+          ctx.fillRect(p.slot * world.segmentWidth * sx * slotScale, 0, world.segmentWidth * sx * slotScale, 560 * sy * slotScale);
         }
       }
       for (const p of lastSnap.players) {
         if (p.shieldActive > 0) {
-          const cx = (p.slot * world.segmentWidth + world.segmentWidth / 2) * sx;
+          const slotScale = getSlotScale(p.slot);
+          const cx = (p.slot * world.segmentWidth + world.segmentWidth / 2) * sx * slotScale;
           ctx.strokeStyle = hexToRgba(PLAYER_COLORS[p.slot]?.main || "#fff", 0.5);
           ctx.lineWidth = 3;
           ctx.shadowColor = PLAYER_COLORS[p.slot]?.main;
           ctx.shadowBlur = 15;
           ctx.beginPath();
-          ctx.arc(cx, groundY, world.segmentWidth * sx * 0.45, Math.PI, 0);
+          ctx.arc(cx, groundY, world.segmentWidth * sx * slotScale * 0.45, Math.PI, 0);
           ctx.stroke();
           ctx.shadowBlur = 0;
         }
@@ -3717,10 +3730,11 @@
       // Shield Explosions (expanding damage circles)
       if (lastSnap.shieldExplosions) {
         for (const exp of lastSnap.shieldExplosions) {
+          const slotScale = getSlotScale(exp.slot);
           const alpha = (exp.life / exp.duration) * 0.6;
-          const x = exp.x * sx;
-          const y = exp.y * sy;
-          const r = exp.radius * sx;
+          const x = exp.x * sx * slotScale;
+          const y = exp.y * sy * slotScale;
+          const r = exp.radius * sx * slotScale;
           
           // Outer glow ring
           ctx.strokeStyle = hexToRgba(exp.color, alpha);
@@ -3752,10 +3766,11 @@
       // Ghost Allies (Necromancer Drive)
       if (lastSnap.ghostAllies) {
         for (const ghost of lastSnap.ghostAllies) {
+          const slotScale = getSlotScale(ghost.ownerSlot);
           const alpha = Math.min(1, ghost.life / 2);
-          const x = ghost.x * sx;
-          const y = ghost.y * sy;
-          const r = ghost.r * sx;
+          const x = ghost.x * sx * slotScale;
+          const y = ghost.y * sy * slotScale;
+          const r = ghost.r * sx * slotScale;
           
           // Ghostly glow
           ctx.shadowColor = "#8844ff";
@@ -3785,10 +3800,18 @@
       if (lastSnap.particles) {
         for (let i = 0; i < lastSnap.particles.length; i++) {
           const p = lastSnap.particles[i];
+          
+          // Determine which slot this particle belongs to based on x-coordinate
+          const particleSlot = Math.floor(p.x / world.segmentWidth);
+          const slotScale = getSlotScale(particleSlot);
+          
+          // PERFORMANCE: Skip 50% of particles on opponent segments
+          if (particleSlot !== mySlot && i % 2 === 0) continue;
+          
           const alpha = p.life / (p.maxLife || 0.5);
-          const px = p.x * sx;
-          const py = p.y * sy;
-          const pSize = (p.size || 2) * sx;
+          const px = p.x * sx * slotScale;
+          const py = p.y * sy * slotScale;
+          const pSize = (p.size || 2) * sx * slotScale;
           
           // Special confetti particle rendering! 🎉
           if (p.isConfetti) {
@@ -3969,9 +3992,11 @@
       const renderHeight = world.height * sy;
       
       for (const m of lastSnap.missiles) {
-        const x = m.x * sx;
-        const y = m.y * sy;
-        const r = m.r * sx;
+        // Apply slot-based scaling for opponents
+        const slotScale = getSlotScale(m.targetSlot);
+        const x = m.x * sx * slotScale;
+        const y = m.y * sy * slotScale;
+        const r = m.r * sx * slotScale;
 
         // PERFORMANCE: Skip missiles that are completely off-screen
         // This helps during spawn when many asteroids are above the viewport
@@ -4693,7 +4718,8 @@
       // Render local bullets
       for (const b of clientBullets) {
         const baseColor = PLAYER_COLORS[b.slot]?.main || "#0ff";
-        drawBullet(b, sx, sy, baseColor);
+        const slotScale = getSlotScale(b.ownerSlot);
+        drawBullet(b, sx * slotScale, sy * slotScale, baseColor);
       }
       
       // Render enemy bullets (from battleships) - use server data if available
@@ -4775,7 +4801,11 @@
             const rounded = Math.round(d.amount * 100) / 100;
             displayText = Number.isInteger(rounded) ? rounded.toString() : rounded.toFixed(2).replace(/\.?0+$/, '');
           }
-          ctx.fillText(displayText, d.x * sx, d.y * sy);
+          
+          // Apply slot-based scaling
+          const damageSlot = Math.floor(d.x / world.segmentWidth);
+          const slotScale = getSlotScale(damageSlot);
+          ctx.fillText(displayText, d.x * sx * slotScale, d.y * sy * slotScale);
         }
       }
 
@@ -4784,15 +4814,21 @@
       for (const p of lastSnap.players) {
         if (p.slot < 0) continue;
         const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
-        const cx = (p.slot * world.segmentWidth + world.segmentWidth / 2) * sx;
+        const slotScale = getSlotScale(p.slot);
+        
+        // Apply slot scaling to sxScaled/syScaled for this player segment
+        const sxScaled = sxScaled * slotScale;
+        const syScaled = syScaled * slotScale;
+        
+        const cx = (p.slot * world.segmentWidth + world.segmentWidth / 2) * sxScaled;
         const isDead = p.hp <= 0;
 
         // Aim line for current player
         if (p.id === myId && mouseDown && !buildMenuOpen && !isDead) {
           const turretX = cx;
-          const turretY = (560 - 14) * sy;
-          const worldMouseX = (mouseX - offsetX) / sx;
-          const worldMouseY = (mouseY - offsetY) / sy;
+          const turretY = (560 - 14) * syScaled;
+          const worldMouseX = (mouseX - offsetX) / sxScaled;
+          const worldMouseY = (mouseY - offsetY) / syScaled;
           const dx = worldMouseX - (p.slot * world.segmentWidth + world.segmentWidth / 2);
           const dy = worldMouseY - 560;
           let angle = Math.atan2(dy, dx);
@@ -4806,14 +4842,14 @@
           ctx.setLineDash([8, 8]);
           ctx.beginPath();
           ctx.moveTo(turretX, turretY);
-          ctx.lineTo(endX * sx, endY * sy);
+          ctx.lineTo(endX * sxScaled, endY * syScaled);
           ctx.stroke();
           ctx.restore();
         }
 
         // Main turret using sprites
         const turretAlpha = isDead ? 0.3 : 1;
-        const groundY = 560 * sy; // Base of playing field
+        const groundY = 560 * syScaled; // Base of playing field
         const mainStunned = (p.mainTurretStun || 0) > 0;
         
         // Check if turret images are loaded
@@ -4823,12 +4859,12 @@
         if (hasBase && hasBarrel) {
           // Calculate base size preserving aspect ratio
           const baseAspect = turretImages.base.naturalWidth / turretImages.base.naturalHeight;
-          const baseW = 43.75 * sx; // Width (35 * 1.25 = 25% bigger)
+          const baseW = 43.75 * sxScaled; // Width (35 * 1.25 = 25% bigger)
           const baseH = baseW / baseAspect; // Height calculated from aspect ratio
           
           // Barrel dimensions (preserve aspect ratio)
           const barrelAspect = turretImages.barrel.naturalWidth / turretImages.barrel.naturalHeight;
-          const barrelH = 35 * sy;
+          const barrelH = 35 * syScaled;
           const barrelW = barrelH * barrelAspect;
           
           // Position: bottom of base at ground, horizontally centered
@@ -4880,21 +4916,21 @@
           }
         } else {
           // Fallback to procedural rendering if sprites not loaded
-          const baseW = 24 * sx;
-          const baseH = 14 * sy;
+          const baseW = 24 * sxScaled;
+          const baseH = 14 * syScaled;
           ctx.fillStyle = hexToRgba(color.main, turretAlpha);
           ctx.strokeStyle = color.main;
           ctx.lineWidth = 1.5;
           if (!isDead) setShadow(ctx, color.main, 15);
           ctx.beginPath();
-          ctx.roundRect(cx - baseW / 2, 560 * sy - baseH, baseW, baseH, 3);
+          ctx.roundRect(cx - baseW / 2, 560 * syScaled - baseH, baseW, baseH, 3);
           ctx.fill();
           ctx.stroke();
           ctx.save();
-          ctx.translate(cx, 560 * sy - baseH / 2);
+          ctx.translate(cx, 560 * syScaled - baseH / 2);
           ctx.rotate(p.turretAngle + Math.PI / 2);
           ctx.fillStyle = hexToRgba(color.main, turretAlpha);
-          ctx.fillRect(-2.5 * sx, -22 * sy, 5 * sx, 22 * sy);
+          ctx.fillRect(-2.5 * sxScaled, -22 * syScaled, 5 * sxScaled, 22 * syScaled);
           ctx.restore();
           clearShadow(ctx);
         }
@@ -4903,16 +4939,16 @@
         const offsets = [-110, -50, 50, 110];
         const towers = p.towers || [null, null, null, null];
         towers.forEach((t, i) => {
-          const tx = cx + offsets[i] * sx;
-          const ty = 560 * sy;
+          const tx = cx + offsets[i] * sxScaled * slotScale;
+          const ty = 560 * syScaled * slotScale;
           
           // Check hover for OPPONENT towers (not own)
           // Note: tx/ty are in translated coordinates, mouseX/mouseY are screen coords
           // Need to add offsetX/offsetY to convert tx/ty to screen coords
           if (t && p.id !== myId) {
             const screenTx = tx + offsetX;
-            const screenTy = (ty - 15 * sy) + offsetY;
-            const hoverRadius = 20 * sx;
+            const screenTy = (ty - 15 * syScaled) + offsetY;
+            const hoverRadius = 20 * sxScaled;
             const dist = Math.sqrt((mouseX - screenTx) ** 2 + (mouseY - screenTy) ** 2);
             if (dist < hoverRadius) {
               hoveredOpponentTower = {
@@ -4938,8 +4974,8 @@
               const scale = 0.6; // Make towers smaller
 
               // Platform (doesn't rotate)
-              const platformW = 22 * sx * scale;
-              const platformH = 6 * sy * scale;
+              const platformW = 22 * sxScaled * scale;
+              const platformH = 6 * syScaled * scale;
               
               // Apply stun filter to platform
               if (towerStunned) {
@@ -4965,11 +5001,11 @@
                   if (hasBase && hasBarrel) {
                     const miniScale = 0.5; // 50% of main turret size
                     const baseAspect = turretImages.base.naturalWidth / turretImages.base.naturalHeight;
-                    const baseW = 43.75 * sx * miniScale;
+                    const baseW = 43.75 * sxScaled * miniScale;
                     const baseH = baseW / baseAspect;
                     
                     const barrelAspect = turretImages.barrel.naturalWidth / turretImages.barrel.naturalHeight;
-                    const barrelH = 35 * sy * miniScale;
+                    const barrelH = 35 * syScaled * miniScale;
                     const barrelW = barrelH * barrelAspect;
                     
                     // Position mini turret on the platform
@@ -5004,7 +5040,7 @@
                     ctx.translate(tx, ty - platformH);
                     ctx.rotate(towerAngle + Math.PI / 2);
                     ctx.fillStyle = hexToRgba(color.main, towerAlpha);
-                    ctx.fillRect(-3 * sx * scale, -20 * sy * scale, 6 * sx * scale, 20 * sy * scale);
+                    ctx.fillRect(-3 * sxScaled * scale, -20 * syScaled * scale, 6 * sxScaled * scale, 20 * syScaled * scale);
                     ctx.restore();
                     clearShadow(ctx);
                   }
@@ -5018,8 +5054,8 @@
                   ctx.rotate(towerAngle + Math.PI / 2);
 
                   if (typeInfo.name === "Gatling") {
-                    const bodyW = 14 * sx * scale;
-                    const bodyH = 12 * sy * scale;
+                    const bodyW = 14 * sxScaled * scale;
+                    const bodyH = 12 * syScaled * scale;
                     ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
                     ctx.strokeStyle = hexToRgba(tColor, towerAlpha);
                     ctx.lineWidth = 1;
@@ -5030,11 +5066,11 @@
                     // Triple barrels
                     for (let b = -1; b <= 1; b++) {
                       ctx.fillStyle = hexToRgba(tColor, towerAlpha);
-                      ctx.fillRect(b * 3 * sx * scale - 1 * sx * scale, -bodyH - 10 * sy * scale, 2 * sx * scale, 12 * sy * scale);
+                      ctx.fillRect(b * 3 * sxScaled * scale - 1 * sxScaled * scale, -bodyH - 10 * syScaled * scale, 2 * sxScaled * scale, 12 * syScaled * scale);
                     }
                   } else if (typeInfo.name === "Railgun") {
-                    const bodyW = 10 * sx * scale;
-                    const bodyH = 14 * sy * scale;
+                    const bodyW = 10 * sxScaled * scale;
+                    const bodyH = 14 * syScaled * scale;
                     ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
                     ctx.strokeStyle = hexToRgba(tColor, towerAlpha);
                     ctx.lineWidth = 1;
@@ -5044,19 +5080,19 @@
                     ctx.stroke();
                     // Long barrel (railgun coils)
                     ctx.fillStyle = hexToRgba(tColor, towerAlpha);
-                    ctx.fillRect(-2 * sx * scale, -bodyH - 16 * sy * scale, 4 * sx * scale, 18 * sy * scale);
+                    ctx.fillRect(-2 * sxScaled * scale, -bodyH - 16 * syScaled * scale, 4 * sxScaled * scale, 18 * syScaled * scale);
                     // Energy coils
                     ctx.strokeStyle = hexToRgba("#00ffff", towerAlpha * 0.8);
-                    ctx.lineWidth = 1.5 * sx * scale;
+                    ctx.lineWidth = 1.5 * sxScaled * scale;
                     for (let ring = 0; ring < 3; ring++) {
-                      const ringY = -bodyH - 4 * sy * scale - ring * 5 * sy * scale;
+                      const ringY = -bodyH - 4 * syScaled * scale - ring * 5 * syScaled * scale;
                       ctx.beginPath();
-                      ctx.arc(0, ringY, 3.5 * sx * scale, 0, Math.PI * 2);
+                      ctx.arc(0, ringY, 3.5 * sxScaled * scale, 0, Math.PI * 2);
                       ctx.stroke();
                     }
                   } else if (typeInfo.name === "Missile") {
-                    const bodyW = 16 * sx * scale;
-                    const bodyH = 12 * sy * scale;
+                    const bodyW = 16 * sxScaled * scale;
+                    const bodyH = 12 * syScaled * scale;
                     ctx.fillStyle = hexToRgba(tColor, 0.85 * towerAlpha);
                     ctx.strokeStyle = hexToRgba(tColor, towerAlpha);
                     ctx.lineWidth = 1;
@@ -5068,14 +5104,14 @@
                     ctx.fillStyle = "#222";
                     for (let m = -1; m <= 1; m += 2) {
                       ctx.beginPath();
-                      ctx.arc(m * 4 * sx * scale, -bodyH / 2, 3 * sx * scale, 0, Math.PI * 2);
+                      ctx.arc(m * 4 * sxScaled * scale, -bodyH / 2, 3 * sxScaled * scale, 0, Math.PI * 2);
                       ctx.fill();
                     }
                     // Missile tips
                     ctx.fillStyle = hexToRgba("#ff6600", towerAlpha);
                     for (let m = -1; m <= 1; m += 2) {
                       ctx.beginPath();
-                      ctx.arc(m * 4 * sx * scale, -bodyH - 2 * sy * scale, 2 * sx * scale, 0, Math.PI * 2);
+                      ctx.arc(m * 4 * sxScaled * scale, -bodyH - 2 * syScaled * scale, 2 * sxScaled * scale, 0, Math.PI * 2);
                       ctx.fill();
                     }
                   }
@@ -5097,9 +5133,9 @@
                 
                 // Drone Command: Render orbiting drone for this tower
                 if (t.dronePos) {
-                  const droneX = t.dronePos.x * sx;
-                  const droneY = t.dronePos.y * sy;
-                  const droneSize = 6 * sx;
+                  const droneX = t.dronePos.x * sxScaled;
+                  const droneY = t.dronePos.y * syScaled;
+                  const droneSize = 6 * sxScaled;
                   
                   ctx.save();
                   ctx.translate(droneX, droneY);
@@ -5124,8 +5160,8 @@
                   const dronePulse = Math.sin(Date.now() / 100 + i) * 0.3 + 0.7;
                   ctx.fillStyle = `rgba(255, 255, 100, ${dronePulse * (isDead ? 0.3 : 1)})`;
                   ctx.beginPath();
-                  ctx.arc(-droneSize * 0.6, 0, 1.5 * sx, 0, Math.PI * 2);
-                  ctx.arc(droneSize * 0.6, 0, 1.5 * sx, 0, Math.PI * 2);
+                  ctx.arc(-droneSize * 0.6, 0, 1.5 * sxScaled, 0, Math.PI * 2);
+                  ctx.arc(droneSize * 0.6, 0, 1.5 * sxScaled, 0, Math.PI * 2);
                   ctx.fill();
                   
                   ctx.restore();
@@ -5134,11 +5170,11 @@
               // Level stars
               if (level > 1) {
                 ctx.fillStyle = "#ffd700";
-                ctx.font = `bold ${8 * sx}px sans-serif`;
+                ctx.font = `bold ${8 * sxScaled}px sans-serif`;
                 ctx.textAlign = "center";
                 ctx.textBaseline = "middle";
                 const levelText = "★".repeat(Math.min(level - 1, 4));
-                ctx.fillText(levelText, tx, ty + 8 * sy);
+                ctx.fillText(levelText, tx, ty + 8 * syScaled);
               }
 
               // Upgrade indicator
@@ -5148,7 +5184,7 @@
                 ctx.lineWidth = 2;
                 ctx.setLineDash([3, 3]);
                 ctx.beginPath();
-                ctx.arc(tx, ty - 20 * sy, 18 * sx, 0, Math.PI * 2);
+                ctx.arc(tx, ty - 20 * syScaled, 18 * sxScaled, 0, Math.PI * 2);
                 ctx.stroke();
                 ctx.setLineDash([]);
               }
@@ -5161,21 +5197,21 @@
             ctx.lineWidth = 2;
             ctx.setLineDash([4, 4]);
             ctx.beginPath();
-            ctx.roundRect(tx - 14 * sx, ty - 8 * sy, 28 * sx, 8 * sy, 3);
+            ctx.roundRect(tx - 14 * sxScaled, ty - 8 * syScaled, 28 * sxScaled, 8 * syScaled, 3);
             ctx.stroke();
             ctx.setLineDash([]);
             ctx.fillStyle = `rgba(0, 255, 136, ${0.15 + pulse * 0.25})`;
             ctx.strokeStyle = `rgba(0, 255, 136, ${0.4 + pulse * 0.4})`;
             ctx.lineWidth = 2;
             ctx.beginPath();
-            ctx.arc(tx, ty - 18 * sy, 12 * sx, 0, Math.PI * 2);
+            ctx.arc(tx, ty - 18 * syScaled, 12 * sxScaled, 0, Math.PI * 2);
             ctx.fill();
             ctx.stroke();
             ctx.fillStyle = "#fff";
-            ctx.font = `bold ${16 * sx}px sans-serif`;
+            ctx.font = `bold ${16 * sxScaled}px sans-serif`;
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
-            ctx.fillText("+", tx, ty - 18 * sy);
+            ctx.fillText("+", tx, ty - 18 * syScaled);
             ctx.restore();
           }
         });
@@ -5187,8 +5223,8 @@
         ctx.fillText(isDead ? `${p.name} 💀` : p.name, cx, groundY + 14);
 
         // Individual HP bar for PvP
-        const hpBarW = 60 * sx;
-        const hpBarH = 6 * sy;
+        const hpBarW = 60 * sxScaled;
+        const hpBarH = 6 * syScaled;
         const hpBarX = cx - hpBarW / 2;
         const hpBarY = groundY + 20;
         ctx.fillStyle = "rgba(0,0,0,0.5)";
@@ -5197,19 +5233,19 @@
         ctx.fillRect(hpBarX, hpBarY, hpBarW * Math.max(0, p.hp / p.maxHp), hpBarH);
         ctx.strokeStyle = isDead ? "#444" : color.main;
         ctx.strokeRect(hpBarX, hpBarY, hpBarW, hpBarH);
-        ctx.font = `bold ${8 * sx}px 'Courier New', monospace`;
+        ctx.font = `bold ${8 * sxScaled}px 'Courier New', monospace`;
         ctx.fillStyle = "#fff";
         ctx.fillText(`${p.hp}/${p.maxHp}`, cx, hpBarY + hpBarH / 2 + 1);
         
         // Gold display under HP bar
         if (!isDead) {
-          ctx.font = `bold ${10 * sx}px 'Courier New', monospace`;
+          ctx.font = `bold ${10 * sxScaled}px 'Courier New', monospace`;
           ctx.fillStyle = "#ffd700";
           ctx.fillText(`${p.gold} 🟡`, cx, hpBarY + hpBarH + 12);
           
           // Total income display (what they earned last wave)
           if (p.totalIncome > 0) {
-            ctx.font = `bold ${9 * sx}px 'Courier New', monospace`;
+            ctx.font = `bold ${9 * sxScaled}px 'Courier New', monospace`;
             ctx.fillStyle = "#7fff7f";
             ctx.fillText(`+${p.totalIncome}/wave`, cx, hpBarY + hpBarH + 24);
           }
