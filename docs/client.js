@@ -3570,8 +3570,8 @@
       }
 
 
-      // ===== SIMPLE OPPONENT SCALING =====
-      // With 4+ players, render opponent content at 50% size to save screen space
+      // ===== OPPONENT SEGMENT STACKING =====
+      // With 4+ players, stack opponent segments vertically to save horizontal space
       let myPlayer = lastSnap.players?.find(p => p.id === myId);
       const mySlot = myPlayer ? myPlayer.slot : -1;
       const playerCount = lastSnap.players?.length || 0;
@@ -3580,6 +3580,70 @@
       const getVisualScale = (slot) => {
         if (playerCount <= 3) return 1.0; // Normal size with 3 or fewer
         return (slot === mySlot) ? 1.0 : 0.5; // Opponents 50% smaller
+      };
+      
+      // Calculate rendering position for each segment
+      // Your segment: normal position
+      // Opponent segments: stacked vertically on the right side
+      const getSegmentRenderPos = (slot) => {
+        if (playerCount <= 3 || slot === mySlot) {
+          // Normal positioning - horizontal layout
+          return {
+            x: slot * world.segmentWidth * sx,
+            y: 0,
+            scale: 1.0
+          };
+        }
+        
+        // Stack opponents vertically on the right side
+        // Calculate which opponent number this is (0, 1, 2, etc.)
+        let opponentIndex = 0;
+        for (let s = 0; s < slot; s++) {
+          if (s !== mySlot) opponentIndex++;
+        }
+        
+        const opponentScale = 0.5;
+        const stackedHeight = world.height * sy * opponentScale;
+        const stackX = canvas.width - (world.segmentWidth * sx * opponentScale) - 200; // 200px for panel
+        const stackY = opponentIndex * stackedHeight;
+        
+        return {
+          x: stackX,
+          y: stackY,
+          scale: opponentScale
+        };
+      };
+      
+      // Draw segment backgrounds and borders (for stacked view)
+      const drawSegmentBackgrounds = () => {
+        if (playerCount <= 3) return; // No special rendering needed
+        
+        lastSnap.players.forEach(p => {
+          if (p.slot === mySlot) return; // Skip local player
+          
+          const segmentPos = getSegmentRenderPos(p.slot);
+          const width = world.segmentWidth * sx * segmentPos.scale;
+          const height = world.height * sy * segmentPos.scale;
+          
+          // Dark background
+          ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+          ctx.fillRect(segmentPos.x, segmentPos.y, width, height);
+          
+          // Border
+          const color = PLAYER_COLORS[p.slot]?.main || "#0ff";
+          ctx.strokeStyle = hexToRgba(color, 0.6);
+          ctx.lineWidth = 2;
+          ctx.strokeRect(segmentPos.x, segmentPos.y, width, height);
+          
+          // Ground line for this segment
+          const groundY = segmentPos.y + (560 * sy * segmentPos.scale);
+          ctx.strokeStyle = hexToRgba(color, 0.4);
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(segmentPos.x, groundY);
+          ctx.lineTo(segmentPos.x + width, groundY);
+          ctx.stroke();
+        });
       };
 
       if (!lastSnap) return;
@@ -3646,6 +3710,9 @@
 
       ctx.save();
       ctx.translate(offsetX, offsetY);
+
+      // Draw stacked segment backgrounds (for 4+ players)
+      drawSegmentBackgrounds();
 
       // Grid
       ctx.strokeStyle = "rgba(0,255,255,0.03)";
@@ -3732,10 +3799,13 @@
       // Shield Explosions (expanding damage circles)
       if (lastSnap.shieldExplosions) {
         for (const exp of lastSnap.shieldExplosions) {
+          const segmentPos = getSegmentRenderPos(exp.slot);
+          const localX = exp.x - (exp.slot * world.segmentWidth);
+          
           const alpha = (exp.life / exp.duration) * 0.6;
-          const x = exp.x * sx;
-          const y = exp.y * sy;
-          const r = exp.radius * sx;
+          const x = segmentPos.x + (localX * sx * segmentPos.scale);
+          const y = segmentPos.y + (exp.y * sy * segmentPos.scale);
+          const r = exp.radius * sx * segmentPos.scale;
           
           // Outer glow ring
           ctx.strokeStyle = hexToRgba(exp.color, alpha);
@@ -3767,10 +3837,13 @@
       // Ghost Allies (Necromancer Drive)
       if (lastSnap.ghostAllies) {
         for (const ghost of lastSnap.ghostAllies) {
+          const segmentPos = getSegmentRenderPos(ghost.ownerSlot);
+          const localX = ghost.x - (ghost.ownerSlot * world.segmentWidth);
+          
           const alpha = Math.min(1, ghost.life / 2);
-          const x = ghost.x * sx;
-          const y = ghost.y * sy;
-          const r = ghost.r * sx;
+          const x = segmentPos.x + (localX * sx * segmentPos.scale);
+          const y = segmentPos.y + (ghost.y * sy * segmentPos.scale);
+          const r = ghost.r * sx * segmentPos.scale;
           
           // Ghostly glow
           ctx.shadowColor = "#8844ff";
@@ -3808,8 +3881,12 @@
           if (playerCount >= 4 && particleSlot !== mySlot && i % 2 === 0) continue;
           
           const alpha = p.life / (p.maxLife || 0.5);
-          const px = p.x * sx;
-          const py = p.y * sy;
+          
+          // Get segment render position (stacked for opponents)
+          const segmentPos = getSegmentRenderPos(particleSlot);
+          const localX = p.x - (particleSlot * world.segmentWidth);
+          const px = segmentPos.x + (localX * sx * segmentPos.scale);
+          const py = segmentPos.y + (p.y * sy * segmentPos.scale);
           const pSize = (p.size || 2) * sx * visualScale; // Apply visual scaling
           
           // Special confetti particle rendering! 🎉
@@ -3991,10 +4068,16 @@
       const renderHeight = world.height * sy;
       
       for (const m of lastSnap.missiles) {
-        // Apply visual scaling for opponents
+        // Get segment render position (stacked for opponents)
+        const segmentPos = getSegmentRenderPos(m.targetSlot);
         const visualScale = getVisualScale(m.targetSlot);
-        const x = m.x * sx;
-        const y = m.y * sy;
+        
+        // Convert world position to local segment position, then to screen position
+        const localX = m.x - (m.targetSlot * world.segmentWidth);
+        const localY = m.y;
+        
+        const x = segmentPos.x + (localX * sx * segmentPos.scale);
+        const y = segmentPos.y + (localY * sy * segmentPos.scale);
         const r = m.r * sx * visualScale; // Scale size visually
 
         // PERFORMANCE: Skip missiles that are completely off-screen
@@ -4714,10 +4797,25 @@
         }
       }
 
-      // Render local bullets
+      // Render local bullets (per-segment with stacking support)
       for (const b of clientBullets) {
         const baseColor = PLAYER_COLORS[b.slot]?.main || "#0ff";
-        drawBullet(b, sx, sy, baseColor);
+        const segmentSlot = Math.floor(b.x / world.segmentWidth);
+        const segmentPos = getSegmentRenderPos(segmentSlot);
+        
+        ctx.save();
+        ctx.translate(segmentPos.x, segmentPos.y);
+        ctx.scale(segmentPos.scale, segmentPos.scale);
+        
+        // Adjust bullet position to be relative to segment
+        const localB = {
+          ...b,
+          x: b.x - (segmentSlot * world.segmentWidth),
+          y: b.y
+        };
+        
+        drawBullet(localB, sx, sy, baseColor);
+        ctx.restore();
       }
       
       // Render enemy bullets (from battleships) - use server data if available
@@ -4749,12 +4847,17 @@
           }
         }
         
-        // Draw enemy bullet
-        const bx = eb.x * sx;
-        const by = eb.y * sy;
+        // Draw enemy bullet with segment stacking
+        const segmentSlot = Math.floor(eb.x / world.segmentWidth);
+        const segmentPos = getSegmentRenderPos(segmentSlot);
+        const localX = eb.x - (segmentSlot * world.segmentWidth);
+        
+        const bx = segmentPos.x + (localX * sx * segmentPos.scale);
+        const by = segmentPos.y + (eb.y * sy * segmentPos.scale);
         
         ctx.save();
         ctx.translate(bx, by);
+        ctx.scale(segmentPos.scale, segmentPos.scale);
         
         // Rotate to face direction of travel
         const angle = Math.atan2(eb.vy || 1, eb.vx || 0);
@@ -4804,7 +4907,14 @@
             const rounded = Math.round(d.amount * 100) / 100;
             displayText = Number.isInteger(rounded) ? rounded.toString() : rounded.toFixed(2).replace(/\.?0+$/, '');
           }
-          ctx.fillText(displayText, d.x * sx, d.y * sy);
+          
+          // Get segment render position (stacked for opponents)
+          const segmentPos = getSegmentRenderPos(damageSlot);
+          const localX = d.x - (damageSlot * world.segmentWidth);
+          const screenX = segmentPos.x + (localX * sx * segmentPos.scale);
+          const screenY = segmentPos.y + (d.y * sy * segmentPos.scale);
+          
+          ctx.fillText(displayText, screenX, screenY);
         }
       }
 
@@ -4813,8 +4923,13 @@
       for (const p of lastSnap.players) {
         if (p.slot < 0) continue;
         const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
-        const visualScale = getVisualScale(p.slot); // Visual scaling for rendering
-        const cx = (p.slot * world.segmentWidth + world.segmentWidth / 2) * sx;
+        const visualScale = getVisualScale(p.slot);
+        const segmentPos = getSegmentRenderPos(p.slot);
+        
+        // Calculate center x using segment position (stacked for opponents)
+        const localCenterX = world.segmentWidth / 2;
+        const cx = segmentPos.x + (localCenterX * sx * segmentPos.scale);
+        const groundY = segmentPos.y + (560 * sy * segmentPos.scale);
         const isDead = p.hp <= 0;
 
         // Aim line for current player
@@ -4843,7 +4958,6 @@
 
         // Main turret using sprites
         const turretAlpha = isDead ? 0.3 : 1;
-        const groundY = 560 * sy; // Base of playing field
         const mainStunned = (p.mainTurretStun || 0) > 0;
         
         // Check if turret images are loaded

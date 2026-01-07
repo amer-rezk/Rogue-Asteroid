@@ -543,7 +543,7 @@ let eventQueue = [];
 
 // SPATIAL PARTITIONING: Pre-bucket missiles by targetSlot for O(1) lookup
 // Reused each tick to avoid allocation
-const missilesBySlot = [[], [], [], []];
+const missilesBySlot = [[], [], [], [], [], []];
 
 // Tick counter for broadcast throttling
 let tickCount = 0;
@@ -761,7 +761,7 @@ function redistributeAsteroids(deadSlot) {
 // PERF: Pre-compute turret positions for all 4 slots (they never change during gameplay)
 const TURRET_POSITIONS_CACHE = [];
 function initTurretPositionsCache() {
-  for (let slot = 0; slot < 4; slot++) {
+  for (let slot = 0; slot < MAX_PLAYERS; slot++) {
     const bounds = SEGMENT_BOUNDS[slot] || { x0: slot * SEGMENT_W, x1: (slot + 1) * SEGMENT_W };
     const cx = bounds.x0 + SEGMENT_W / 2;
     TURRET_POSITIONS_CACHE[slot] = {
@@ -2967,10 +2967,10 @@ function tick() {
 
     // SPATIAL PARTITIONING: Bucket missiles by slot BEFORE any targeting/collision
     // This makes all target finding and collision O(n) per slot instead of O(n) total
-    for (let s = 0; s < 4; s++) missilesBySlot[s].length = 0;
+    for (let s = 0; s < MAX_PLAYERS; s++) missilesBySlot[s].length = 0;
     for (let i = 0; i < missiles.length; i++) {
       const m = missiles[i];
-      if (!m.dead && m.targetSlot >= 0 && m.targetSlot < 4) {
+      if (!m.dead && m.targetSlot >= 0 && m.targetSlot < MAX_PLAYERS) {
         missilesBySlot[m.targetSlot].push(m);
       }
     }
@@ -4914,7 +4914,7 @@ function tick() {
     // Chain Reaction - check for static charged asteroid collisions
     // OPTIMIZED: Only check within same slot (missiles can't leave their slot)
     // PERFORMANCE: Added quick bounding box rejection before expensive distance calc
-    for (let slot = 0; slot < 4; slot++) {
+    for (let slot = 0; slot < MAX_PLAYERS; slot++) {
       const slotMissiles = missilesBySlot[slot];
       if (!slotMissiles || slotMissiles.length < 2) continue;
       
@@ -4973,7 +4973,7 @@ function tick() {
     
     // Viral Payload - process infection DOT and spreading
     // PERFORMANCE: Limit infection spread checks to prevent O(n²) lag at high wave counts
-    for (let slot = 0; slot < 4; slot++) {
+    for (let slot = 0; slot < MAX_PLAYERS; slot++) {
       const slotMissiles = missilesBySlot[slot];
       if (!slotMissiles || slotMissiles.length === 0) continue;
       
