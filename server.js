@@ -235,7 +235,7 @@ const TOWER_MODULES = {
     name: "Viral Payload",
     icon: "🦠",
     color: "#00ff00",
-    desc: "Infects enemies with spreading DOT virus",
+    desc: "Infected take +30% DMG & explode on death",
     effect: "infect"
   },
   copycat: {
@@ -1980,15 +1980,19 @@ function applyConfettiEffects(speed, dmg, bulletR) {
 function applyOnHitDamageModifiers(baseDmg, modules, target, bulletData) {
   let finalDmg = baseDmg;
   
+  // NEW: Viral Vulnerability - Infected enemies take bonus damage!
+  if (target.infected) {
+    // 30% bonus damage from all sources
+    finalDmg *= 1.3;
+  }
+  
   // Executioner's Sight: 300% damage to enemies below 30% HP per copy (STACKS)
-  // 1x = 3x at <30%, 2x = 9x at <30%, 3x = 27x at <30% (execute harder!)
   const execCount = countModule(modules, "executionerSight");
   if (execCount > 0 && target.hp / target.maxHp < 0.3) {
     finalDmg *= Math.pow(3, execCount);
   }
   
   // Momentum Lens: +10% damage per 100 pixels per copy (STACKS ADDITIVELY)
-  // 1x = +10%/100px, 2x = +20%/100px, 3x = +30%/100px
   const momentumCount = countModule(modules, "momentumLens");
   if (momentumCount > 0 && bulletData && bulletData.totalDistance) {
     const distanceBonus = 1 + (bulletData.totalDistance / 100) * 0.1 * momentumCount;
@@ -2771,6 +2775,73 @@ function bounceOffWalls(m) {
   }
 }
 
+// ===== HELPER: Boss Kill Tracking =====
+function checkBossKill(enemy, player) {
+  // Only proceed if it is a boss/battleship and the player is valid
+  if ((enemy.type === "boss" || enemy.isBattleship) && player) {
+    if (!bossKillOrder.includes(player.id)) {
+      bossKillOrder.push(player.id);
+      broadcast({ 
+        t: "bossKilled", 
+        killerId: player.id, 
+        killerName: player.name, 
+        killPosition: bossKillOrder.length 
+      });
+    }
+  }
+}
+
+// ===== HELPER: Viral Bio-Bloom =====
+function triggerBioBloom(deadEnemy) {
+  if (!deadEnemy.infected) return;
+
+  // Visuals: Big toxic explosion
+  queueEvent("explosion", { x: deadEnemy.x, y: deadEnemy.y, radius: 60, color: "#00ff00" });
+  
+  // Stats for the explosion
+  const spreadRadius = 120; // Nice big range
+  const spreadRadiusSq = spreadRadius * spreadRadius;
+  // Explosion damage depends on the original infection strength (reward stacking)
+  const bloomDamage = (deadEnemy.infectionDamage || 1) * 10; // Burst damage based on DOT strength
+  
+  // Find neighbors to infect/damage
+  const slotMissiles = missilesBySlot[deadEnemy.targetSlot];
+  if (!slotMissiles) return;
+
+  for (let i = 0; i < slotMissiles.length; i++) {
+    const m = slotMissiles[i];
+    if (m.dead || m.id === deadEnemy.id) continue;
+
+    const dx = m.x - deadEnemy.x;
+    const dy = m.y - deadEnemy.y;
+    
+    // Check range
+    if (dx*dx + dy*dy < spreadRadiusSq) {
+      // 1. Deal damage
+      m.hp -= bloomDamage;
+      addDamageNumber(m.x, m.y - 10, bloomDamage, false);
+      
+      // 2. Spread Infection instantly
+      if (!m.infected) {
+        m.infected = true;
+        m.infectionOwner = deadEnemy.infectionOwner;
+        m.infectionSlot = deadEnemy.infectionSlot;
+        m.infectionDamage = deadEnemy.infectionDamage; // Pass on the strain
+        m.infectionLife = deadEnemy.infectionLife || 5.0;
+        queueEvent("infected", { id: m.id, x: m.x, y: m.y });
+        queueEvent("infectionSpread", { x1: deadEnemy.x, y1: deadEnemy.y, x2: m.x, y2: m.y });
+      }
+      
+      // Chain reaction kills?
+      if (m.hp <= 0) {
+        m.dead = true;
+        // Recursive bloom! (Be careful with infinite loops, but queueEvent handles visual lag)
+        triggerBioBloom(m); 
+      }
+    }
+  }
+}
+
 function tick() {
   if (phase !== "playing") return;
 
@@ -3482,6 +3553,7 @@ function tick() {
           if (distSq <= touchRadius * touchRadius && m.y < GROUND_Y) {
             // Shield blocks the asteroid!
             m.dead = true;
+            checkBossKill(m, p); // <--- Add credit here
             p.upgrades.shieldActive--;
             
             // Create shield explosion effect (deals damage for 3 seconds)
@@ -4350,15 +4422,20 @@ function tick() {
           }
           
           // Viral Payload: Infect enemy with spreading DOT per copy (STACKS)
-          // SYNERGY: Shards, ricochets, pinballs can all spread infection!
-          // 1x = 50% DOT, 5s. 2x = 75% DOT, 6s. 3x = 100% DOT, 7s
+          // 1x = 50% DOT. 2x = 75% DOT. 3x = 100% DOT.
+          // REWORK: Now also sets up the Bio-Bloom explosion damage!
           const viralCount = countModule(bulletModules, "viralPayload");
           if (viralCount > 0 && m.hp > 0) {
-            if (!m.infected) {
+            // Even if already infected, we can refresh/upgrade the strain
+            if (!m.infected || (m.infectionStack || 0) < viralCount) {
               m.infected = true;
+              m.infectionStack = viralCount; // Track strength
               m.infectionOwner = b.ownerId;
               m.infectionSlot = b.ownerSlot;
-              m.infectionDamage = b.dmg * (0.5 + (viralCount - 1) * 0.25); // 50%, 75%, 100%
+              
+              // Damage scales with bullet damage AND module count
+              m.infectionDamage = b.dmg * (0.5 + (viralCount - 1) * 0.25); 
+              
               m.infectionLife = 5.0 + (viralCount - 1); // 5s, 6s, 7s
               queueEvent("infected", { id: m.id, x: m.x, y: m.y });
             }
@@ -4410,6 +4487,7 @@ function tick() {
               
               if (target.hp <= 0) {
                 target.dead = true;
+                checkBossKill(target, owner); // <--- Add credit here
                 createExplosion(target.x, target.y, 20, "#0ff");
                 if (owner) {
                   owner.score = (owner.score || 0) + 50;
@@ -4446,6 +4524,7 @@ function tick() {
           
           if (m.hp <= 0) {
             m.dead = true;
+            triggerBioBloom(m); // <--- ADD THIS
             createExplosion(m.x, m.y, 25, ATTACK_TYPES[m.attackType]?.color || "#fa0");
             
             // Necromancer Drive: Create ghost allies on kill per copy (STACKS)
@@ -4603,7 +4682,13 @@ function tick() {
               const dx = m2.x - b.x;
               const dy = m2.y - b.y;
               const touchR = 35 + m2.r;
-              if (dx * dx + dy * dy < touchR * touchR) { m2.hp -= 1; if (m2.hp <= 0) m2.dead = true; }
+              if (dx * dx + dy * dy < touchR * touchR) { 
+                m2.hp -= 1; 
+                if (m2.hp <= 0) {
+                  m2.dead = true;
+                  checkBossKill(m2, players.get(b.ownerId)); // <--- Add credit here
+                }
+              }
             }
           }
           createExplosion(b.x, b.y, 15, b.isCrit ? "#ff0" : "#0ff");
@@ -4640,6 +4725,8 @@ function tick() {
             
             if (m.hp <= 0) {
               m.dead = true;
+              const p = players.get(lockedSlots[exp.slot]); // Get owner of shield
+              checkBossKill(m, p);
               createExplosion(m.x, m.y, 25, "#fff");
             }
           }
@@ -4685,6 +4772,8 @@ function tick() {
             
             if (m.hp <= 0) {
               m.dead = true;
+              const p = players.get(lockedSlots[ghost.ownerSlot]);
+              checkBossKill(m, p);
               createExplosion(m.x, m.y, 20, "#8844ff");
             }
           }
@@ -4825,8 +4914,18 @@ function tick() {
             // Clear charge from m1
             m1.staticCharge = 0;
             
-            if (m1.hp <= 0) { m1.dead = true; createExplosion(m1.x, m1.y, 20, "#ffff00"); }
-            if (m2.hp <= 0) { m2.dead = true; createExplosion(m2.x, m2.y, 20, "#ffff00"); }
+            const slotOwner = players.get(lockedSlots[slot]);
+            
+            if (m1.hp <= 0) { 
+              m1.dead = true; 
+              checkBossKill(m1, slotOwner);
+              createExplosion(m1.x, m1.y, 20, "#ffff00"); 
+            }
+            if (m2.hp <= 0) { 
+              m2.dead = true; 
+              checkBossKill(m2, slotOwner);
+              createExplosion(m2.x, m2.y, 20, "#ffff00"); 
+            }
             
             queueEvent("staticDischarge", { x: (m1.x + m2.x) / 2, y: (m1.y + m2.y) / 2 });
             break; // Only one collision per frame per charged asteroid
@@ -4869,6 +4968,8 @@ function tick() {
         // Check if killed by infection
         if (m1.hp <= 0) {
           m1.dead = true;
+          checkBossKill(m1, infectionOwner); // Ensure boss kill credit
+          triggerBioBloom(m1); // <--- ADD THIS
           createExplosion(m1.x, m1.y, 20, "#00ff00");
           if (infectionOwner) {
             infectionOwner.score = (infectionOwner.score || 0) + 50;
