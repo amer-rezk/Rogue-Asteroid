@@ -4823,9 +4823,9 @@
         const color = PLAYER_COLORS[p.slot] || PLAYER_COLORS[0];
         const slotScale = getSlotScale(p.slot);
         
-        // Apply slot scaling to sxScaled/syScaled for this player segment
-        const sxScaled = sxScaled * slotScale;
-        const syScaled = syScaled * slotScale;
+        // Apply slot scaling to sx/sy for this player segment
+        const sxScaled = sx * slotScale;
+        const syScaled = sy * slotScale;
         
         const cx = (p.slot * world.segmentWidth + world.segmentWidth / 2) * sxScaled;
         const isDead = p.hp <= 0;
