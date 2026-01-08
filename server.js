@@ -397,23 +397,7 @@ const MODULE_HANDLERS = {
       if (Math.random() > 0.5 + (count * 0.1)) return;
 
       const bounceRange = 250 + (count * 50);
-      const bounceRangeSq = bounceRange * bounceRange;
-      let nearestTarget = null;
-      let nearestDistSq = Infinity;
-      
-      const slotMissiles = missilesBySlot[bullet.ownerSlot] || [];
-      
-      for (const m2 of slotMissiles) {
-        if (m2.dead || m2 === enemy || (bullet.hitSet && bullet.hitSet.has(m2.id))) continue;
-        const dx = m2.x - enemy.x;
-        const dy = m2.y - enemy.y;
-        const dSq = dx * dx + dy * dy;
-        
-        if (dSq < bounceRangeSq && dSq < nearestDistSq) {
-          nearestDistSq = dSq;
-          nearestTarget = m2;
-        }
-      }
+      const nearestTarget = findNearestBounceTarget(enemy.x, enemy.y, bounceRange, bullet.ownerSlot, bullet.hitSet, enemy);
 
       if (nearestTarget) {
         const bulletSpeed = Math.hypot(bullet.vx, bullet.vy);
@@ -423,47 +407,18 @@ const MODULE_HANDLERS = {
         speedMult *= (1 + waveElapsedTime * GRAVITY_INCREASE_RATE);
         
         const intercept = calculateInterceptPoint(enemy.x, enemy.y, bulletSpeed, nearestTarget, speedMult);
-        const dx = intercept.x - enemy.x;
-        const dy = intercept.y - enemy.y;
-        const dist = Math.hypot(dx, dy) || 1;
-
-        // Spawn a new bullet for the bounce and kill the original
-        // This prevents double-dipping with Ricochet
+        
+        // Add current enemy to hit set for new bullet
         const newHitSet = new Set(bullet.hitSet);
         newHitSet.add(enemy.id);
         
-        const newBullet = {
-          id: uid(),
-          ownerId: bullet.ownerId,
-          ownerSlot: bullet.ownerSlot,
-          x: enemy.x + (dx / dist) * (enemy.r + 5),
-          y: enemy.y + (dy / dist) * (enemy.r + 5),
-          vx: (dx / dist) * bulletSpeed,
-          vy: (dy / dist) * bulletSpeed,
-          r: bullet.r,
-          dmg: bullet.dmg * 0.9,
-          isCrit: bullet.isCrit,
-          explosive: bullet.explosive,
-          lifespan: 3.0,
-          isTowerBullet: bullet.isTowerBullet,
-          bulletType: bullet.bulletType,
-          sourceTowerType: bullet.sourceTowerType,
-          chainChance: bullet.chainChance,
-          ricochet: bullet.ricochet - 1,
-          pierce: bullet.pierce,
-          hitSet: newHitSet,
-          modules: bullet.modules || [],
-          bulletColor: bullet.bulletColor
-        };
-        
-        bullets.push(newBullet);
-        queueEvent("bulletSpawn", { 
-          id: newBullet.id, x: newBullet.x, y: newBullet.y, 
-          vx: newBullet.vx, vy: newBullet.vy, slot: newBullet.ownerSlot,
-          isCrit: newBullet.isCrit, bulletColor: newBullet.bulletColor, 
-          bulletType: newBullet.bulletType, r: newBullet.r,
-          lifespan: newBullet.lifespan, isHoming: false
-        });
+        // Use helper to spawn bounced bullet
+        spawnChildBullet(bullet, 
+          enemy.x + ((intercept.x - enemy.x) / (Math.hypot(intercept.x - enemy.x, intercept.y - enemy.y) || 1)) * (enemy.r + 5),
+          enemy.y + ((intercept.y - enemy.y) / (Math.hypot(intercept.x - enemy.x, intercept.y - enemy.y) || 1)) * (enemy.r + 5),
+          intercept.x, intercept.y,
+          { hitSet: newHitSet, speed: bulletSpeed }
+        );
         
         queueEvent("pinballBounce", { 
           x: enemy.x, y: enemy.y, tx: nearestTarget.x, ty: nearestTarget.y 
@@ -491,6 +446,322 @@ function handleHit(bullet, enemy, hitDamage) {
       MODULE_HANDLERS[modId].onHit(bullet, enemy, count, hitDamage);
     }
   }
+}
+
+// ===== CONSOLIDATED HELPER FUNCTIONS =====
+// These make adding new mods much easier by centralizing common patterns
+
+/**
+ * Calculate gold reward for killing an enemy
+ * @param {Object} enemy - The killed enemy
+ * @param {Object} owner - The player who killed it (optional)
+ * @returns {number} Gold amount to award
+ */
+function calculateGoldReward(enemy, owner) {
+  // No gold for attack asteroids or spawned minions
+  if (enemy.attackType || enemy.noGold) return 0;
+  
+  // Special enemy types have fixed rewards
+  if (enemy.isBossAd || enemy.isMiniBossAd) return 1;
+  if (enemy.isMiniBoss) return 5;
+  if (enemy.isBattleship) return 8;
+  if (enemy.isBerserker) return 3;
+  if (enemy.type === "boss") return 10;
+  
+  // Normal enemies: size-based reward with gold bonus
+  const goldMult = owner ? (1 + (owner.upgrades?.goldBonus || 0)) : 1;
+  const baseReward = enemy.type === "large" ? 4 : enemy.type === "medium" ? 2 : 1;
+  return Math.round(baseReward * goldMult);
+}
+
+/**
+ * Calculate score reward for killing an enemy
+ * @param {Object} enemy - The killed enemy
+ * @returns {number} Score amount to award
+ */
+function calculateScoreReward(enemy) {
+  if (enemy.isMiniBoss) return 150;
+  if (enemy.isBattleship) return 200;
+  if (enemy.type === "boss") return 250;
+  return 50; // Base score for normal kills
+}
+
+/**
+ * Spawn necromancer ghost allies on kill
+ * @param {Object} enemy - The killed enemy
+ * @param {Object} owner - Player who made the kill
+ * @param {Array} modules - Bullet modules array
+ * @param {number} baseDamage - Base damage for ghost
+ */
+function spawnNecromancerGhosts(enemy, owner, modules, baseDamage) {
+  const necroCount = countModule(modules, "necromancerDrive");
+  if (necroCount <= 0) return;
+  
+  for (let gi = 0; gi < necroCount; gi++) {
+    const offsetX = (gi - (necroCount - 1) / 2) * 15;
+    ghostAllies.push({
+      x: enemy.x + offsetX,
+      y: enemy.y,
+      r: enemy.r * 0.8,
+      vy: -60,
+      life: 5.0,
+      damage: baseDamage * 0.5,
+      ownerSlot: owner.slot,
+      hitSet: new Set(),
+      modules: modules // Pass modules for synergy effects
+    });
+  }
+  queueEvent("ghostSpawn", { x: enemy.x, y: enemy.y, slot: owner.slot, count: necroCount });
+}
+
+/**
+ * Handle all enemy death effects (gold, score, explosions, spawns, etc.)
+ * @param {Object} enemy - The killed enemy
+ * @param {Object} owner - Player who made the kill (can be null)
+ * @param {Object} options - Additional options
+ * @param {Array} options.modules - Bullet modules for necromancer etc
+ * @param {number} options.bulletDamage - Damage of killing bullet (for ghosts)
+ * @param {string} options.explosionColor - Custom explosion color
+ * @param {number} options.explosionSize - Custom explosion size
+ * @param {boolean} options.skipExplosion - Don't create explosion
+ * @param {boolean} options.skipGold - Don't award gold
+ * @param {boolean} options.skipScore - Don't award score
+ */
+function handleEnemyDeath(enemy, owner, options = {}) {
+  const {
+    modules = [],
+    bulletDamage = 1,
+    explosionColor = ATTACK_TYPES[enemy.attackType]?.color || "#fa0",
+    explosionSize = 25,
+    skipExplosion = false,
+    skipGold = false,
+    skipScore = false
+  } = options;
+
+  // Mark as dead
+  enemy.dead = true;
+  
+  // Trigger bio bloom for infected enemies
+  triggerBioBloom(enemy);
+  
+  // Create explosion
+  if (!skipExplosion) {
+    createExplosion(enemy.x, enemy.y, explosionSize, explosionColor);
+  }
+  
+  // Track boss kills for module pick order
+  checkBossKill(enemy, owner);
+  
+  // Necromancer ghosts
+  if (owner && modules.length > 0) {
+    spawnNecromancerGhosts(enemy, owner, modules, bulletDamage);
+  }
+  
+  // Award gold and score
+  if (owner) {
+    if (!skipScore) {
+      owner.score = (owner.score || 0) + calculateScoreReward(enemy);
+      owner.kills = (owner.kills || 0) + 1;
+    }
+    
+    if (!skipGold) {
+      const gold = calculateGoldReward(enemy, owner);
+      if (gold > 0) {
+        owner.gold = (owner.gold || 0) + gold;
+      }
+    }
+    
+    // Extra effects for special enemies
+    if (enemy.isBattleship) {
+      createExplosion(enemy.x, enemy.y, 50, "#88aaff");
+    }
+  }
+  
+  // Spawn remaining minions on boss/miniboss death
+  spawnDeathMinions(enemy);
+  
+  // Handle splitter
+  if (enemy.splits > 0) {
+    spawnSplitterChildren(enemy);
+  }
+}
+
+/**
+ * Spawn minions when boss/miniboss dies before all spawn thresholds
+ * @param {Object} enemy - The boss or miniboss that died
+ */
+function spawnDeathMinions(enemy) {
+  if (enemy.isMiniBoss && enemy.bossSpawnCount < 3) {
+    const remainingSpawns = 3 - enemy.bossSpawnCount;
+    let totalToSpawn = Math.min(remainingSpawns * 3, MAX_MISSILES - missiles.length);
+    
+    for (let k = 0; k < totalToSpawn; k++) {
+      const miniAdHp = Math.max(1, Math.ceil(wave * 0.3));
+      const miniAd = createAsteroid(
+        enemy.x + rand(-25, 25),
+        enemy.y + rand(10, 40),
+        "minibossAd", miniAdHp, enemy.targetSlot,
+        null, null, null, null, false, false
+      );
+      miniAd.isMiniBossAd = true;
+      miniAd.inFTL = false;
+      missiles.push(miniAd);
+    }
+    createExplosion(enemy.x, enemy.y, 40, "#ff4400");
+  }
+  
+  if (enemy.type === "boss" && enemy.bossSpawnCount < 3) {
+    const remainingSpawns = 3 - enemy.bossSpawnCount;
+    let totalToSpawn = Math.min(remainingSpawns * 5, MAX_MISSILES - missiles.length);
+    
+    for (let k = 0; k < totalToSpawn; k++) {
+      const bossAdVariant = (k % 5) + 1;
+      const spawnedAd = createAsteroid(
+        enemy.x + rand(-50, 50),
+        enemy.y + rand(20, 100),
+        "medium", Math.max(2, wave), enemy.targetSlot,
+        null, null, null, bossAdVariant, false, false
+      );
+      missiles.push(spawnedAd);
+    }
+    createExplosion(enemy.x, enemy.y, 80, "#ff0000");
+  }
+}
+
+/**
+ * Spawn splitter children when a splitter dies
+ * @param {Object} enemy - The splitter that died
+ */
+function spawnSplitterChildren(enemy) {
+  const availableSlots = MAX_MISSILES - missiles.length;
+  const splitsToSpawn = Math.min(enemy.splits, availableSlots, 8);
+  
+  if (splitsToSpawn <= 0) return;
+  
+  const extremeMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
+  const splitHp = Math.ceil((0.5 + wave * 0.3) * extremeMult);
+  
+  for (let s = 0; s < splitsToSpawn; s++) {
+    const nx = enemy.x + rand(-30, 30);
+    const ny = enemy.y + rand(-20, 20);
+    const splitAsteroid = createAsteroid(
+      nx, ny, "small", splitHp, enemy.targetSlot,
+      null, enemy.senderId, enemy.senderSlot, null, true, false
+    );
+    missiles.push(splitAsteroid);
+  }
+}
+
+/**
+ * Create a child bullet (for ricochet, pinball, etc.)
+ * @param {Object} parent - Parent bullet to inherit from
+ * @param {number} originX - Spawn X position
+ * @param {number} originY - Spawn Y position  
+ * @param {number} targetX - Target X position
+ * @param {number} targetY - Target Y position
+ * @param {Object} overrides - Properties to override from parent
+ * @returns {Object} The new bullet
+ */
+function spawnChildBullet(parent, originX, originY, targetX, targetY, overrides = {}) {
+  const dx = targetX - originX;
+  const dy = targetY - originY;
+  const dist = Math.hypot(dx, dy) || 1;
+  const bulletSpeed = overrides.speed || Math.hypot(parent.vx, parent.vy);
+  
+  const newBullet = {
+    id: uid(),
+    ownerId: parent.ownerId,
+    ownerSlot: parent.ownerSlot,
+    x: originX,
+    y: originY,
+    vx: (dx / dist) * bulletSpeed,
+    vy: (dy / dist) * bulletSpeed,
+    r: overrides.r ?? parent.r,
+    dmg: overrides.dmg ?? (parent.dmg * 0.9),
+    isCrit: overrides.isCrit ?? parent.isCrit,
+    explosive: overrides.explosive ?? parent.explosive,
+    lifespan: overrides.lifespan ?? 3.0,
+    maxLifespan: overrides.lifespan ?? 3.0,
+    isTowerBullet: parent.isTowerBullet,
+    bulletType: overrides.bulletType ?? parent.bulletType,
+    sourceTowerType: parent.sourceTowerType || parent.bulletType,
+    chainChance: overrides.chainChance ?? parent.chainChance,
+    ricochet: overrides.ricochet ?? (parent.ricochet - 1),
+    pierce: overrides.pierce ?? parent.pierce,
+    hitSet: overrides.hitSet ?? new Set(parent.hitSet),
+    modules: overrides.modules ?? (parent.modules || []),
+    bulletColor: overrides.bulletColor ?? parent.bulletColor,
+    skipThisTick: overrides.skipThisTick ?? true,
+    // Homing properties
+    isHoming: overrides.isHoming ?? false,
+    targetId: overrides.targetId ?? null,
+    homingSpeed: bulletSpeed,
+    // Momentum tracking
+    totalDistance: 0,
+    lastX: originX,
+    lastY: originY
+  };
+  
+  bullets.push(newBullet);
+  
+  // Emit spawn event
+  if (bulletSpawnEventCount < (players.size >= 3 ? MAX_BULLET_EVENTS_LARGE : MAX_BULLET_EVENTS_SMALL)) {
+    bulletSpawnEventCount++;
+    queueEvent("bulletSpawn", {
+      id: newBullet.id,
+      x: newBullet.x,
+      y: newBullet.y,
+      vx: newBullet.vx,
+      vy: newBullet.vy,
+      slot: newBullet.ownerSlot,
+      isCrit: newBullet.isCrit,
+      bulletColor: newBullet.bulletColor,
+      bulletType: newBullet.bulletType,
+      ricochet: newBullet.ricochet,
+      pierce: newBullet.pierce,
+      r: newBullet.r,
+      lifespan: newBullet.lifespan,
+      isHoming: newBullet.isHoming
+    });
+  }
+  
+  return newBullet;
+}
+
+/**
+ * Find nearest target for bouncing bullets (ricochet, pinball)
+ * @param {number} originX - Origin X
+ * @param {number} originY - Origin Y
+ * @param {number} range - Search range
+ * @param {number} slot - Player slot
+ * @param {Set} excludeSet - IDs to exclude
+ * @param {Object} excludeEnemy - Enemy to exclude
+ * @returns {Object|null} Nearest target or null
+ */
+function findNearestBounceTarget(originX, originY, range, slot, excludeSet, excludeEnemy) {
+  const rangeSq = range * range;
+  let nearestTarget = null;
+  let nearestDistSq = Infinity;
+  
+  const slotMissiles = missilesBySlot[slot] || [];
+  
+  for (let i = 0; i < slotMissiles.length; i++) {
+    const m = slotMissiles[i];
+    if (m.dead || m === excludeEnemy || (excludeSet && excludeSet.has(m.id))) continue;
+    
+    const dx = m.x - originX;
+    if (dx > range || dx < -range) continue;
+    const dy = m.y - originY;
+    if (dy > range || dy < -range) continue;
+    
+    const dSq = dx * dx + dy * dy;
+    if (dSq < rangeSq && dSq < nearestDistSq) {
+      nearestDistSq = dSq;
+      nearestTarget = m;
+    }
+  }
+  
+  return nearestTarget;
 }
 
 // ===== DEATH MODS SYSTEM =====
@@ -4212,26 +4483,7 @@ function tick() {
         // Only triggers if bullet survived the module handlers (e.g. didn't shatter)
         if (!b.dead && b.ricochet > 0 && bullets.length < MAX_BULLETS) {
             const bounceRange = 250;
-            const bounceRangeSq = bounceRange * bounceRange;
-            let nearestTarget = null;
-            let nearestDistSq = Infinity;
-            
-            const slotMissilesBounce = missilesBySlot[b.ownerSlot];
-            for (let bi = 0; bi < slotMissilesBounce.length; bi++) {
-              const m2 = slotMissilesBounce[bi];
-              if (m2.dead || m2 === m || (b.hitSet && b.hitSet.has(m2.id))) continue;
-              
-              const dx = m2.x - m.x;
-              if (dx > bounceRange || dx < -bounceRange) continue;
-              const dy = m2.y - m.y;
-              if (dy > bounceRange || dy < -bounceRange) continue;
-              
-              const dSq = dx * dx + dy * dy;
-              if (dSq < bounceRangeSq && dSq < nearestDistSq) {
-                nearestDistSq = dSq;
-                nearestTarget = m2;
-              }
-            }
+            const nearestTarget = findNearestBounceTarget(m.x, m.y, bounceRange, b.ownerSlot, b.hitSet, m);
             
             if (nearestTarget) {
                 const bulletSpeed = Math.hypot(b.vx, b.vy);
@@ -4247,39 +4499,13 @@ function tick() {
                   const newHitSet = new Set(b.hitSet);
                   newHitSet.add(m.id);
 
-                  const newBullet = {
-                    id: uid(),
-                    ownerId: b.ownerId,
-                    ownerSlot: b.ownerSlot,
-                    x: m.x + (dx / dist) * (m.r + 5),
-                    y: m.y + (dy / dist) * (m.r + 5),
-                    vx: (dx / dist) * bulletSpeed,
-                    vy: (dy / dist) * bulletSpeed,
-                    r: b.r,
-                    dmg: b.dmg * 0.9,
-                    isCrit: b.isCrit,
-                    explosive: b.explosive,
-                    lifespan: 3.0,
-                    isTowerBullet: b.isTowerBullet,
-                    bulletType: b.bulletType,
-                    sourceTowerType: b.sourceTowerType || b.bulletType,
-                    chainChance: b.chainChance,
-                    ricochet: b.ricochet - 1,
-                    pierce: b.pierce,
-                    hitSet: newHitSet,
-                    modules: b.modules || [],
-                    bulletColor: b.bulletColor,
-                    skipThisTick: true
-                  };
-                  
-                  bullets.push(newBullet);
-                  queueEvent("bulletSpawn", {
-                    id: newBullet.id, x: newBullet.x, y: newBullet.y,
-                    vx: newBullet.vx, vy: newBullet.vy, slot: newBullet.ownerSlot,
-                    isCrit: newBullet.isCrit, bulletColor: newBullet.bulletColor,
-                    bulletType: newBullet.bulletType, ricochet: newBullet.ricochet,
-                    pierce: newBullet.pierce, r: newBullet.r, lifespan: newBullet.lifespan
-                  });
+                  // Use helper to spawn bounced bullet
+                  spawnChildBullet(b, 
+                    m.x + (dx / dist) * (m.r + 5),
+                    m.y + (dy / dist) * (m.r + 5),
+                    intercept.x, intercept.y,
+                    { hitSet: newHitSet, speed: bulletSpeed }
+                  );
                   
                   b.dead = true;
                   b.ricochetTriggered = true;
@@ -4391,31 +4617,14 @@ function tick() {
               }
 
               if (target.hp <= 0) {
-                target.dead = true;
-                checkBossKill(target, owner);
-                createExplosion(target.x, target.y, 20, lightningColor);
-                
-                // --- MOD FIX: Necromancer Ghosts from Lightning Kills ---
-                if (necroCount > 0) {
-                    for (let gi = 0; gi < necroCount; gi++) {
-                        ghostAllies.push({
-                          x: target.x,
-                          y: target.y,
-                          r: target.r * 0.8,
-                          vy: -60,
-                          life: 5.0,
-                          damage: b.dmg * 0.5,
-                          ownerSlot: b.ownerSlot,
-                          hitSet: new Set()
-                        });
-                    }
-                    queueEvent("ghostSpawn", { x: target.x, y: target.y, slot: b.ownerSlot, count: necroCount });
-                }
-
-                if (owner) {
-                  owner.score = (owner.score || 0) + 50;
-                  owner.kills = (owner.kills || 0) + 1;
-                }
+                // Use consolidated death handler (skip gold for lightning kills)
+                handleEnemyDeath(target, owner, {
+                  modules: b.modules || [],
+                  bulletDamage: b.dmg,
+                  explosionColor: lightningColor,
+                  explosionSize: 20,
+                  skipGold: true // Lightning kills don't give gold (just score)
+                });
               }
             }
             
@@ -4447,152 +4656,12 @@ function tick() {
           }
           
           if (m.hp <= 0) {
-            m.dead = true;
-            triggerBioBloom(m); // <--- ADD THIS
-            createExplosion(m.x, m.y, 25, ATTACK_TYPES[m.attackType]?.color || "#fa0");
-            // Necromancer Drive: Create ghost allies on kill per copy (STACKS)
-            const bulletModules = b.modules || [];
-            const necroCount = countModule(bulletModules, "necromancerDrive");
-            if (necroCount > 0) {
-              for (let gi = 0; gi < necroCount; gi++) {
-                // Spread ghosts slightly
-                const offsetX = (gi - (necroCount - 1) / 2) * 15;
-                ghostAllies.push({
-                  x: m.x + offsetX,
-                  y: m.y,
-                  r: m.r * 0.8,
-                  vy: -60, // Flies upward
-                  life: 5.0,
-                  damage: b.dmg * 0.5,
-                  ownerSlot: b.ownerSlot,
-                  hitSet: new Set(),
-                  // FIX: Pass modules to ghosts so they can use synergies!
-                  modules: bulletModules 
-                });
-              }
-              queueEvent("ghostSpawn", { x: m.x, y: m.y, slot: b.ownerSlot, count: necroCount });
-            }
-            
-            if (owner) {
-              owner.score = (owner.score || 0) + 50;
-              owner.kills = (owner.kills || 0) + 1;
-              // Boss ads give 1 gold each (reward for clearing them)
-              if (m.isBossAd) {
-                owner.gold = (owner.gold || 0) + 1;
-              }
-              // Mini-boss ads give 1 gold each
-              else if (m.isMiniBossAd) {
-                owner.gold = (owner.gold || 0) + 1;
-              }
-              // Mini-boss gives 5 gold
-              else if (m.isMiniBoss) {
-                owner.gold = (owner.gold || 0) + 5;
-                owner.score = (owner.score || 0) + 100; // Bonus score
-              }
-              // Battleship gives 8 gold
-              else if (m.isBattleship) {
-                owner.gold = (owner.gold || 0) + 8;
-                owner.score = (owner.score || 0) + 150; // Bonus score
-                createExplosion(m.x, m.y, 50, "#88aaff"); // Big blue explosion
-                // Track battleship kill for module pick order (same as boss)
-                if (!bossKillOrder.includes(owner.id)) {
-                  bossKillOrder.push(owner.id);
-                  broadcast({ t: "bossKilled", killerId: owner.id, killerName: owner.name, killPosition: bossKillOrder.length });
-                }
-              }
-              // Berserker gives 3 gold
-              else if (m.isBerserker) {
-                owner.gold = (owner.gold || 0) + 3;
-              }
-              // No gold for attack asteroids OR spawned minions (splitter/carrier)
-              else if (!m.attackType && !m.noGold) {
-                const goldMult = 1 + (owner.upgrades?.goldBonus || 0); // Additive gold bonus
-                const goldReward = m.type === "large" ? 4 : m.type === "medium" ? 2 : 1;
-                owner.gold = (owner.gold || 0) + Math.round(goldReward * goldMult);
-              }
-            }
-            
-            // When mini-boss dies, spawn any remaining minion waves
-            if (m.isMiniBoss && m.bossSpawnCount < 3) {
-              const remainingSpawns = 3 - m.bossSpawnCount;
-              // ENTITY CAP: Limit total spawns
-              let totalToSpawn = remainingSpawns * 3;
-              totalToSpawn = Math.min(totalToSpawn, MAX_MISSILES - missiles.length);
-              for (let k = 0; k < totalToSpawn; k++) {
-                const miniAdHp = Math.max(1, Math.ceil(wave * 0.3));
-                const miniAd = createAsteroid(
-                  m.x + rand(-25, 25),
-                  m.y + rand(10, 40),
-                  "minibossAd",
-                  miniAdHp,
-                  m.targetSlot,
-                  null, // attackType
-                  null, // senderId
-                  null, // senderSlot
-                  null, // bossAdVariant
-                  false, // noGold
-                  false  // isMiniBoss
-                );
-                miniAd.isMiniBossAd = true;
-                miniAd.inFTL = false;
-                missiles.push(miniAd);
-              }
-              createExplosion(m.x, m.y, 40, "#ff4400");
-            }
-            
-            // When boss dies, spawn any remaining minion waves
-            if (m.type === "boss" && m.bossSpawnCount < 3) {
-              // Track who killed the boss for module pick order (first kill = first pick)
-              if (owner && !bossKillOrder.includes(owner.id)) {
-                bossKillOrder.push(owner.id);
-                broadcast({ t: "bossKilled", killerId: owner.id, killerName: owner.name, killPosition: bossKillOrder.length });
-              }
-              
-              const remainingSpawns = 3 - m.bossSpawnCount;
-              // ENTITY CAP: Limit total spawns
-              let totalToSpawn = remainingSpawns * 5;
-              totalToSpawn = Math.min(totalToSpawn, MAX_MISSILES - missiles.length);
-              for (let k = 0; k < totalToSpawn; k++) {
-                const bossAdVariant = (k % 5) + 1;
-                const spawnedAd = createAsteroid(
-                  m.x + rand(-50, 50),
-                  m.y + rand(20, 100),
-                  "medium",
-                  Math.max(2, wave),
-                  m.targetSlot,
-                  null, // attackType
-                  null, // senderId
-                  null, // senderSlot
-                  bossAdVariant, // bossAdVariant
-                  false, // Boss ads CAN give gold (1 each)
-                  false  // isMiniBoss
-                );
-                missiles.push(spawnedAd);
-              }
-              createExplosion(m.x, m.y, 80, "#ff0000");
-            }
-            // Also track boss killer if no remaining spawns
-            else if (m.type === "boss" && owner && !bossKillOrder.includes(owner.id)) {
-              bossKillOrder.push(owner.id);
-              broadcast({ t: "bossKilled", killerId: owner.id, killerName: owner.name, killPosition: bossKillOrder.length });
-            }
-            
-            // Splitter: spawn children with noGold flag
-            if (m.splits > 0) {
-              // ENTITY CAP: Limit splitter children
-              const availableSlots = MAX_MISSILES - missiles.length;
-              const splitsToSpawn = Math.min(m.splits, availableSlots, 8); // Also hard cap at 8
-              if (splitsToSpawn > 0) {
-                const extremeMult = wave >= 20 ? Math.pow(1.12, wave - 19) : 1;
-                const splitHp = Math.ceil((0.5 + wave * 0.3) * extremeMult); // Reduced by 50% base, 25% scaling
-                for (let s = 0; s < splitsToSpawn; s++) {
-                  const nx = m.x + rand(-30, 30);
-                  const ny = m.y + rand(-20, 20);
-                  const splitAsteroid = createAsteroid(nx, ny, "small", splitHp, m.targetSlot, null, m.senderId, m.senderSlot, null, true, false); // noGold=true
-                  missiles.push(splitAsteroid);
-                }
-              }
-            }
+            // Use consolidated death handler
+            handleEnemyDeath(m, owner, {
+              modules: b.modules || [],
+              bulletDamage: b.dmg,
+              explosionColor: ATTACK_TYPES[m.attackType]?.color || "#fa0"
+            });
           } else {
             if (owner) owner.score = (owner.score || 0) + Math.round(b.dmg * 10);
           }
@@ -4622,10 +4691,12 @@ function tick() {
                 addDamageNumber(m2.x, m2.y - m2.r, finalExplosionDmg, b.isCrit);
                 
                 if (m2.hp <= 0) {
-                  m2.dead = true;
-                  checkBossKill(m2, players.get(b.ownerId));
-                  // If the enemy was infected and died from the explosion, trigger the bloom!
-                  if (m2.infected) triggerBioBloom(m2);
+                  handleEnemyDeath(m2, players.get(b.ownerId), {
+                    modules: b.modules || [],
+                    bulletDamage: baseExplosionDmg,
+                    skipGold: true, // Explosive splash doesn't give gold
+                    skipScore: true // Or score
+                  });
                 }
               }
             }
@@ -4663,10 +4734,12 @@ function tick() {
             createExplosion(m.x, m.y, 15, exp.color);
             
             if (m.hp <= 0) {
-              m.dead = true;
               const p = players.get(lockedSlots[exp.slot]); // Get owner of shield
-              checkBossKill(m, p);
-              createExplosion(m.x, m.y, 25, "#fff");
+              handleEnemyDeath(m, p, {
+                explosionColor: "#fff",
+                skipGold: true, // Shield kills don't give gold
+                skipScore: true
+              });
             }
           }
         }
@@ -4716,13 +4789,14 @@ function tick() {
             addDamageNumber(m.x, m.y - m.r, ghostDamage, false);
             
             if (m.hp <= 0) {
-              m.dead = true;
               const p = players.get(lockedSlots[ghost.ownerSlot]);
-              checkBossKill(m, p);
-              createExplosion(m.x, m.y, 20, "#8844ff");
-              
-              // If the enemy was infected and killed by a ghost, trigger the bloom!
-              if (m.infected) triggerBioBloom(m);
+              handleEnemyDeath(m, p, {
+                modules: ghost.modules || [],
+                bulletDamage: ghost.damage,
+                explosionColor: "#8844ff",
+                explosionSize: 20,
+                skipGold: true // Ghost kills don't give gold
+              });
             }
           }
         }
