@@ -802,7 +802,6 @@ const RARITY_CONFIG = {
 };
 
 const UPGRADE_DEFS = [
-  { id: "volatile", name: "Volatile Payload", cat: "offense", icon: "☠️", desc: "Kills explode for {val}% enemy HP", stat: "volatile", base: 8, type: "add" },
   { id: "dmg", name: "Heavy Rounds", cat: "offense", icon: "💥", desc: "+{val} Damage", stat: "damageAdd", base: 0.5, type: "add" },
   { id: "spd", name: "Velocity", cat: "offense", icon: "💨", desc: "+{val}% Bullet Speed", stat: "bulletSpeedMult", base: 0.08, type: "mult" },
   { id: "fire", name: "Rapid Fire", cat: "offense", icon: "🔥", desc: "+{val}% Fire Rate", stat: "fireRateMult", base: 0.05, type: "mult" },
@@ -2587,11 +2586,15 @@ function fireWithMultishot(owner, originX, originY, targetX, targetY, isManual =
     speedMult *= gravityMult;
     const intercept = calculateInterceptPoint(originX, originY, bulletSpeed, target, speedMult);
     
-    // Small spread between bullets aimed at same target
+    // Centered spread when multiple bullets target the same asteroid
     let spread = 0;
     if (targets.length < shots) {
-      const sameTargetIndex = Math.floor(i / targets.length);
-      spread = (sameTargetIndex - 0.5) * 0.05;
+      // Calculate how many bullets are aimed at THIS specific target
+      const bulletsPerTarget = Math.ceil(shots / targets.length);
+      const targetIndex = i % targets.length;
+      const bulletIndexForThisTarget = Math.floor(i / targets.length);
+      // Center the spread: offset from middle
+      spread = (bulletIndexForThisTarget - (bulletsPerTarget - 1) / 2) * 0.04;
     }
     
     fireBullet(owner, originX, originY, intercept.x, intercept.y, spread);
@@ -4539,27 +4542,6 @@ function tick() {
             m.dead = true;
             triggerBioBloom(m); // <--- ADD THIS
             createExplosion(m.x, m.y, 25, ATTACK_TYPES[m.attackType]?.color || "#fa0");
-            // WAVE CARD: Volatile Payload (Explodes based on player upgrade)
-            // Checks if the KILLER (owner) has the upgrade
-            if (owner && owner.upgrades.volatile > 0) {
-              createExplosion(m.x, m.y, 70, "#ff4400"); // Visual Boom
-              
-              const volRadius = 100; // 100px Range
-              const volDmg = m.maxHp * (owner.upgrades.volatile / 100); // Damage % of Enemy Max HP
-              
-              // Damage nearby enemies
-              const neighbors = missilesBySlot[m.targetSlot] || [];
-              for (const n of neighbors) {
-                if (n.dead || n.id === m.id) continue; // Skip dead or self
-                
-                // Check distance squared (faster performance)
-                const distSq = (n.x - m.x)**2 + (n.y - m.y)**2;
-                if (distSq < volRadius**2) {
-                  n.hp -= volDmg;
-                  addDamageNumber(n.x, n.y - 15, volDmg, true);
-                }
-              }
-            }
             // Necromancer Drive: Create ghost allies on kill per copy (STACKS)
             // 1x = 1 ghost, 2x = 2 ghosts, 3x = 3 ghosts
             const necroCount = countModule(bulletModules, "necromancerDrive");
