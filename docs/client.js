@@ -407,6 +407,8 @@
   let recentAttackSent = null; // For feedback animation
   let attackQuantityMode = 1; // 1, 10, or "max"
   let hoveredQuantityBtn = null; // Track which quantity button is hovered
+  let goldReserve = 0; // 0 = no limit, 1000 = keep 1k, 2000 = keep 2k
+  let hoveredReserveBtn = null; // Track which reserve button is hovered
 
   // Stats panel
   let statsPanelOpen = false;
@@ -1761,6 +1763,7 @@
           incomingAttacks = [];
           recentAttackSent = null;
           attackQuantityMode = 1;
+          goldReserve = 0; // Reset gold reserve
           // Reset pause state
           gamePaused = false;
           pauseCountdown = 0;
@@ -3031,13 +3034,23 @@
       mouseDown = false;
       return;
     }
+    
+    // Handle gold reserve button clicks
+    if (hoveredReserveBtn !== null && phase === "playing") {
+      goldReserve = hoveredReserveBtn;
+      mouseDown = false;
+      return;
+    }
 
     // Handle attack panel clicks (always visible, no popup)
     if (hoveredAttack && phase === "playing" && lastSnap && lastSnap.players.length > 1) {
       const myPlayer = lastSnap.players.find(p => p.id === myId);
       const atkDef = ATTACK_TYPES[hoveredAttack];
-      if (myPlayer && atkDef && myPlayer.gold >= atkDef.cost) {
-        send({ t: "buyAttack", attackType: hoveredAttack, quantity: attackQuantityMode });
+      // Check against spendable gold (respecting reserve)
+      const spendableGold = Math.max(0, myPlayer.gold - goldReserve);
+      if (myPlayer && atkDef && spendableGold >= atkDef.cost) {
+        // Send the gold reserve to server so it can cap the purchase
+        send({ t: "buyAttack", attackType: hoveredAttack, quantity: attackQuantityMode, goldReserve: goldReserve });
         recentAttackSent = { type: hoveredAttack, time: Date.now(), quantity: attackQuantityMode };
       }
       mouseDown = false;
@@ -5934,13 +5947,13 @@
         // GAME MODIFIER: Pacifist Protocol disables attacks
         const attacksDisabled = activeGameModifier && activeGameModifier.id === "noMobs";
         if (isAlive && !attacksDisabled) {
-          const attackPanelH = 370; // 25% bigger (was 295)
+          const attackPanelH = 410; // Increased for gold reserve buttons
           drawSectionPanel(panelX, currentY, panelW, attackPanelH, "rgba(255,68,68,0.5)", "⚔️ SEND ATTACKS", "#ff6666");
           
           // Quantity mode buttons (1x, 10x, MAX)
           const qBtnW = (panelW - 30) / 3;
-          const qBtnH = 28;
-          const qBtnY = currentY + 38;
+          const qBtnH = 26;
+          const qBtnY = currentY + 36;
           hoveredQuantityBtn = null;
           
           const quantityModes = [1, 10, "max"];
@@ -5964,27 +5977,64 @@
             ctx.stroke();
             
             // Label
-            ctx.font = "bold 12px 'Courier New', monospace";
+            ctx.font = "bold 11px 'Courier New', monospace";
             ctx.textAlign = "center";
             ctx.fillStyle = isSelected ? "#fff" : "#999";
-            ctx.fillText(quantityLabels[i], qBtnX + qBtnW / 2, qBtnY + 19);
+            ctx.fillText(quantityLabels[i], qBtnX + qBtnW / 2, qBtnY + 17);
+          });
+          
+          // Gold Reserve buttons (No Limit, +1K, +2K)
+          const rBtnW = (panelW - 30) / 3;
+          const rBtnH = 26;
+          const rBtnY = qBtnY + qBtnH + 6;
+          hoveredReserveBtn = null;
+          
+          const reserveModes = [0, 1000, 2000];
+          const reserveLabels = ["NO LIMIT", "+1K", "+2K"];
+          const reserveColors = ["#888", "#ffd700", "#ffd700"];
+          
+          reserveModes.forEach((mode, i) => {
+            const rBtnX = panelX + 8 + i * (rBtnW + 4);
+            const isSelected = goldReserve === mode;
+            const isHovered = mouseX >= rBtnX && mouseX <= rBtnX + rBtnW && mouseY >= rBtnY && mouseY <= rBtnY + rBtnH;
+            
+            if (isHovered) hoveredReserveBtn = mode;
+            
+            // Button background - gold tint for reserve buttons
+            ctx.fillStyle = isSelected ? (mode === 0 ? "rgba(100,100,100,0.4)" : "rgba(255,200,50,0.3)") : 
+                            isHovered ? (mode === 0 ? "rgba(100,100,100,0.25)" : "rgba(255,200,50,0.2)") : "rgba(40,40,60,0.6)";
+            ctx.strokeStyle = isSelected ? reserveColors[i] : isHovered ? "#aa8" : "#444";
+            ctx.lineWidth = isSelected ? 2 : 1;
+            ctx.beginPath();
+            ctx.roundRect(rBtnX, rBtnY, rBtnW, rBtnH, 5);
+            ctx.fill();
+            ctx.stroke();
+            
+            // Label
+            ctx.font = "bold 9px 'Courier New', monospace";
+            ctx.textAlign = "center";
+            ctx.fillStyle = isSelected ? (mode === 0 ? "#fff" : "#ffd700") : "#777";
+            ctx.fillText(reserveLabels[i], rBtnX + rBtnW / 2, rBtnY + 17);
           });
 
           // Attack buttons
           const attacks = Object.entries(ATTACK_TYPES);
           const btnH = 45; // 25% bigger (was 36)
           const btnGap = 4;
-          const startY = currentY + 75;
+          const startY = rBtnY + rBtnH + 10; // Start after reserve buttons
+          
+          // Calculate spendable gold (respecting reserve)
+          const spendableGold = Math.max(0, myGold - goldReserve);
 
           attacks.forEach(([key, atk], i) => {
             const btnY = startY + i * (btnH + btnGap);
             const btnX = panelX + 8;
             const btnW = panelW - 16;
             
-            // Calculate cost based on quantity mode
+            // Calculate cost based on quantity mode AND gold reserve
             let displayCost = atk.cost;
-            let canAfford = myGold >= atk.cost;
-            let affordCount = Math.floor(myGold / atk.cost);
+            let canAfford = spendableGold >= atk.cost;
+            let affordCount = Math.floor(spendableGold / atk.cost);
             
             if (attackQuantityMode === 10) {
               displayCost = atk.cost * Math.min(10, affordCount);

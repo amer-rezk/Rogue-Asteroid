@@ -97,7 +97,7 @@ const PLAYER_COLORS = [
 
 // ===== Tower Definitions =====
 const TOWER_TYPES = {
-  0: { name: "Gatling", cost: 50, damage: 0.5, cooldown: 0.25, rangeMult: 0.8, color: "#ffff00", upgradeCost: 40, bulletType: "gatling" },
+  0: { name: "Gatling", cost: 50, damage: 0.5, cooldown: 0.5, rangeMult: 0.8, color: "#ffff00", upgradeCost: 40, bulletType: "gatling" },
   1: { name: "Railgun", cost: 120, damage: 8, cooldown: 1.4, rangeMult: 1.5, color: "#00ff00", upgradeCost: 80, bulletType: "sniper" },
   2: { name: "Missile", cost: 250, damage: 16, cooldown: 2.0, rangeMult: 1.0, color: "#ff0000", explosive: 1, upgradeCost: 150, bulletType: "missile" }
 };
@@ -5752,7 +5752,7 @@ wss.on("connection", (ws) => {
         return;
       }
       
-      const { attackType, quantity } = msg;
+      const { attackType, quantity, goldReserve } = msg;
       if (!ATTACK_TYPES[attackType]) return;
       
       const validTargets = lockedSlots.filter(pid => {
@@ -5768,13 +5768,17 @@ wss.on("connection", (ws) => {
       
       const unitCost = ATTACK_TYPES[attackType].cost;
       
+      // Calculate spendable gold (respecting gold reserve)
+      const reserve = typeof goldReserve === "number" ? Math.max(0, goldReserve) : 0;
+      const spendableGold = Math.max(0, p.gold - reserve);
+      
       let toBuy = 1;
       if (quantity === "max") {
-        toBuy = Math.floor(p.gold / unitCost);
+        toBuy = Math.floor(spendableGold / unitCost);
       } else if (quantity === 10) {
-        toBuy = Math.min(10, Math.floor(p.gold / unitCost));
+        toBuy = Math.min(10, Math.floor(spendableGold / unitCost));
       } else {
-        toBuy = p.gold >= unitCost ? 1 : 0;
+        toBuy = spendableGold >= unitCost ? 1 : 0;
       }
       
       if (toBuy <= 0) return;
