@@ -4451,6 +4451,7 @@ function tick() {
             triggerBioBloom(m); // <--- ADD THIS
             createExplosion(m.x, m.y, 25, ATTACK_TYPES[m.attackType]?.color || "#fa0");
             // Necromancer Drive: Create ghost allies on kill per copy (STACKS)
+            const bulletModules = b.modules || [];
             const necroCount = countModule(bulletModules, "necromancerDrive");
             if (necroCount > 0) {
               for (let gi = 0; gi < necroCount; gi++) {
