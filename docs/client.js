@@ -3049,10 +3049,16 @@
       const myPlayer = lastSnap.players.find(p => p.id === myId);
       const inv = myPlayer?.inventory || [];
       if (inv.length > 0) {
-        const invPanelW = 180;
-        const invPanelH = 40 + Math.ceil(inv.length / 4) * 45;
-        const invPanelX = 15;
-        const invPanelY = canvas.height - invPanelH - 60;
+        // Match the compact horizontal layout dimensions
+        const cardSize = 32;
+        const cardGap = 4;
+        const maxCardsPerRow = 8;
+        const cardsPerRow = Math.min(inv.length, maxCardsPerRow);
+        const numRows = Math.ceil(inv.length / maxCardsPerRow);
+        const invPanelW = 16 + cardsPerRow * (cardSize + cardGap);
+        const invPanelH = 28 + numRows * (cardSize + cardGap);
+        const invPanelX = 10;
+        const invPanelY = canvas.height - invPanelH - 58;
         if (mouseX >= invPanelX && mouseX <= invPanelX + invPanelW && mouseY >= invPanelY && mouseY <= invPanelY + invPanelH) {
           // Clicked on inventory - select the module if hovering one
           if (selectedInventoryModule) {
@@ -3183,19 +3189,20 @@
     // Reserve space for UI panels
     const playerCount = lastSnap?.players?.length || 1;
     
-    // Right panel: attacks + DPS meters (only in multiplayer)
+    // Right panel: attacks + DPS meters (only in multiplayer) - this needs dedicated space
     const rightPanelReserve = (playerCount > 1) ? 240 : 0; // 220 panel + 20 margin
     
-    // Left panel: inventory + chat (always reserve some space for chat button)
-    const leftPanelReserve = 200; // 180 panel + 20 margin
+    // Left side: inventory + chat are OVERLAYS (no reserved space needed)
+    // They float on top of the game area and are semi-transparent
+    const leftPanelReserve = 0;
     
-    const availableWidth = sw - rightPanelReserve - leftPanelReserve;
+    const availableWidth = sw - rightPanelReserve;
     
     const scale = Math.min(availableWidth / ww, sh / wh);
     const renderW = ww * scale;
     const renderH = wh * scale;
-    // Center the game area between the two reserved columns
-    const offsetX = leftPanelReserve + (availableWidth - renderW) / 2;
+    // Center the game area in available space (left side has no reserve)
+    const offsetX = (availableWidth - renderW) / 2;
     const offsetY = (sh - renderH) / 2;
     return { sx: scale, sy: scale, offsetX, offsetY, renderW, renderH, leftPanelReserve, rightPanelReserve };
   }
@@ -3685,13 +3692,18 @@
         }
       }
       
-      // Inventory panel
+      // Inventory panel - compact horizontal layout
       const uiCheckInv = uiCheckPlayer?.inventory || [];
       if (uiCheckInv.length > 0) {
-        const invPanelW = 180;
-        const invPanelH = 40 + Math.ceil(uiCheckInv.length / 4) * 45;
-        const invPanelX = 15;
-        const invPanelY = canvas.height - invPanelH - 60;
+        const cardSize = 32;
+        const cardGap = 4;
+        const maxCardsPerRow = 8;
+        const cardsPerRow = Math.min(uiCheckInv.length, maxCardsPerRow);
+        const numRows = Math.ceil(uiCheckInv.length / maxCardsPerRow);
+        const invPanelW = 16 + cardsPerRow * (cardSize + cardGap);
+        const invPanelH = 28 + numRows * (cardSize + cardGap);
+        const invPanelX = 10;
+        const invPanelY = canvas.height - invPanelH - 58;
         if (mouseX >= invPanelX && mouseX <= invPanelX + invPanelW && mouseY >= invPanelY && mouseY <= invPanelY + invPanelH) {
           uiHovered = true;
         }
@@ -3708,13 +3720,7 @@
         }
       }
       
-      // Left panel (inventory + chat) 
-      {
-        const { leftPanelReserve } = getScale();
-        if (mouseX >= 0 && mouseX <= leftPanelReserve) {
-          uiHovered = true;
-        }
-      }
+      // Note: Inventory and chat are overlays - their hover is handled by specific bounds checks
       
       // Pause button (in HUD bar)
       if (phase === "playing" && !isSpectator) {
@@ -6180,7 +6186,7 @@
         ctx.textBaseline = "alphabetic";
       }
       
-      // ===== INVENTORY PANEL (Module Cards) =====
+      // ===== INVENTORY PANEL (Module Cards) - Compact horizontal overlay =====
       // Clear inventory bounds at start
       window.invBounds = [];
       
@@ -6188,40 +6194,44 @@
         const MODULES = window.TOWER_MODULES || {};
         const inv = myPlayer.inventory;
         
-        const invPanelW = 180;
-        const invPanelH = 40 + Math.ceil(inv.length / 4) * 45;
-        const invPanelX = 15;
-        const invPanelY = canvas.height - invPanelH - 60;
+        // Horizontal compact layout - fits more items in less vertical space
+        const cardSize = 32;
+        const cardGap = 4;
+        const maxCardsPerRow = 8;
+        const cardsPerRow = Math.min(inv.length, maxCardsPerRow);
+        const numRows = Math.ceil(inv.length / maxCardsPerRow);
         
-        // Panel background
-        ctx.fillStyle = "rgba(10,10,30,0.9)";
-        ctx.strokeStyle = selectedInventoryIndex !== -1 ? "#00ff00" : "rgba(255,215,0,0.5)";
+        const invPanelW = 16 + cardsPerRow * (cardSize + cardGap);
+        const invPanelH = 28 + numRows * (cardSize + cardGap);
+        const invPanelX = 10;
+        const invPanelY = canvas.height - invPanelH - 58; // Above chat button
+        
+        // Semi-transparent panel background - allows seeing game underneath
+        ctx.fillStyle = selectedInventoryIndex !== -1 ? "rgba(0,40,0,0.85)" : "rgba(10,10,25,0.75)";
+        ctx.strokeStyle = selectedInventoryIndex !== -1 ? "#00ff00" : "rgba(255,215,0,0.4)";
         ctx.lineWidth = selectedInventoryIndex !== -1 ? 2 : 1;
         ctx.beginPath();
-        ctx.roundRect(invPanelX, invPanelY, invPanelW, invPanelH, 8);
+        ctx.roundRect(invPanelX, invPanelY, invPanelW, invPanelH, 6);
         ctx.fill();
         ctx.stroke();
         
-        // Title
-        ctx.font = "bold 10px 'Courier New', monospace";
-        ctx.textAlign = "center";
+        // Compact title
+        ctx.font = "bold 9px 'Courier New', monospace";
+        ctx.textAlign = "left";
         ctx.fillStyle = selectedInventoryIndex !== -1 ? "#00ff00" : "#ffd700";
-        ctx.fillText(selectedInventoryIndex !== -1 ? "🎯 SELECT TOWER" : "🎴 INVENTORY", invPanelX + invPanelW / 2, invPanelY + 18);
+        ctx.fillText(selectedInventoryIndex !== -1 ? "🎯 CLICK TOWER" : "🎴 MODULES", invPanelX + 6, invPanelY + 12);
         
-        // Module cards in inventory
-        const cardSize = 36;
-        const cardGap = 6;
-        const cardsPerRow = 4;
-        const startX = invPanelX + 12;
-        const startY = invPanelY + 28;
+        // Module cards in inventory - horizontal layout
+        const startX = invPanelX + 6;
+        const startY = invPanelY + 18;
         
         for (let i = 0; i < inv.length; i++) {
           const moduleId = inv[i];
           const mod = MODULES[moduleId];
           if (!mod) continue;
           
-          const row = Math.floor(i / cardsPerRow);
-          const col = i % cardsPerRow;
+          const row = Math.floor(i / maxCardsPerRow);
+          const col = i % maxCardsPerRow;
           const cardX = startX + col * (cardSize + cardGap);
           const cardY = startY + row * (cardSize + cardGap);
           
@@ -6233,25 +6243,25 @@
           
           // Card background - highlight if selected
           if (isSelected) {
-            ctx.fillStyle = hexToRgba("#00ff00", 0.6);
+            ctx.fillStyle = hexToRgba("#00ff00", 0.7);
             ctx.strokeStyle = "#00ff00";
-            ctx.lineWidth = 3;
+            ctx.lineWidth = 2;
             ctx.shadowColor = "#00ff00";
-            ctx.shadowBlur = 10;
+            ctx.shadowBlur = 8;
           } else {
-            ctx.fillStyle = isHovered ? hexToRgba(mod.color, 0.5) : hexToRgba(mod.color, 0.25);
+            ctx.fillStyle = isHovered ? hexToRgba(mod.color, 0.6) : hexToRgba(mod.color, 0.3);
             ctx.strokeStyle = mod.color;
             ctx.lineWidth = isHovered ? 2 : 1;
             ctx.shadowBlur = 0;
           }
           ctx.beginPath();
-          ctx.roundRect(cardX, cardY, cardSize, cardSize, 5);
+          ctx.roundRect(cardX, cardY, cardSize, cardSize, 4);
           ctx.fill();
           ctx.stroke();
           ctx.shadowBlur = 0;
           
-          // Icon
-          ctx.font = "20px sans-serif";
+          // Icon (smaller)
+          ctx.font = "16px sans-serif";
           ctx.textAlign = "center";
           ctx.fillStyle = "#fff";
           ctx.fillText(mod.icon, cardX + cardSize / 2, cardY + cardSize / 2 + 6);
@@ -6336,12 +6346,7 @@
         
         ctx.textAlign = "left";
         
-        // Hint text
-        ctx.font = "8px 'Courier New', monospace";
-        ctx.fillStyle = selectedInventoryIndex !== -1 ? "#00ff00" : "#666";
-        ctx.textAlign = "center";
-        ctx.fillText(selectedInventoryIndex !== -1 ? "Right-click to cancel" : "Click module to select", invPanelX + invPanelW / 2, invPanelY + invPanelH - 6);
-        ctx.textAlign = "left";
+        // No hint text needed - compact layout saves space
       }
       
       // ===== TOWER MODULE SLOT POPUPS (when module selected) =====
