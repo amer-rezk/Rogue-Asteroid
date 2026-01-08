@@ -337,6 +337,56 @@
   let chatInputFocused = false;
   let lastReadTimestamp = 0; // Track when chat was last viewed
   let gameChatInputText = ""; // In-game chat input
+  let chatScale = parseFloat(localStorage.getItem("rogueAsteroidChatScale") || "1.0"); // Chat scaling
+  let chatChimeEnabled = localStorage.getItem("rogueAsteroidChatChime") !== "false"; // Default true
+  let chatChimeAudio = null;
+  
+  // Initialize chat chime sound
+  function initChatChime() {
+    if (!chatChimeAudio) {
+      chatChimeAudio = new Audio();
+      // Simple chime using a data URI (a soft notification sound)
+      chatChimeAudio.src = "data:audio/wav;base64,UklGRl9vT19teleUAQAwbm90ZSBzdWJtaXR0ZWQgYnkgQ2xhdWRl//uQZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAASW5markup0ZXJuYWxseS1nZW5lcmF0ZWQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB0ZXN0";
+      chatChimeAudio.volume = 0.3;
+      // Use a proper synthesized chime
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        oscillator.frequency.value = 800;
+        oscillator.type = 'sine';
+        gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+        oscillator.start(audioCtx.currentTime);
+        oscillator.stop(audioCtx.currentTime + 0.3);
+        // Store context for later use
+        window.chatChimeCtx = audioCtx;
+      } catch (e) {
+        console.log("Could not create audio context for chat chime");
+      }
+    }
+  }
+  
+  function playChatChime() {
+    if (!chatChimeEnabled) return;
+    try {
+      const audioCtx = window.chatChimeCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      oscillator.frequency.value = 880; // A5 note
+      oscillator.type = 'sine';
+      gainNode.gain.setValueAtTime(0.12, audioCtx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+      oscillator.start(audioCtx.currentTime);
+      oscillator.stop(audioCtx.currentTime + 0.2);
+    } catch (e) {
+      // Silently fail if audio not available
+    }
+  }
 
   // Input
   let mouseX = 0;
@@ -2229,6 +2279,10 @@
         if (phase !== "lobby" && phase !== "menu" && !chatOpen) {
           chatUnread++;
         }
+        // Play chime for new messages (not from self)
+        if (msg.from !== (lastSnap?.players?.find(p => p.id === myId)?.name || "")) {
+          playChatChime();
+        }
         updateChatUI();
         break;
     }
@@ -2630,17 +2684,8 @@
     // Note: selectedInventoryIndex should already be cleared if player is dead (from check above)
     if (selectedInventoryIndex !== -1 && lastSnap && !buildMenuOpen && playerAlive) {
       if (myP) {
-        // Get scale to convert world to screen coords
-        const sw = canvas.width;
-        const sh = canvas.height;
-        const ww = world.width;
-        const wh = world.height;
-        const playerCount = lastSnap?.players?.length || 1;
-        const panelReserve = (playerCount > 1) ? 195 : 0;
-        const availableWidth = sw - panelReserve;
-        const scale = Math.min(availableWidth / ww, sh / wh);
-        const offsetX = (availableWidth - ww * scale) / 2;
-        const offsetY = (sh - wh * scale) / 2;
+        // Use the same scale calculation as getScale()
+        const { sx: scale, offsetX, offsetY } = getScale();
         
         // Calculate tower positions (same as buildMenuOpen logic)
         const segX0 = myP.slot * world.segmentWidth;
@@ -2719,15 +2764,27 @@
       return;
     }
     
-    // T to open chat and start typing
-    if (e.key === "t" || e.key === "T") {
+    // Enter to open chat OR send message
+    if (e.key === "Enter") {
       if (!chatOpen) {
+        // Open chat and start typing
         chatOpen = true;
         chatUnread = 0;
+        gameChatTyping = true;
+        e.preventDefault();
+        return;
+      } else if (gameChatTyping && gameChatInputText.trim()) {
+        // Send message
+        sendChatMessage(gameChatInputText);
+        gameChatInputText = "";
+        e.preventDefault();
+        return;
+      } else if (!gameChatTyping) {
+        // Start typing in already open chat
+        gameChatTyping = true;
+        e.preventDefault();
+        return;
       }
-      gameChatTyping = true;
-      e.preventDefault();
-      return;
     }
     
     // Space bar to pause/unpause (only when not typing)
@@ -2741,14 +2798,6 @@
       return;
     }
     
-    // Enter to send message when typing
-    if (e.key === "Enter" && gameChatTyping && gameChatInputText.trim()) {
-      sendChatMessage(gameChatInputText);
-      gameChatInputText = "";
-      e.preventDefault();
-      return;
-    }
-    
     // Backspace when typing
     if (e.key === "Backspace" && gameChatTyping) {
       gameChatInputText = gameChatInputText.slice(0, -1);
@@ -2756,7 +2805,7 @@
       return;
     }
     
-    // Regular characters when typing
+    // Regular characters when typing (including all letters!)
     if (gameChatTyping && e.key.length === 1 && gameChatInputText.length < 200) {
       gameChatInputText += e.key;
       e.preventDefault();
@@ -2783,6 +2832,41 @@
       const btn = window.gameChatCloseBounds;
       if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) {
         chatOpen = false;
+        gameChatTyping = false;
+        mouseDown = false;
+        return;
+      }
+    }
+    
+    // Handle chat scale minus button
+    if (chatOpen && window.chatScaleMinusBounds) {
+      const btn = window.chatScaleMinusBounds;
+      if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) {
+        chatScale = Math.max(0.7, chatScale - 0.1);
+        localStorage.setItem("rogueAsteroidChatScale", chatScale.toString());
+        mouseDown = false;
+        return;
+      }
+    }
+    
+    // Handle chat scale plus button
+    if (chatOpen && window.chatScalePlusBounds) {
+      const btn = window.chatScalePlusBounds;
+      if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) {
+        chatScale = Math.min(1.5, chatScale + 0.1);
+        localStorage.setItem("rogueAsteroidChatScale", chatScale.toString());
+        mouseDown = false;
+        return;
+      }
+    }
+    
+    // Handle chat chime toggle button
+    if (chatOpen && window.chatChimeBounds) {
+      const btn = window.chatChimeBounds;
+      if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) {
+        chatChimeEnabled = !chatChimeEnabled;
+        localStorage.setItem("rogueAsteroidChatChime", chatChimeEnabled.toString());
+        if (chatChimeEnabled) playChatChime(); // Play test chime when enabled
         mouseDown = false;
         return;
       }
@@ -3096,17 +3180,24 @@
     const ww = world.width;
     const wh = world.height;
     
-    // Reserve space for the right panel in multiplayer (when panel would be shown)
+    // Reserve space for UI panels
     const playerCount = lastSnap?.players?.length || 1;
-    const panelReserve = (playerCount > 1) ? 195 : 0; // 175 panel + 20 margin
-    const availableWidth = sw - panelReserve;
+    
+    // Right panel: attacks + DPS meters (only in multiplayer)
+    const rightPanelReserve = (playerCount > 1) ? 240 : 0; // 220 panel + 20 margin
+    
+    // Left panel: inventory + chat (always reserve some space for chat button)
+    const leftPanelReserve = 200; // 180 panel + 20 margin
+    
+    const availableWidth = sw - rightPanelReserve - leftPanelReserve;
     
     const scale = Math.min(availableWidth / ww, sh / wh);
     const renderW = ww * scale;
     const renderH = wh * scale;
-    const offsetX = (availableWidth - renderW) / 2;
+    // Center the game area between the two reserved columns
+    const offsetX = leftPanelReserve + (availableWidth - renderW) / 2;
     const offsetY = (sh - renderH) / 2;
-    return { sx: scale, sy: scale, offsetX, offsetY, renderW, renderH, panelReserve };
+    return { sx: scale, sy: scale, offsetX, offsetY, renderW, renderH, leftPanelReserve, rightPanelReserve };
   }
 
   function drawNeonText(text, x, y, color, size, align = "left") {
@@ -3608,10 +3699,19 @@
       
       // Attack panel (right side) - only in multiplayer
       if (lastSnap.players?.length > 1) {
-        const panelX = canvas.width - 175 - 15;
+        const { rightPanelReserve } = getScale();
+        const panelX = canvas.width - rightPanelReserve;
         const panelY = 10;
-        const panelH = 400; // approximate
-        if (mouseX >= panelX && mouseX <= canvas.width - 10 && mouseY >= panelY && mouseY <= panelY + panelH) {
+        const panelH = canvas.height - 20; // Full height of panel area
+        if (mouseX >= panelX && mouseX <= canvas.width && mouseY >= panelY && mouseY <= panelY + panelH) {
+          uiHovered = true;
+        }
+      }
+      
+      // Left panel (inventory + chat) 
+      {
+        const { leftPanelReserve } = getScale();
+        if (mouseX >= 0 && mouseX <= leftPanelReserve) {
           uiHovered = true;
         }
       }
@@ -5706,7 +5806,9 @@
       if (phase === "playing" && lastSnap && lastSnap.players.length > 1) {
         hoveredAttack = null;
         const panelW = 220; // 25% bigger (was 175)
-        const panelX = canvas.width - panelW - 12;
+        // Position panel in the dedicated right column (after game area)
+        const { rightPanelReserve } = getScale();
+        const panelX = canvas.width - rightPanelReserve + 10; // Start at right reserved area with margin
         let currentY = 15;
         const myGold = myPlayer?.gold || 0;
         const isAlive = myPlayer && myPlayer.hp > 0;
@@ -6034,17 +6136,16 @@
       if (phase === "playing" && myPlayer) {
         const canAffordBuy = myPlayer.gold >= buyUpgradeCost;
         
-        // Logic to dodge the Attack Panel
+        // Logic to dodge the Attack Panel - use reserved column space
         const buyW = 140;
         const buyH = 40;
         
-        // The attack panel is 220px wide + 12px margin. 
-        // We check if we are in PvP (more than 1 player) to apply this offset.
+        // Use the reserved right panel space from getScale
+        const { rightPanelReserve } = getScale();
         const isPvP = lastSnap && lastSnap.players && lastSnap.players.length > 1;
-        const panelOffset = isPvP ? 232 : 15; // 232 = 220 (panel) + 12 (margin)
         
-        // Position: Screen Width - Panel Space - Button Width - Extra Spacing
-        const buyX = canvas.width - panelOffset - buyW - 10;
+        // Position: Just to the left of the reserved right panel area
+        const buyX = isPvP ? canvas.width - rightPanelReserve - buyW - 10 : canvas.width - buyW - 20;
         const buyY = 60; // Below the score/wave HUD
 
         const isBuyHovered = mouseX >= buyX && mouseX <= buyX + buyW && 
@@ -7664,12 +7765,12 @@
 
       // ===== In-Game Chat UI =====
       if (phase === "playing" || phase === "upgrades") {
-        const chatBtnSize = 40;
-        const chatBtnX = 15;
-        const chatBtnY = canvas.height - chatBtnSize - 15;
+        const chatBtnSize = 44;
+        const chatBtnX = 10;
+        const chatBtnY = canvas.height - chatBtnSize - 10;
         
         // Draw chat toggle button
-        ctx.fillStyle = chatOpen ? "rgba(0,255,255,0.3)" : "rgba(30,30,50,0.8)";
+        ctx.fillStyle = chatOpen ? "rgba(0,255,255,0.3)" : "rgba(30,30,50,0.85)";
         ctx.strokeStyle = chatUnread > 0 && !chatOpen ? "#ff0" : "#0ff";
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -7679,7 +7780,7 @@
         
         // Chat icon
         ctx.fillStyle = chatUnread > 0 && !chatOpen ? "#ff0" : "#fff";
-        ctx.font = "bold 20px Arial";
+        ctx.font = "bold 22px Arial";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillText("💬", chatBtnX + chatBtnSize/2, chatBtnY + chatBtnSize/2);
@@ -7688,16 +7789,16 @@
         if (chatUnread > 0 && !chatOpen) {
           ctx.fillStyle = "#f44";
           ctx.beginPath();
-          ctx.arc(chatBtnX + chatBtnSize - 5, chatBtnY + 8, 10, 0, Math.PI * 2);
+          ctx.arc(chatBtnX + chatBtnSize - 5, chatBtnY + 8, 12, 0, Math.PI * 2);
           ctx.fill();
           ctx.fillStyle = "#fff";
-          ctx.font = "bold 11px Arial";
+          ctx.font = "bold 12px Arial";
           ctx.fillText(chatUnread > 9 ? "9+" : chatUnread, chatBtnX + chatBtnSize - 5, chatBtnY + 9);
           
           // Pulse animation for unread
           const pulse = Math.sin(time * 5) * 0.3 + 0.7;
           ctx.strokeStyle = `rgba(255,255,0,${pulse})`;
-          ctx.lineWidth = 2;
+          ctx.lineWidth = 3;
           ctx.beginPath();
           ctx.roundRect(chatBtnX - 2, chatBtnY - 2, chatBtnSize + 4, chatBtnSize + 4, 10);
           ctx.stroke();
@@ -7708,89 +7809,190 @@
         
         // Draw chat popup if open
         if (chatOpen) {
-          const chatW = 340;
-          const chatH = 320;
-          const chatX = 15;
-          const chatY = canvas.height - chatH - chatBtnSize - 25;
+          // Base dimensions scaled by chatScale
+          const baseChatW = 420;
+          const baseChatH = 400;
+          const chatW = Math.round(baseChatW * chatScale);
+          const chatH = Math.round(baseChatH * chatScale);
+          const chatX = 10;
+          const chatY = canvas.height - chatH - chatBtnSize - 20;
           
-          // Chat window background
-          ctx.fillStyle = "rgba(10,10,30,0.95)";
+          // Scaled font sizes
+          const headerFontSize = Math.round(14 * chatScale);
+          const msgFontSize = Math.round(15 * chatScale);
+          const timeFontSize = Math.round(12 * chatScale);
+          const inputFontSize = Math.round(14 * chatScale);
+          
+          // Chat window background with better contrast
+          ctx.fillStyle = "rgba(8,12,24,0.97)";
           ctx.strokeStyle = "#0ff";
           ctx.lineWidth = 2;
           ctx.beginPath();
-          ctx.roundRect(chatX, chatY, chatW, chatH, 10);
+          ctx.roundRect(chatX, chatY, chatW, chatH, 12);
           ctx.fill();
           ctx.stroke();
           
-          // Chat header
-          ctx.fillStyle = "rgba(0,255,255,0.15)";
+          // Chat header with title
+          const headerH = Math.round(40 * chatScale);
+          ctx.fillStyle = "rgba(0,255,255,0.12)";
           ctx.beginPath();
-          ctx.roundRect(chatX, chatY, chatW, 30, [10, 10, 0, 0]);
+          ctx.roundRect(chatX, chatY, chatW, headerH, [12, 12, 0, 0]);
           ctx.fill();
           
           ctx.fillStyle = "#0ff";
-          ctx.font = "bold 12px Orbitron, sans-serif";
+          ctx.font = `bold ${headerFontSize}px Orbitron, sans-serif`;
           ctx.textAlign = "left";
           ctx.textBaseline = "middle";
-          ctx.fillText("💬 CHAT", chatX + 12, chatY + 15);
+          ctx.fillText("💬 GAME CHAT", chatX + 15, chatY + headerH/2);
+          
+          // Scale controls (- and + buttons)
+          const scaleBtnSize = Math.round(24 * chatScale);
+          const scaleBtnY = chatY + (headerH - scaleBtnSize) / 2;
+          
+          // Minus button
+          const minusBtnX = chatX + chatW - scaleBtnSize * 3 - 50;
+          ctx.fillStyle = mouseX >= minusBtnX && mouseX <= minusBtnX + scaleBtnSize && 
+                          mouseY >= scaleBtnY && mouseY <= scaleBtnY + scaleBtnSize ? 
+                          "rgba(255,100,100,0.4)" : "rgba(60,60,80,0.5)";
+          ctx.strokeStyle = "#888";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(minusBtnX, scaleBtnY, scaleBtnSize, scaleBtnSize, 4);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = "#fff";
+          ctx.font = `bold ${Math.round(16 * chatScale)}px Arial`;
+          ctx.textAlign = "center";
+          ctx.fillText("−", minusBtnX + scaleBtnSize/2, scaleBtnY + scaleBtnSize/2 + 1);
+          window.chatScaleMinusBounds = { x: minusBtnX, y: scaleBtnY, w: scaleBtnSize, h: scaleBtnSize };
+          
+          // Plus button
+          const plusBtnX = minusBtnX + scaleBtnSize + 4;
+          ctx.fillStyle = mouseX >= plusBtnX && mouseX <= plusBtnX + scaleBtnSize && 
+                          mouseY >= scaleBtnY && mouseY <= scaleBtnY + scaleBtnSize ? 
+                          "rgba(100,255,100,0.4)" : "rgba(60,60,80,0.5)";
+          ctx.beginPath();
+          ctx.roundRect(plusBtnX, scaleBtnY, scaleBtnSize, scaleBtnSize, 4);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = "#fff";
+          ctx.fillText("+", plusBtnX + scaleBtnSize/2, scaleBtnY + scaleBtnSize/2 + 1);
+          window.chatScalePlusBounds = { x: plusBtnX, y: scaleBtnY, w: scaleBtnSize, h: scaleBtnSize };
+          
+          // Chime toggle button
+          const chimeBtnX = plusBtnX + scaleBtnSize + 8;
+          const chimeOn = chatChimeEnabled;
+          ctx.fillStyle = mouseX >= chimeBtnX && mouseX <= chimeBtnX + scaleBtnSize && 
+                          mouseY >= scaleBtnY && mouseY <= scaleBtnY + scaleBtnSize ? 
+                          "rgba(255,200,100,0.4)" : (chimeOn ? "rgba(255,200,100,0.25)" : "rgba(60,60,80,0.5)");
+          ctx.strokeStyle = chimeOn ? "#ffc844" : "#888";
+          ctx.beginPath();
+          ctx.roundRect(chimeBtnX, scaleBtnY, scaleBtnSize, scaleBtnSize, 4);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = chimeOn ? "#ffc844" : "#666";
+          ctx.font = `${Math.round(14 * chatScale)}px Arial`;
+          ctx.fillText(chimeOn ? "🔔" : "🔕", chimeBtnX + scaleBtnSize/2, scaleBtnY + scaleBtnSize/2 + 1);
+          window.chatChimeBounds = { x: chimeBtnX, y: scaleBtnY, w: scaleBtnSize, h: scaleBtnSize };
           
           // Close button
-          ctx.fillStyle = "#f44";
-          ctx.font = "bold 16px Arial";
-          ctx.textAlign = "center";
-          ctx.fillText("✕", chatX + chatW - 18, chatY + 15);
-          window.gameChatCloseBounds = { x: chatX + chatW - 30, y: chatY, w: 30, h: 30 };
+          const closeBtnX = chatX + chatW - scaleBtnSize - 8;
+          ctx.fillStyle = mouseX >= closeBtnX && mouseX <= closeBtnX + scaleBtnSize && 
+                          mouseY >= scaleBtnY && mouseY <= scaleBtnY + scaleBtnSize ? 
+                          "rgba(255,68,68,0.5)" : "rgba(255,68,68,0.2)";
+          ctx.strokeStyle = "#f44";
+          ctx.beginPath();
+          ctx.roundRect(closeBtnX, scaleBtnY, scaleBtnSize, scaleBtnSize, 4);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = "#f66";
+          ctx.font = `bold ${Math.round(16 * chatScale)}px Arial`;
+          ctx.fillText("✕", closeBtnX + scaleBtnSize/2, scaleBtnY + scaleBtnSize/2 + 1);
+          window.gameChatCloseBounds = { x: closeBtnX, y: scaleBtnY, w: scaleBtnSize, h: scaleBtnSize };
           
-          // Messages area
-          const msgAreaY = chatY + 35;
-          const msgAreaH = chatH - 75;
+          // Messages area with better padding
+          const msgAreaY = chatY + headerH + 8;
+          const inputAreaH = Math.round(45 * chatScale);
+          const msgAreaH = chatH - headerH - inputAreaH - 20;
+          
+          // Messages background
+          ctx.fillStyle = "rgba(0,0,0,0.3)";
+          ctx.beginPath();
+          ctx.roundRect(chatX + 8, msgAreaY, chatW - 16, msgAreaH, 6);
+          ctx.fill();
+          
           ctx.save();
           ctx.beginPath();
-          ctx.rect(chatX + 5, msgAreaY, chatW - 10, msgAreaH);
+          ctx.rect(chatX + 10, msgAreaY + 4, chatW - 20, msgAreaH - 8);
           ctx.clip();
           
-          ctx.font = "13px Rajdhani, sans-serif";
           ctx.textAlign = "left";
           ctx.textBaseline = "top";
           
-          const lineHeight = 18;
-          const maxLines = Math.floor(msgAreaH / lineHeight);
+          const lineHeight = Math.round(22 * chatScale);
+          const maxLines = Math.floor((msgAreaH - 8) / lineHeight);
           const recentMessages = chatMessages.slice(-maxLines);
           
           for (let i = 0; i < recentMessages.length; i++) {
             const msg = recentMessages[i];
-            const y = msgAreaY + i * lineHeight + 5;
-            const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const y = msgAreaY + 6 + i * lineHeight;
+            const msgTime = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             
-            ctx.fillStyle = "#666";
-            ctx.fillText(time, chatX + 8, y);
+            // Time stamp
+            ctx.fillStyle = "#556";
+            ctx.font = `${timeFontSize}px 'Courier New', monospace`;
+            ctx.fillText(msgTime, chatX + 14, y);
             
+            // Player name with color
             ctx.fillStyle = "#0ff";
+            ctx.font = `bold ${msgFontSize}px Rajdhani, sans-serif`;
             const nameText = msg.from + ":";
-            ctx.fillText(nameText, chatX + 48, y);
+            const timeWidth = ctx.measureText(msgTime).width;
+            ctx.fillText(nameText, chatX + 20 + timeWidth + 8, y);
             
-            ctx.fillStyle = "#fff";
+            // Message text - allow longer messages
+            ctx.fillStyle = "#e8e8e8";
+            ctx.font = `${msgFontSize}px Rajdhani, sans-serif`;
             const nameWidth = ctx.measureText(nameText).width;
-            ctx.fillText(msg.text.slice(0, 30), chatX + 52 + nameWidth, y);
+            const maxMsgWidth = chatW - 50 - timeWidth - nameWidth;
+            let displayText = msg.text;
+            if (ctx.measureText(displayText).width > maxMsgWidth) {
+              while (ctx.measureText(displayText + "…").width > maxMsgWidth && displayText.length > 0) {
+                displayText = displayText.slice(0, -1);
+              }
+              displayText += "…";
+            }
+            ctx.fillText(displayText, chatX + 28 + timeWidth + nameWidth + 4, y);
           }
           ctx.restore();
           
-          // Input area hint
-          ctx.fillStyle = "rgba(0,0,0,0.5)";
+          // Input area with better styling
+          const inputY = chatY + chatH - inputAreaH - 8;
+          const inputH = Math.round(36 * chatScale);
+          
+          ctx.fillStyle = gameChatTyping ? "rgba(0,80,80,0.5)" : "rgba(0,0,0,0.4)";
+          ctx.strokeStyle = gameChatTyping ? "#0ff" : "#444";
+          ctx.lineWidth = gameChatTyping ? 2 : 1;
           ctx.beginPath();
-          ctx.roundRect(chatX + 5, chatY + chatH - 35, chatW - 10, 28, 5);
+          ctx.roundRect(chatX + 8, inputY, chatW - 16, inputH, 6);
           ctx.fill();
-          ctx.strokeStyle = "#444";
-          ctx.lineWidth = 1;
           ctx.stroke();
           
-          ctx.fillStyle = "#888";
-          ctx.font = "12px Rajdhani, sans-serif";
+          ctx.font = `${inputFontSize}px Rajdhani, sans-serif`;
           ctx.textAlign = "left";
           ctx.textBaseline = "middle";
-          ctx.fillText(gameChatInputText || "Press T to type...", chatX + 12, chatY + chatH - 21);
           
-          window.gameChatInputBounds = { x: chatX + 5, y: chatY + chatH - 35, w: chatW - 10, h: 28 };
+          if (gameChatInputText) {
+            ctx.fillStyle = "#fff";
+            // Show cursor when typing
+            const displayInput = gameChatInputText + (gameChatTyping && Math.floor(Date.now() / 500) % 2 === 0 ? "│" : "");
+            ctx.fillText(displayInput, chatX + 16, inputY + inputH/2);
+          } else {
+            ctx.fillStyle = gameChatTyping ? "#8af" : "#667";
+            ctx.fillText(gameChatTyping ? "Type your message..." : "Press ENTER to chat", chatX + 16, inputY + inputH/2);
+          }
+          
+          window.gameChatInputBounds = { x: chatX + 8, y: inputY, w: chatW - 16, h: inputH };
           window.gameChatBounds = { x: chatX, y: chatY, w: chatW, h: chatH };
         }
       }
