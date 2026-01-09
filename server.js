@@ -76,6 +76,7 @@ const broadcastState = {
   events: [],
   shieldExplosions: [],
   ghostAllies: [],
+  mines: [], // Drone Command proximity mines
   moduleCardPhase: false,
   modulePickTimer: 0,
   currentModulePicker: null,
@@ -86,6 +87,7 @@ for (let i = 0; i < 250; i++) broadcastState.missiles.push({});
 for (let i = 0; i < 150; i++) broadcastState.bullets.push({});
 for (let i = 0; i < 15; i++) broadcastState.shieldExplosions.push({});
 for (let i = 0; i < 30; i++) broadcastState.ghostAllies.push({});
+for (let i = 0; i < 20; i++) broadcastState.mines.push({}); // Pre-allocate mines
 for (let i = 0; i < 4; i++) broadcastState.players.push({ upgrades: {} });
 
 const BASE_HP_PER_PLAYER = 20;
@@ -307,7 +309,7 @@ const TOWER_MODULES = {
     name: "Drone Command",
     icon: "🛸",
     color: "#44aaff",
-    desc: "Attack drone orbits and fires at enemies",
+    desc: "Drone orbits, fires, & drops proximity mines (10x dmg)",
     effect: "drone"
   },
   momentumLens: {
@@ -541,6 +543,7 @@ let bullets = [];
 let enemyBullets = []; // Battleship bullets that can hit player turrets
 let shieldExplosions = []; // Active shield explosions that deal damage
 let ghostAllies = []; // Necromancer ghost allies flying upward
+let mines = []; // Drone Command proximity mines
 
 // Shield sphere radius (as fraction of segment width)
 const SHIELD_RADIUS_MULT = 0.45;
@@ -1717,6 +1720,8 @@ function resetToLobby() {
     missiles = [];
     bullets = [];
     shieldExplosions = [];
+    ghostAllies = [];
+    mines = []; // Clear drone mines
     upgradePicks = new Map();
     attackQueue = new Map();
     pendingUpgrades = new Map();
@@ -3334,6 +3339,53 @@ function tick() {
               tower.droneCd = droneCooldown;
             }
           }
+
+          // DRONE MINE SYSTEM: Drop proximity mines every 3 seconds
+          if (!tower.droneMineCd) tower.droneMineCd = 0;
+          tower.droneMineCd = Math.max(0, tower.droneMineCd - DT);
+
+          if (tower.droneMineCd <= 0) {
+            // Calculate mine damage based on tower type and upgrades
+            const towerStats = TOWER_TYPES[tower.type];
+            const baseTowerDamage = towerStats ? towerStats.damage : 1;
+            const levelBonus = 1 + (tower.level - 1) * 0.15;
+            const damageAdd = (p.upgrades?.damageAdd ?? 0) * 0.5; // Tower gets 50% of upgrades
+            const mineDamage = (baseTowerDamage + damageAdd) * levelBonus * 10 * droneCount; // 10x multiplier, scales with stacks
+
+            // Random position in upper 75% of player's segment
+            const mineX = rand(x0 + 20, x1 - 20);
+            const mineY = rand(30, GROUND_Y * 0.75);
+
+            // Create mine entity
+            mines.push({
+              id: uid(),
+              x: mineX,
+              y: mineY,
+              r: 8, // Mine radius for collision
+              blastRadius: 50, // AOE explosion radius
+              damage: mineDamage,
+              ownerSlot: p.slot,
+              ownerId: p.id,
+              towerIdx: tIdx,
+              lifespan: 60, // 60 second lifespan
+              triggerRadius: 25, // Proximity trigger distance
+              armed: false, // Becomes armed after landing animation
+              armTimer: 0.5, // Time to arm after spawn
+              modules: tower.modules ? tower.modules.filter(m => m !== null) : [],
+              color: PLAYER_COLORS[p.slot]?.main || "#44aaff"
+            });
+
+            // Queue visual event for mine drop
+            queueEvent("mineDrop", {
+              x: droneX,
+              y: droneY,
+              targetX: mineX,
+              targetY: mineY,
+              slot: p.slot
+            });
+
+            tower.droneMineCd = 3.0; // 3 second cooldown
+          }
         }
       }
     }
@@ -4911,6 +4963,151 @@ function tick() {
     }
     ghostAllies.length = gaWriteIdx;
 
+    // ============================================================================
+    // DRONE MINE UPDATE
+    // ============================================================================
+    // Process proximity mines - check for enemy contact and handle explosions
+    for (let mineIdx = 0; mineIdx < mines.length; mineIdx++) {
+      const mine = mines[mineIdx];
+
+      // Decrement lifespan
+      mine.lifespan -= DT;
+      if (mine.lifespan <= 0) {
+        mine.dead = true;
+        continue;
+      }
+
+      // Arm timer - mine becomes active after landing
+      if (!mine.armed) {
+        mine.armTimer -= DT;
+        if (mine.armTimer <= 0) {
+          mine.armed = true;
+          queueEvent("mineArmed", { id: mine.id, x: mine.x, y: mine.y, slot: mine.ownerSlot });
+        }
+        continue;
+      }
+
+      // Check proximity to enemies in this slot
+      const slotMissiles = missilesBySlot[mine.ownerSlot];
+      if (!slotMissiles) continue;
+
+      let triggered = false;
+      for (let mi = 0; mi < slotMissiles.length; mi++) {
+        const m = slotMissiles[mi];
+        if (m.dead || m.isPhased) continue;
+
+        const dx = m.x - mine.x;
+        const dy = m.y - mine.y;
+        const triggerDist = mine.triggerRadius + m.r;
+
+        if (dx * dx + dy * dy <= triggerDist * triggerDist) {
+          triggered = true;
+          break;
+        }
+      }
+
+      if (triggered) {
+        // EXPLODE! Deal AOE damage to all enemies in blast radius
+        let totalDamageDealt = 0;
+        const owner = players.get(mine.ownerId);
+
+        for (let mi = 0; mi < slotMissiles.length; mi++) {
+          const m = slotMissiles[mi];
+          if (m.dead) continue;
+
+          const dx = m.x - mine.x;
+          const dy = m.y - mine.y;
+          const blastDist = mine.blastRadius + m.r;
+
+          if (dx * dx + dy * dy <= blastDist * blastDist) {
+            // Calculate damage with distance falloff (full damage at center, 50% at edge)
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const falloff = 1 - (dist / (mine.blastRadius + m.r)) * 0.5;
+            let damage = mine.damage * falloff;
+
+            // Apply module effects if any
+            if (mine.modules && mine.modules.length > 0) {
+              // Viral Payload: Mark enemy as infected
+              if (mine.modules.includes("viralPayload")) {
+                if (!m.infected) {
+                  m.infected = true;
+                  m.infectedBy = mine.ownerId;
+                }
+                damage *= 1.3; // +30% damage to infected
+              }
+
+              // Executioner's Sight: 300% damage to enemies below 30% HP
+              const executionerCount = countModule(mine.modules, "executionerSight");
+              if (executionerCount > 0 && m.hp < m.maxHp * 0.3) {
+                damage *= 1 + (2 * executionerCount); // 3x, 5x, 7x
+              }
+
+              // Chain Reaction: Mark enemy as charged
+              if (mine.modules.includes("chainReaction") && !m.charged) {
+                m.charged = true;
+                m.chargedBy = mine.ownerId;
+              }
+            }
+
+            m.hp -= damage;
+            totalDamageDealt += damage;
+
+            // Create hit effect
+            queueEvent("damage", {
+              x: m.x,
+              y: m.y,
+              amount: damage,
+              crit: false,
+              color: mine.color
+            });
+
+            if (m.hp <= 0) {
+              m.dead = true;
+              if (owner) {
+                checkBossKill(m, owner);
+              }
+            }
+          }
+        }
+
+        // Create explosion visual
+        queueEvent("mineExplosion", {
+          x: mine.x,
+          y: mine.y,
+          radius: mine.blastRadius,
+          color: mine.color,
+          damage: mine.damage,
+          slot: mine.ownerSlot
+        });
+
+        // Vampiric healing from mine damage
+        if (mine.modules && mine.modules.includes("vampiricNanobots") && owner) {
+          const vampiricCount = countModule(mine.modules, "vampiricNanobots");
+          const healThreshold = Math.max(50, 200 - (vampiricCount - 1) * 50);
+          owner.vampiricPool = (owner.vampiricPool || 0) + totalDamageDealt * vampiricCount;
+          if (owner.vampiricPool >= healThreshold) {
+            const heals = Math.floor(owner.vampiricPool / healThreshold);
+            owner.vampiricPool -= heals * healThreshold;
+            owner.hp = Math.min(owner.hp + heals, owner.maxHp);
+            if (heals > 0) {
+              queueEvent("vampiricHeal", { slot: owner.slot, amount: heals });
+            }
+          }
+        }
+
+        mine.dead = true;
+      }
+    }
+
+    // Remove dead mines
+    let mineWriteIdx = 0;
+    for (let i = 0; i < mines.length; i++) {
+      if (!mines[i].dead) {
+        mines[mineWriteIdx++] = mines[i];
+      }
+    }
+    mines.length = mineWriteIdx;
+
 
 // ============================================================================
 // ENEMY BULLET UPDATE (BATTLESHIP SHOTS)
@@ -5333,6 +5530,26 @@ function broadcastGameState() {
     obj.ownerSlot = g.ownerSlot;
   }
   broadcastState.ghostAllies.length = gaCount;
+
+  // Fill mines (Drone Command proximity mines)
+  const mineCount = mines.length;
+  while (broadcastState.mines.length < mineCount) {
+    broadcastState.mines.push({});
+  }
+  for (let i = 0; i < mineCount; i++) {
+    const m = mines[i];
+    const obj = broadcastState.mines[i];
+    obj.id = m.id;
+    obj.x = Math.round(m.x);
+    obj.y = Math.round(m.y);
+    obj.r = m.r;
+    obj.blastRadius = m.blastRadius;
+    obj.ownerSlot = m.ownerSlot;
+    obj.armed = m.armed;
+    obj.lifespan = Math.round(m.lifespan);
+    obj.color = m.color;
+  }
+  broadcastState.mines.length = mineCount;
 
   // Fill players
   const playerCount = lockedSlots.length;

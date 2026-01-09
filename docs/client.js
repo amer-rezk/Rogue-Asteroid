@@ -1591,6 +1591,88 @@
             createClientParticle(ev.x2, ev.y2, "#00ff00", 8, 1.0);
           }
           break;
+
+        case "mineDrop":
+          // Drone dropping a mine
+          if (!skipVisualEffects) {
+            // Trail from drone to mine landing position
+            pendingTracers.push({
+              x1: ev.x, y1: ev.y,
+              x2: ev.targetX, y2: ev.targetY,
+              color: PLAYER_COLORS[ev.slot]?.main || "#44aaff",
+              life: 0.4
+            });
+            // Small particles at drone
+            createClientParticle(ev.x, ev.y, "#44aaff", 4, 0.5);
+          }
+          break;
+
+        case "mineArmed":
+          // Mine becomes armed
+          if (!skipVisualEffects) {
+            // Activation pulse
+            for (let i = 0; i < 8; i++) {
+              const angle = (i / 8) * Math.PI * 2;
+              clientParticles.push({
+                x: ev.x,
+                y: ev.y,
+                vx: Math.cos(angle) * 40,
+                vy: Math.sin(angle) * 40,
+                life: 0.3,
+                maxLife: 0.3,
+                color: "#ff4444",
+                size: 3
+              });
+            }
+          }
+          break;
+
+        case "mineExplosion":
+          // Mine proximity explosion
+          if (!skipVisualEffects) {
+            const color = ev.color || "#44aaff";
+            // Large explosion burst
+            for (let i = 0; i < 20; i++) {
+              const angle = (i / 20) * Math.PI * 2 + Math.random() * 0.3;
+              const speed = 80 + Math.random() * 60;
+              clientParticles.push({
+                x: ev.x,
+                y: ev.y,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                life: 0.6 + Math.random() * 0.3,
+                maxLife: 0.9,
+                color: color,
+                size: 4 + Math.random() * 4
+              });
+            }
+            // Inner white flash
+            clientParticles.push({
+              x: ev.x,
+              y: ev.y,
+              vx: 0,
+              vy: 0,
+              life: 0.15,
+              maxLife: 0.15,
+              color: "#ffffff",
+              size: 25
+            });
+            // Shockwave ring (multiple expanding particles)
+            for (let i = 0; i < 16; i++) {
+              const angle = (i / 16) * Math.PI * 2;
+              clientParticles.push({
+                x: ev.x + Math.cos(angle) * 10,
+                y: ev.y + Math.sin(angle) * 10,
+                vx: Math.cos(angle) * 120,
+                vy: Math.sin(angle) * 120,
+                life: 0.25,
+                maxLife: 0.25,
+                color: "#ffffff",
+                size: 2
+              });
+            }
+          }
+          break;
       }
     }
   }
@@ -4000,6 +4082,79 @@
           ctx.beginPath();
           ctx.arc(x, y, r * 0.5, 0, Math.PI * 2);
           ctx.fill();
+
+          ctx.shadowBlur = 0;
+        }
+      }
+
+      // Drone Command Proximity Mines
+      if (lastSnap.mines) {
+        for (const mine of lastSnap.mines) {
+          const x = mine.x * sx;
+          const y = mine.y * sy;
+          const r = mine.r * sx;
+          const blastR = mine.blastRadius * sx;
+          const color = mine.color || "#44aaff";
+
+          // Draw blast radius indicator (faint)
+          if (mine.armed) {
+            ctx.strokeStyle = hexToRgba(color, 0.15);
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.arc(x, y, blastR, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+
+          // Mine glow
+          ctx.shadowColor = mine.armed ? color : "#666666";
+          ctx.shadowBlur = mine.armed ? 12 : 5;
+
+          // Mine body
+          ctx.fillStyle = mine.armed ? hexToRgba(color, 0.8) : "#444444";
+          ctx.strokeStyle = mine.armed ? color : "#666666";
+          ctx.lineWidth = 2;
+
+          // Draw hexagonal mine shape
+          ctx.beginPath();
+          for (let i = 0; i < 6; i++) {
+            const angle = (i / 6) * Math.PI * 2 - Math.PI / 6;
+            const px = x + Math.cos(angle) * r;
+            const py = y + Math.sin(angle) * r;
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+
+          // Inner indicator
+          if (mine.armed) {
+            // Pulsing armed indicator
+            const pulse = 0.5 + Math.sin(time * 8) * 0.3;
+            ctx.fillStyle = hexToRgba("#ff0000", pulse);
+            ctx.beginPath();
+            ctx.arc(x, y, r * 0.4, 0, Math.PI * 2);
+            ctx.fill();
+          } else {
+            // Arming indicator (gray)
+            ctx.fillStyle = "#666666";
+            ctx.beginPath();
+            ctx.arc(x, y, r * 0.3, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          // Lifespan indicator (small bar under mine)
+          if (mine.armed && mine.lifespan < 15) {
+            const barWidth = r * 2;
+            const barHeight = 2;
+            const lifePct = mine.lifespan / 60;
+            ctx.fillStyle = "#333";
+            ctx.fillRect(x - barWidth / 2, y + r + 4, barWidth, barHeight);
+            ctx.fillStyle = lifePct > 0.25 ? color : "#ff4444";
+            ctx.fillRect(x - barWidth / 2, y + r + 4, barWidth * lifePct, barHeight);
+          }
 
           ctx.shadowBlur = 0;
         }
