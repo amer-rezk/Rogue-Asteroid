@@ -1,47 +1,101 @@
-(() => {
-  // ===== Configuration =====
-  // Updated to new Netlify address
-  const DEFAULT_SERVER = "wss://correct-jenni-no-name-orgs-8d502912.koyeb.app/ws";
+/**
+ * ROGUE ASTEROID PvP - Client
+ * Competitive asteroid defense with tower building and PvP attacks
+ *
+ * Architecture:
+ * - Server authoritative physics at 60Hz, broadcasts at ~30Hz
+ * - Client renders with interpolation for smooth visuals
+ * - Particles/damage numbers are client-side only (visual)
+ * - Asteroid vertices/rotation cached from spawn events
+ *
+ * Sections:
+ * 1. Configuration & Constants
+ * 2. State Management
+ * 3. DOM Elements & Assets
+ * 4. Utility Functions
+ * 5. Visual Effects (Particles, Lightning, Damage Numbers)
+ * 6. Audio System (Chat Chimes, Music Player)
+ * 7. Networking (WebSocket, Message Handlers)
+ * 8. Game State Processing
+ * 9. Input Handling (Mouse, Keyboard, Touch)
+ * 10. Rendering (Draw Functions)
+ * 11. UI Components (Menus, HUD, Overlays)
+ * 12. Initialization
+ */
 
-  // ===== PERFORMANCE SETTINGS =====
-  // Always use high quality settings - optimized for modern hardware
-  const HIGH_QUALITY_SETTINGS = {
-    useShadows: true,
-    useGradients: false, // Still disabled - gradients are expensive
-    useTrails: true,
-    particleMultiplier: 1.0,
-    maxDamageNumbers: 80,    // Increased from 50
-    maxParticles: 200        // Increased from 150
-  };
-  
-  // Client-side bullet cap (visual only - server is authoritative)
-  const MAX_CLIENT_BULLETS = 600; // Increased from 400
-  
+(() => {
+  "use strict";
+
+  // ============================================================================
+  // CONFIGURATION
+  // ============================================================================
+
+  const CONFIG = Object.freeze({
+    server: {
+      url: "wss://correct-jenni-no-name-orgs-8d502912.koyeb.app/ws"
+    },
+
+    performance: {
+      useShadows: true,
+      useGradients: false,
+      useTrails: true,
+      particleMultiplier: 1.0,
+      maxDamageNumbers: 80,
+      maxParticles: 200,
+      maxClientBullets: 600,
+      shadowDisableThreshold: 3
+    },
+
+    gameplay: {
+      groundY: 560,
+      worldHeight: 600,
+      segmentWidth: 360,
+      maxAimAngle: (80 * Math.PI) / 180,
+      bulletSpeed: 175,
+      maxTowerLevel: 5
+    },
+
+    ui: {
+      chatScale: parseFloat(localStorage.getItem("rogueAsteroidChatScale") || "1.0"),
+      chatChimeEnabled: localStorage.getItem("rogueAsteroidChatChime") !== "false",
+      showDamageNumbers: localStorage.getItem("rogueAsteroidDmgNumbers") !== "false"
+    }
+  });
+
+  // Aliases for backward compatibility
+  const DEFAULT_SERVER = CONFIG.server.url;
+  const HIGH_QUALITY_SETTINGS = CONFIG.performance;
+  const MAX_CLIENT_BULLETS = CONFIG.performance.maxClientBullets;
+  const MAX_TOWER_LEVEL = CONFIG.gameplay.maxTowerLevel;
+  const GROUND_Y = CONFIG.gameplay.groundY;
+
+
+
   // PERFORMANCE: Track player count for scaling
   let lastKnownPlayerCount = 1;
-  
+
   function updatePlayerCount(playerCount) {
     if (playerCount && playerCount !== lastKnownPlayerCount) {
       lastKnownPlayerCount = playerCount;
     }
   }
-  
+
   // Optimized shadow functions
   function setShadowOpt(ctx, color, blur) {
     // HARD OPTIMIZATION: Never render shadows with 3+ players
     // The chaos on screen makes them unnoticeable, but the cost is huge
     if (lastKnownPlayerCount >= 3) return;
-    
+
     if (blur > 0) {
       ctx.shadowColor = color;
       ctx.shadowBlur = blur;
     }
   }
-  
+
   function clearShadowOpt(ctx) {
     // Skip if shadows already disabled due to player count
     if (lastKnownPlayerCount >= 3) return;
-    
+
     ctx.shadowColor = "transparent";
     ctx.shadowBlur = 0;
   }
@@ -62,32 +116,36 @@
   }
 
   // Player colors
-  const PLAYER_COLORS = [
+  const PLAYER_COLORS = Object.freeze([
     { main: "#00ffff", dark: "#006666", name: "CYAN" },
     { main: "#ff00ff", dark: "#660066", name: "MAGENTA" },
     { main: "#00ff88", dark: "#006633", name: "GREEN" },
-    { main: "#ffaa00", dark: "#664400", name: "ORANGE" },
-  ];
+    { main: "#ffaa00", dark: "#664400", name: "ORANGE" }
+  ]);
 
   // Tower Config (must match server)
-  const TOWER_TYPES = {
+  const TOWER_TYPES = Object.freeze({
     0: { name: "Gatling", cost: 50, color: "#ffff00", desc: "Fast Fire", upgradeCost: 40, icon: "⚡" },
     1: { name: "Railgun", cost: 120, color: "#00ff00", desc: "Bouncing Beam", upgradeCost: 80, icon: "⚡" },
     2: { name: "Missile", cost: 250, color: "#ff0000", desc: "Splash Dmg", upgradeCost: 150, icon: "🚀" }
-  };
-  const MAX_TOWER_LEVEL = 5;
+  });
 
   // PvP Attack Types
-  const ATTACK_TYPES = {
+
+  // PvP Attack Types
+  const ATTACK_TYPES = Object.freeze({
     swarm: { name: "Swarm", cost: 25, desc: "3 fast weak", color: "#ffcc00", icon: "🐝" },
     bruiser: { name: "Bruiser", cost: 35, desc: "Very tanky", color: "#ff4444", icon: "🪨" },
     carrier: { name: "Carrier", cost: 60, desc: "Spawns minions!", color: "#ff00ff", icon: "👑" },
     splitter: { name: "Splitter", cost: 50, desc: "Splits x15", color: "#00ffff", icon: "💎" },
     ghost: { name: "Ghost", cost: 40, desc: "2 phasing", color: "#8800ff", icon: "👻" },
     berserker: { name: "Berserker", cost: 0, desc: "Speeds up!", color: "#ff2200", icon: "🔥" }
-  };
+  });
 
-  // ===== DOM Elements =====
+
+  // ============================================================================
+  // DOM ELEMENTS
+  // ============================================================================
   const menuScreen = document.getElementById("menuScreen");
   const gameScreen = document.getElementById("gameScreen");
   const canvas = document.getElementById("game");
@@ -123,7 +181,10 @@
     nameInput.value = savedName;
   }
 
-  // ===== Boss Images =====
+
+  // ============================================================================
+  // BOSS IMAGES
+  // ============================================================================
   const bossImages = {
     boss: new Image(),
     ad1: new Image(),
@@ -136,7 +197,7 @@
   let imagesLoadedCount = 0;
   let imagesSuccessCount = 0;
   const totalImages = 6;
-  
+
   function onBossImageLoad(name) {
     imagesLoadedCount++;
     imagesSuccessCount++;
@@ -146,7 +207,7 @@
       console.log(`Boss images ready: ${imagesSuccessCount}/${totalImages} loaded`);
     }
   }
-  
+
   function onBossImageError(name) {
     console.warn(`✗ Failed to load boss image: ${name} - Check that file exists in docs/images/`);
     imagesLoadedCount++;
@@ -155,12 +216,12 @@
       console.log(`Boss images ready: ${imagesSuccessCount}/${totalImages} loaded`);
     }
   }
-  
+
   // Load boss image
   bossImages.boss.onload = () => onBossImageLoad("Boss.png");
   bossImages.boss.onerror = () => onBossImageError("Boss.png");
   bossImages.boss.src = "images/Boss.png";
-  
+
   // Load boss ad images (1-5)
   for (let i = 1; i <= 5; i++) {
     const imgName = `boss-ad-${i}.png`;
@@ -169,7 +230,10 @@
     bossImages[`ad${i}`].src = `images/${imgName}`;
   }
 
-  // ===== Battleship Images =====
+
+  // ============================================================================
+  // BATTLESHIP IMAGES
+  // ============================================================================
   const battleshipImages = {
     hull: new Image(),
     flame1: new Image(),
@@ -179,7 +243,7 @@
   let battleshipImagesLoaded = false;
   let battleshipImagesCount = 0;
   const totalBattleshipImages = 4;
-  
+
   function onBattleshipImageLoad(name) {
     battleshipImagesCount++;
     console.log(`✓ Battleship image loaded: ${name} (${battleshipImagesCount}/${totalBattleshipImages})`);
@@ -188,7 +252,7 @@
       console.log("Battleship images ready!");
     }
   }
-  
+
   function onBattleshipImageError(name) {
     console.warn(`✗ Failed to load battleship image: ${name}`);
     battleshipImagesCount++;
@@ -196,23 +260,23 @@
       battleshipImagesLoaded = battleshipImagesCount > 0;
     }
   }
-  
+
   battleshipImages.hull.onload = () => onBattleshipImageLoad("ship.png");
   battleshipImages.hull.onerror = () => onBattleshipImageError("ship.png");
   battleshipImages.hull.src = "images/ship.png";
-  
+
   battleshipImages.flame1.onload = () => onBattleshipImageLoad("shipflame1.png");
   battleshipImages.flame1.onerror = () => onBattleshipImageError("shipflame1.png");
   battleshipImages.flame1.src = "images/shipflame1.png";
-  
+
   battleshipImages.flame2.onload = () => onBattleshipImageLoad("shipflame2.png");
   battleshipImages.flame2.onerror = () => onBattleshipImageError("shipflame2.png");
   battleshipImages.flame2.src = "images/shipflame2.png";
-  
+
   battleshipImages.turret.onload = () => onBattleshipImageLoad("shipturret1.png");
   battleshipImages.turret.onerror = () => onBattleshipImageError("shipturret1.png");
   battleshipImages.turret.src = "images/shipturret1.png";
-  
+
   // Battleship turret positions (pixel positions on 240x330 ship image)
   // User-specified positions: First: 60, 157 | Second: 179, 157 | Third: 71, 213 | Fourth: 167, 213
   // Converted to relative coordinates from center (120, 165) - NO SCALING applied
@@ -222,18 +286,21 @@
     { x: 71 - 120, y: 213 - 165 },   // Third turret: (-49, 48)
     { x: 167 - 120, y: 213 - 165 }   // Fourth turret: (47, 48)
   ];
-  
+
   // Turret pivot point (rotation origin) in the turret sprite
   const TURRET_PIVOT = { x: 18, y: 17 };
 
-  // ===== Main Turret Sprites =====
+
+  // ============================================================================
+  // MAIN TURRET SPRITES
+  // ============================================================================
   const turretImages = {
     base: new Image(),
     barrel: new Image()
   };
   let turretImagesLoaded = false;
   let turretImagesCount = 0;
-  
+
   function onTurretImageLoad(name) {
     turretImagesCount++;
     console.log(`✓ Turret image loaded: ${name}`);
@@ -242,21 +309,24 @@
       console.log("Turret images ready");
     }
   }
-  
+
   function onTurretImageError(name) {
     console.warn(`✗ Failed to load turret image: ${name}`);
     turretImagesCount++;
   }
-  
+
   turretImages.base.onload = () => onTurretImageLoad("turret-main-base.png");
   turretImages.base.onerror = () => onTurretImageError("turret-main-base.png");
   turretImages.base.src = "images/turret-main-base.png";
-  
+
   turretImages.barrel.onload = () => onTurretImageLoad("turret-main-barrel.png");
   turretImages.barrel.onerror = () => onTurretImageError("turret-main-barrel.png");
   turretImages.barrel.src = "images/turret-main-barrel.png";
 
-  // ===== State =====
+
+  // ============================================================================
+  // STATE
+  // ============================================================================
   let ws = null;
   let myId = null;
   let mySlot = 0;
@@ -279,7 +349,7 @@
   let attackHitFeedback = null; // Feedback when attack hits opponent
   let interestFeedback = null; // Feedback for wave interest
   let refundFeedback = null; // Feedback for attack refund
-  
+
   // Death mod (spite) system
   let spiteFeedback = null; // Feedback when spite earned
   let deathModFeedback = null; // Feedback when death mod used
@@ -288,7 +358,7 @@
   let spiteDamageFeedback = null; // Shield Breaker damage
   let activeSpeedDemon = null; // Speed demon effect active
   let hoveredDeathMod = null; // Which death mod button is hovered
-  
+
   const DEATH_MODS = {
     meteorShower: { id: "meteorShower", name: "Meteor Shower", icon: "☄️", cost: 2, desc: "Spawn 8 extra asteroids for all players" },
     speedDemon: { id: "speedDemon", name: "Speed Demon", icon: "💨", cost: 3, desc: "All enemies move 50% faster for 10 seconds" },
@@ -297,12 +367,12 @@
     chaosRift: { id: "chaosRift", name: "Chaos Rift", icon: "🌀", cost: 7, desc: "Summon a mini-boss for each living player" }
   };
   let gameOverData = null;
-  
+
   // Latency tracking
   let latency = 0;
   let lastPingTime = 0;
   let pingInterval = null;
-  
+
   // Module Card System
   let moduleCardPhase = false;
   let moduleCards = [];
@@ -316,13 +386,13 @@
   let hoveredModuleSlot = null; // Tower slot being hovered
   let hoveredModuleCard = -1; // Module card being hovered during selection
   let selectedInventoryIndex = -1; // Track which module we are holding
-  
+
   // Pause system
   let gamePaused = false;
   let pauseCountdown = 0;
   let pausedBy = null;
   let hoveredPauseButton = false;
-  
+
   // Spectator mode
   let isSpectator = false;
   let spectatorCount = 0;
@@ -340,7 +410,7 @@
   let chatScale = parseFloat(localStorage.getItem("rogueAsteroidChatScale") || "1.0"); // Chat scaling
   let chatChimeEnabled = localStorage.getItem("rogueAsteroidChatChime") !== "false"; // Default true
   let chatChimeAudio = null;
-  
+
   // Initialize chat chime sound
   function initChatChime() {
     if (!chatChimeAudio) {
@@ -368,7 +438,7 @@
       }
     }
   }
-  
+
   function playChatChime() {
     if (!chatChimeEnabled) return;
     try {
@@ -424,11 +494,11 @@
   let banishFeedback = null; // Feedback when banish succeeds
   let banishError = null; // Feedback when banish fails
   let hoveredOpponentTower = null; // { playerId, towerIndex, x, y, tower } - for showing module tooltip
-  
+
   // Buy additional upgrade
   let buyUpgradeCost = 30;
   let hoveredBuyUpgrade = false;
-  
+
   // GAME MODIFIERS
   let activeGameModifier = null; // Current game's modifier { id, name, icon, color, desc, flavor }
   let gameModifierCard = null; // Card animation state { modifier, animTime, phase }
@@ -446,8 +516,11 @@
   let pendingTracers = [];       // Tracer lines for module effects
   let asteroidCache = new Map(); // Cache: id -> {vertices, rotSpeed, rotation, color}
   let lastUpdateTime = Date.now();
-  
-  // ===== MUSIC PLAYER =====
+
+
+  // ============================================================================
+  // MUSIC PLAYER
+  // ============================================================================
   let musicAudio = null;
   let musicPermissionGranted = localStorage.getItem("rogueAsteroidMusicPermission") === "true";
   let musicState = {
@@ -467,7 +540,7 @@
   };
   let musicPlayerHover = null; // Which button is hovered
   let showMusicPermissionPrompt = false;
-  
+
   function initMusicPlayer() {
     if (!musicAudio) {
       musicAudio = new Audio();
@@ -491,16 +564,16 @@
         syncMusicToServer();
       });
     }
-    
+
     // Always request current music state from server
     send({ t: "getMusicState" });
-    
+
     // Show permission prompt if not granted
     if (!musicPermissionGranted) {
       showMusicPermissionPrompt = true;
     }
   }
-  
+
   function grantMusicPermission() {
     musicPermissionGranted = true;
     localStorage.setItem("rogueAsteroidMusicPermission", "true");
@@ -511,29 +584,29 @@
       musicAudio.play().catch(() => {});
     }
   }
-  
+
   function syncMusicToServer() {
     if (!musicAudio || !musicState.trackName || musicState.syncing) return;
     if (!musicPermissionGranted) return; // Don't try to play without permission
-    
+
     musicState.syncing = true;
-    
+
     // Calculate how far into the track we should be
     const elapsed = (Date.now() - musicState.serverTime) + (musicState.serverTime - musicState.serverStartTime);
     const elapsedSeconds = elapsed / 1000;
-    
+
     // Only sync if we're more than 0.5s off
     if (Math.abs(musicAudio.currentTime - elapsedSeconds) > 0.5) {
       musicAudio.currentTime = Math.max(0, elapsedSeconds);
     }
-    
+
     if (musicState.playing && musicAudio.paused) {
       musicAudio.play().catch(() => {}); // Ignore autoplay errors
     }
-    
+
     musicState.syncing = false;
   }
-  
+
   function loadMusicTrack(trackName) {
     if (!musicAudio) initMusicPlayer();
     const url = `Music/${encodeURIComponent(trackName)}`;
@@ -547,7 +620,7 @@
       }
     }
   }
-  
+
   function setMusicVolume(vol) {
     musicState.volume = Math.max(0, Math.min(1, vol));
     localStorage.setItem("rogueAsteroidMusicVolume", musicState.volume.toString());
@@ -555,7 +628,7 @@
       musicAudio.volume = musicState.volume;
     }
   }
-  
+
   function toggleMusicMute() {
     musicState.muted = !musicState.muted;
     localStorage.setItem("rogueAsteroidMusicMuted", musicState.muted.toString());
@@ -563,31 +636,34 @@
       musicAudio.volume = musicState.muted ? 0 : musicState.volume;
     }
   }
-  
+
   // SMOOTH INTERPOLATION for fluid movement
   let missileStates = new Map();  // id -> true (tracking only, no position prediction)
   let bulletStates = new Map();   // id -> true (tracking only, no position prediction)
-  
+
   // Reusable objects to reduce GC pressure
   const tempIdSet = new Set();
   const prevMissilesMap = new Map(); // Reused for interpolation
   const prevBulletsMap = new Map();  // Reused for interpolation
   const rgbaCache = new Map(); // Cache for hexToRgba results
 
-  // ===== Utilities =====
+
+  // ============================================================================
+  // UTILITIES
+  // ============================================================================
   function hexToRgba(hex, alpha) {
     // Use cache to avoid repeated string creation
     const key = hex + alpha;
     let result = rgbaCache.get(key);
     if (result) return result;
-    
+
     let c = hex.replace("#", "");
     if (c.length === 3) c = c[0] + c[0] + c[1] + c[1] + c[2] + c[2];
     const r = parseInt(c.slice(0, 2), 16);
     const g = parseInt(c.slice(2, 4), 16);
     const b = parseInt(c.slice(4, 6), 16);
     result = `rgba(${r},${g},${b},${alpha})`;
-    
+
     // Limit cache size to prevent memory leak
     if (rgbaCache.size > 500) rgbaCache.clear();
     rgbaCache.set(key, result);
@@ -605,7 +681,7 @@
   // Performance helpers - shadow caching to avoid redundant state changes
   let currentShadowColor = null;
   let currentShadowBlur = 0;
-  
+
   function setShadow(ctx, color, blur) {
     // Skip shadows with 3+ players for performance
     if (lastKnownPlayerCount >= 3) return;
@@ -616,7 +692,7 @@
       currentShadowBlur = blur;
     }
   }
-  
+
   function clearShadow(ctx) {
     if (lastKnownPlayerCount >= 3) return;
     if (currentShadowBlur !== 0) {
@@ -640,12 +716,15 @@
   }
   initStars();
 
-  // ===== CLIENT-SIDE VISUAL EFFECTS (offloaded from server) =====
+
+  // ============================================================================
+  // CLIENT-SIDE VISUAL EFFECTS (OFFLOADED FROM SERVER)
+  // ============================================================================
   function createClientParticle(x, y, color, count = 8, speedMult = 1) {
     // Use high quality settings
     const adjustedCount = Math.ceil(count * HIGH_QUALITY_SETTINGS.particleMultiplier);
     if (clientParticles.length >= HIGH_QUALITY_SETTINGS.maxParticles) return;
-    
+
     for (let i = 0; i < adjustedCount; i++) {
       if (clientParticles.length >= HIGH_QUALITY_SETTINGS.maxParticles) break;
       const angle = (i / adjustedCount) * Math.PI * 2 + Math.random() * 0.5;
@@ -680,7 +759,7 @@
 
   function createLightningEffect(points, isCrit, slot) {
     if (!points || points.length < 2) return;
-    
+
     // Generate jagged lightning segments between each pair of points
     const segments = [];
     for (let i = 0; i < points.length - 1; i++) {
@@ -688,7 +767,7 @@
       const end = points[i + 1];
       segments.push(generateLightningBolt(start.x, start.y, end.x, end.y));
     }
-    
+
     clientLightning.push({
       segments,
       isCrit,
@@ -705,7 +784,7 @@
     const dy = y2 - y1;
     const dist = Math.hypot(dx, dy);
     const segments = Math.max(4, Math.floor(dist / 15));
-    
+
     for (let i = 1; i < segments; i++) {
       const t = i / segments;
       const baseX = x1 + dx * t;
@@ -724,33 +803,33 @@
   }
 
   function updateClientEffects(dt) {
-	
+
 	// Simulate local bullets (Bandwidth Fix + Wall/Ricochet Logic)
     // OPTIMIZED: Use forward iteration with swap-and-pop instead of splice
     const GROUND_Y = 560; // Matches server ground level
-    
+
     // PERFORMANCE FIX: Bucket missiles by slot ONCE per frame
     // This turns O(bullets × all_missiles) into O(bullets × missiles_per_slot)
     // With 4 players: 48,000 checks → ~12,000 checks (4x faster)
     const missiles = lastSnap?.missiles || [];
     const missilesBySlot = [[], [], [], []]; // Pre-allocated for 4 slots
-    
+
     for (let i = 0; i < missiles.length; i++) {
       const m = missiles[i];
       if (m.targetSlot !== undefined && m.targetSlot >= 0 && m.targetSlot < 4) {
         missilesBySlot[m.targetSlot].push(m);
       }
     }
-    
+
     let bulletWriteIdx = 0;
     for (let i = 0; i < clientBullets.length; i++) {
       const b = clientBullets[i];
-      
+
       // CLIENT-SIDE HOMING: Predict missile tracking between server updates
       if (b.isHoming) {
         const slotMissiles = missilesBySlot[b.slot];
         let target = null;
-        
+
         // Try to find current target
         if (b.targetId && slotMissiles) {
           for (let mi = 0; mi < slotMissiles.length; mi++) {
@@ -760,7 +839,7 @@
             }
           }
         }
-        
+
         // If target dead or missing, find closest new target
         if (!target && slotMissiles && slotMissiles.length > 0) {
           let closestDist = Infinity;
@@ -776,7 +855,7 @@
           }
           if (target) b.targetId = target.id;
         }
-        
+
         // Steer toward target
         if (target) {
           const dx = target.x - b.x;
@@ -797,12 +876,12 @@
           }
         }
       }
-      
+
       b.x += b.vx * dt;
       b.y += b.vy * dt;
-      
+
       b.lifespan -= dt;
-      
+
       // DISSIPATING SLUG: Track distance and shrink bullet over time
       if (b.hasDissipatingSlug) {
         const lx = b.lastX !== undefined ? b.lastX : b.x;
@@ -813,7 +892,7 @@
         b.totalDistance = (b.totalDistance || 0) + distThisTick;
         b.lastX = b.x;
         b.lastY = b.y;
-        
+
         // Shrink from max to base size over 300 pixels
         const DECAY_DISTANCE = 300;
         const decayProgress = Math.min(1, b.totalDistance / DECAY_DISTANCE);
@@ -825,7 +904,7 @@
       const segW = (world && world.segmentWidth) ? world.segmentWidth : 360;
       const x0 = b.slot * segW;
       const x1 = (b.slot + 1) * segW;
-      
+
       // Temporal Boomerang & Boundary Logic
       const hitLeft = b.x < x0;
       const hitRight = b.x > x1;
@@ -838,31 +917,31 @@
         if (b.isBoomerang && !b.returning && !hitBottom) {
            b.returning = true;
            if (b.hitSet) b.hitSet.clear(); // Reset hits so it can damage again
-           
+
            // Aim back at source
            const sx = b.sourceX !== undefined ? b.sourceX : (x0 + segW/2);
            const sy = b.sourceY !== undefined ? b.sourceY : GROUND_Y;
-           
+
            const dx = sx - b.x;
            const dy = sy - b.y;
            const dist = Math.hypot(dx, dy) || 1;
            const speed = Math.hypot(b.vx, b.vy);
-           
+
            b.vx = (dx / dist) * speed;
            b.vy = (dy / dist) * speed;
-           
+
            // Push back inside bounds so it doesn't get stuck
            if (hitLeft) b.x = x0 + 2;
            if (hitRight) b.x = x1 - 2;
            if (hitTop) b.y = -48;
-           
+
            // Reset lifespan so it doesn't fade out
            b.lifespan = b.maxLifespan || 3.0;
         } else {
            continue; // Normal bullets die at border
         }
       }
-      
+
       // CLIENT-SIDE COLLISION PREDICTION: Handle bullet-enemy hits with pierce
       // ORDER OF OPERATIONS: Ricochet first (if target exists), then pierce
       // OPTIMIZED: Only check missiles in the SAME SLOT (not all missiles)
@@ -873,7 +952,7 @@
           const m = slotMissiles[mi];
           // Skip enemies we've already hit
           if (b.hitSet && b.hitSet.has(m.id)) continue;
-          
+
           const dx = m.x - b.x;
           const dy = m.y - b.y;
           const rr = (m.r || 15) + (b.r || 3);
@@ -881,7 +960,7 @@
             // Hit! Add to hitSet
             if (!b.hitSet) b.hitSet = new Set();
             b.hitSet.add(m.id);
-            
+
             // ORDER: Ricochet is used FIRST (if there's a target), then pierce
             // NOTE: Don't remove bullet on ricochet hit - let server handle it
             // Server will send bulletDeaths for old bullet and bulletSpawn for new one
@@ -900,7 +979,7 @@
                   break;
                 }
               }
-              
+
               if (hasBounceTarget) {
                 // Ricochet will trigger - but DON'T remove bullet yet!
                 // Server will send bulletDeaths event when it actually spawns the ricochet
@@ -910,7 +989,7 @@
               }
               // No bounce target - fall through to pierce
             }
-            
+
             // Pierce logic (used when ricochet = 0 OR no bounce target)
             if (b.pierce > 0) {
               b.pierce--;
@@ -923,26 +1002,26 @@
           }
         }
       }
-      
+
       if (shouldRemove) {
         continue; // Don't keep - bullet died on hit
       }
-      
+
       // Keep this bullet
       clientBullets[bulletWriteIdx++] = b;
     }
     clientBullets.length = bulletWriteIdx;
-	 
+
     // Pre-calculate common values
-    const damping = 1 - (1 - 0.95) * dt * 60; 
-    
+    const damping = 1 - (1 - 0.95) * dt * 60;
+
     // SMOOTHING FACTOR: Adjusts how fast objects snap to server position
     // Using time-based smoothing for consistency across frame rates
     // Higher value = snappier response, lower = smoother but more lag feel
-    const smoothFactor = 1 - Math.pow(0.05, dt); // Slightly slower blend for smoother motion 
+    const smoothFactor = 1 - Math.pow(0.05, dt); // Slightly slower blend for smoother motion
 
     // OPTIMIZED: Use swap-and-pop for all effect arrays to avoid O(n) splice operations
-    
+
     // Update particles
     let particleWriteIdx = 0;
     for (let i = 0; i < clientParticles.length; i++) {
@@ -957,7 +1036,7 @@
       }
     }
     clientParticles.length = particleWriteIdx;
-    
+
     // Update damage numbers
     let dmgWriteIdx = 0;
     for (let i = 0; i < clientDamageNumbers.length; i++) {
@@ -969,7 +1048,7 @@
       }
     }
     clientDamageNumbers.length = dmgWriteIdx;
-    
+
     // Update lightning effects
     let lightningWriteIdx = 0;
     for (let i = 0; i < clientLightning.length; i++) {
@@ -980,7 +1059,7 @@
       }
     }
     clientLightning.length = lightningWriteIdx;
-    
+
     // Update tracer effects
     let tracerWriteIdx = 0;
     for (let i = 0; i < pendingTracers.length; i++) {
@@ -991,7 +1070,7 @@
       }
     }
     pendingTracers.length = tracerWriteIdx;
-    
+
     // Update railgun beam effects
     let beamWriteIdx = 0;
     for (let i = 0; i < railgunBeams.length; i++) {
@@ -1002,7 +1081,7 @@
       }
     }
     railgunBeams.length = beamWriteIdx;
-    
+
     // Update cached asteroid rotations
     for (const [id, data] of asteroidCache) {
       data.rotation += data.rotSpeed * dt;
@@ -1023,7 +1102,7 @@
               m.targetX += m.vx * dt;
               m.targetY += m.vy * dt;
             }
-            
+
             // Smooth interpolation toward extrapolated target
             m.x += (m.targetX - m.x) * smoothFactor;
             m.y += (m.targetY - m.y) * smoothFactor;
@@ -1044,7 +1123,7 @@
 
   function processServerEvents(events, skipVisualEffects = false) {
     if (!events || !Array.isArray(events)) return;
-    
+
     for (const ev of events) {
       switch (ev.t) {
         case "spawn":
@@ -1073,7 +1152,7 @@
           // Just mark that we know about this missile (no position tracking)
           missileStates.set(ev.id, true);
           break;
-        
+
         case "spawnBattleship":
           // Cache battleship data for rendering
           asteroidCache.set(ev.id, {
@@ -1092,7 +1171,7 @@
           });
           missileStates.set(ev.id, true);
           break;
-        
+
         case "battleshipShot":
           // Visual effect for battleship turret firing
           if (!skipVisualEffects) {
@@ -1110,7 +1189,7 @@
             });
           }
           break;
-        
+
         case "bulletDestroyed":
           // Visual effect when battleship bullet destroys a player bullet
           if (!skipVisualEffects) {
@@ -1130,20 +1209,20 @@
             }
           }
           break;
-        
+
         case "battleshipHit":
           // Visual effect when battleship bullet hits player (no longer used but kept for safety)
           if (!skipVisualEffects) {
             createClientParticle(ev.x, ev.y, "#ff0000", 8, 1.2);
           }
           break;
-        
+
         case "turretDestroyed":
           // Cool explosion effect when ship turret is destroyed!
           if (!skipVisualEffects) {
             // Big fiery explosion - multiple rings of particles
             const colors = ['#ff6600', '#ff4400', '#ffaa00', '#ff8800', '#ffcc00'];
-            
+
             // Inner explosion burst
             for (let i = 0; i < 16; i++) {
               const angle = (i / 16) * Math.PI * 2 + Math.random() * 0.3;
@@ -1159,7 +1238,7 @@
                 size: 4 + Math.random() * 4
               });
             }
-            
+
             // Outer debris ring
             for (let i = 0; i < 12; i++) {
               const angle = (i / 12) * Math.PI * 2 + Math.random() * 0.5;
@@ -1175,7 +1254,7 @@
                 size: 2 + Math.random() * 3
               });
             }
-            
+
             // Smoke puffs
             for (let i = 0; i < 8; i++) {
               clientParticles.push({
@@ -1189,7 +1268,7 @@
                 size: 6 + Math.random() * 6
               });
             }
-            
+
             // Central flash
             clientParticles.push({
               x: ev.x,
@@ -1203,7 +1282,7 @@
             });
           }
           break;
-        
+
         case "playerTurretStunned":
           // Visual effect when player turret is stunned by enemy bullet
           if (!skipVisualEffects) {
@@ -1223,14 +1302,14 @@
             }
           }
           break;
-          
+
         case "explosion":
           // Skip visual effects if tab was hidden
           if (!skipVisualEffects) {
             createClientParticle(ev.x, ev.y, ev.color, ev.radius > 30 ? 12 : 8, ev.radius / 25);
           }
           break;
-          
+
         case "confettiExplosion":
           // 🎉🎊 CONFETTI PARTY EXPLOSION!!! 🎊🎉
           if (!skipVisualEffects) {
@@ -1240,7 +1319,7 @@
               const angle = (i / numParticles) * Math.PI * 2 + Math.random() * 0.5;
               const speed = 80 + Math.random() * 120;
               const size = 2 + Math.random() * 4;
-              
+
               // Different shapes for confetti particles
               const shapeRand = Math.random();
               clientParticles.push({
@@ -1258,7 +1337,7 @@
                 rotation: Math.random() * Math.PI * 2
               });
             }
-            
+
             // Extra sparkle burst (reduced by 50%)
             for (let i = 0; i < 4; i++) {
               const sparkAngle = Math.random() * Math.PI * 2;
@@ -1276,20 +1355,20 @@
             }
           }
           break;
-          
+
         case "damage":
           if (!skipVisualEffects) {
             createClientDamageNumber(ev.x, ev.y, ev.amount, ev.isCrit);
           }
           break;
-          
+
         case "lightning":
           // Tesla coil lightning effect
           if (!skipVisualEffects) {
             createLightningEffect(ev.points, ev.isCrit, ev.slot);
           }
           break;
-          
+
         case "elusiveTeleport":
           // Quantum Drift teleport visual effect
           if (!skipVisualEffects) {
@@ -1330,12 +1409,12 @@
             });
           }
           break;
-        
+
         case "railgun":
           // Railgun bouncing beam effect
           if (!skipVisualEffects && ev.segments && ev.segments.length > 0) {
             const beamColor = ev.isCrit ? "#ffff00" : "#00ff00";
-            
+
             // Create beam for each segment
             for (const seg of ev.segments) {
               railgunBeams.push({
@@ -1348,7 +1427,7 @@
                 color: beamColor
               });
             }
-            
+
             // Muzzle flash at origin
             const firstSeg = ev.segments[0];
             const firstAngle = Math.atan2(firstSeg.y2 - firstSeg.y1, firstSeg.x2 - firstSeg.x1);
@@ -1365,7 +1444,7 @@
                 size: 3 + Math.random() * 3
               });
             }
-            
+
             // Spark particles at each bounce point
             for (let i = 0; i < ev.segments.length - 1; i++) {
               const seg = ev.segments[i];
@@ -1386,7 +1465,7 @@
             }
           }
           break;
-          
+
         case "bulletSpawn":
           // Create local bullet from server event
           // PERFORMANCE: Cap client bullets to prevent overwhelming rendering
@@ -1411,14 +1490,14 @@
             isHoming: ev.isHoming || false, // Homing missile
             targetId: ev.targetId || null, // Target asteroid ID
             homingSpeed: Math.sqrt(ev.vx * ev.vx + ev.vy * ev.vy), // Store initial speed for homing
-            
+
             // OPTIMIZED: Only store the boolean flag, not the heavy array
             isBoomerang: ev.isBoomerang || false,
             sourceX: ev.x,
             sourceY: ev.y,
             maxLifespan: ev.lifespan || 3.0,
             returning: false,
-            
+
             // Dissipating Slug (Caliber) - visual shrinking
             hasDissipatingSlug: ev.hasDissipatingSlug || false,
             baseBulletR: ev.baseBulletR || ev.r || 3,
@@ -1443,7 +1522,7 @@
             clientBullets.length = writeIdx;
           }
           break;
-          
+
         case "pinballBounce":
           // Pinball Wizard bounce effect
           // DESYNC FIX: Sync bullet position and velocity from server
@@ -1469,7 +1548,7 @@
             });
           }
           break;
-          
+
         case "homingRetarget":
           // Homing missile retargeted to new enemy
           if (ev.bulletId) {
@@ -1485,21 +1564,21 @@
             }
           }
           break;
-          
+
         case "taxmanGold":
           // Taxman gold generation effect
           if (!skipVisualEffects) {
             createClientDamageNumber(ev.x, ev.y - 20, "+$1", false, "#00ff00");
           }
           break;
-          
+
         case "infected":
           // Viral Payload infection effect
           if (!skipVisualEffects) {
             createClientParticle(ev.x, ev.y, "#00ff00", 10, 1.2);
           }
           break;
-          
+
         case "infectionSpread":
           // Infection spreading between asteroids
           if (!skipVisualEffects) {
@@ -1516,7 +1595,10 @@
     }
   }
 
-  // ===== Networking =====
+
+  // ============================================================================
+  // NETWORKING
+  // ============================================================================
   function connect() {
     forcedDisconnect = false;
     if (statusText) statusText.textContent = "CONNECTING...";
@@ -1539,7 +1621,7 @@
 
       const name = nameInput.value.trim() || `Player`;
       if (name) ws.send(JSON.stringify({ t: "setName", name }));
-      
+
       // Start ping interval for latency measurement
       if (pingInterval) clearInterval(pingInterval);
       pingInterval = setInterval(() => {
@@ -1558,7 +1640,7 @@
         pingInterval = null;
       }
       latency = 0;
-      
+
       const currentStatus = statusText?.textContent || "";
       const wasRejected = currentStatus.includes("PROGRESS") || currentStatus.includes("FULL");
 
@@ -1604,7 +1686,7 @@
           latency = Date.now() - msg.ts;
         }
         break;
-        
+
       case "welcome":
         myId = msg.id;
         mySlot = msg.slot;
@@ -1645,7 +1727,7 @@
           if (statusLED) statusLED.className = "led yellow";
         }
         break;
-      
+
       case "spectateOffer":
         // Server is offering spectator mode
         canSpectate = msg.canSpectate;
@@ -1666,7 +1748,7 @@
           showSpectateOption();
         }
         break;
-      
+
       case "spectateStart":
         // Now spectating
         isSpectator = true;
@@ -1694,7 +1776,7 @@
         bulletStates.clear();
         showGame();
         break;
-      
+
       case "spectateEnd":
         // Game ended, reconnect to join lobby
         isSpectator = false;
@@ -1704,11 +1786,11 @@
         }
         setTimeout(() => connect(), 1500);
         break;
-      
+
       case "spectatorUpdate":
         spectatorCount = msg.count || 0;
         break;
-      
+
       case "becameSpectator":
         // Successfully became a spectator from lobby
         isSpectator = true;
@@ -1790,7 +1872,7 @@
         updateLobbyUI();
         // Music only plays during game, not in lobby
         break;
-      
+
       case "gameModifier":
         // Game modifier card reveal - show animated card before game starts
         activeGameModifier = msg.modifier;
@@ -1809,7 +1891,7 @@
         resizeCanvas();
         phase = "modifier_reveal";
         break;
-      
+
       case "modifierSkipUpdate":
         // Update skip count during modifier reveal
         if (gameModifierCard) {
@@ -1953,11 +2035,11 @@
 
       case "deathModUsed":
         // Someone used a death mod
-        deathModFeedback = { 
-          modName: msg.modName, 
+        deathModFeedback = {
+          modName: msg.modName,
           modIcon: msg.modIcon,
           playerName: msg.playerName,
-          time: Date.now() 
+          time: Date.now()
         };
         break;
 
@@ -2107,7 +2189,7 @@
               m.vertices = cached.vertices;
               m.rotation = cached.rotation;
               m.color = cached.color;
-              
+
               // HYDRATE STATIC DATA (stripped from broadcast to save bandwidth)
               m.r = cached.r;
               m.type = cached.type;
@@ -2115,17 +2197,17 @@
               m.targetSlot = cached.targetSlot;
               m.attackType = cached.attackType;
               m.senderSlot = cached.senderSlot; // For visual sender identification
-              
+
               // If server didn't send HP, asteroid is at full health
               if (m.hp === undefined) m.hp = cached.maxHp;
-              
+
               // Boss flags (also cached since they don't change)
               m.isBoss = cached.isBoss;
               m.isBossAd = cached.isBossAd;
               m.bossAdVariant = cached.bossAdVariant;
               m.isMiniBoss = cached.isMiniBoss;
               m.isMiniBossAd = cached.isMiniBossAd;
-              
+
               // Battleship data
               m.isBattleship = cached.isBattleship;
               if (cached.isBattleship) {
@@ -2147,15 +2229,15 @@
                 }
               }
             }
-            
+
             // MAGIC: Store the server position as "target", use old visual position as "current"
             m.targetX = m.x;
             m.targetY = m.y;
-            
+
             const prev = prevMissilesMap.get(m.id);
             if (prev) {
               // Start this frame at the old visual position to prevent jumping
-              m.x = prev.x; 
+              m.x = prev.x;
               m.y = prev.y;
             }
             // If new, it spawns at m.x/m.y (from server) immediately
@@ -2171,7 +2253,7 @@
           for (const b of msg.bullets) {
             b.targetX = b.x;
             b.targetY = b.y;
-            
+
             const prev = prevBulletsMap.get(b.id);
             if (prev) {
               b.x = prev.x;
@@ -2183,17 +2265,17 @@
         // Track player count for performance scaling
         const playerCount = msg.players?.length || 1;
         updatePlayerCount(playerCount);
-        
+
         // Use client-side particles/damage numbers
         if (!msg.particles || msg.particles.length === 0) msg.particles = clientParticles;
         if (!msg.damageNumbers || msg.damageNumbers.length === 0) msg.damageNumbers = clientDamageNumbers;
-        
+
         // Update global state
         lastSnap = msg;
         phase = msg.phase;
         wave = msg.wave;
         world = msg.world;
-        
+
         // Safety: Clear interaction states if player is dead
         if (msg.players) {
           const myP = msg.players.find(p => p.id === myId);
@@ -2204,14 +2286,14 @@
             buildMenuOpen = null;
           }
         }
-        
+
         if (msg.spectatorCount !== undefined) spectatorCount = msg.spectatorCount;
         if (msg.moduleCardPhase !== undefined) moduleCardPhase = msg.moduleCardPhase;
         if (msg.modulePickTimer !== undefined) modulePickTimeLeft = msg.modulePickTimer;
         if (msg.currentModulePicker !== undefined) currentModulePicker = msg.currentModulePicker;
         if (msg.moduleCards !== undefined && msg.moduleCards.length > 0) moduleCards = msg.moduleCards;
         if (msg.modulePickOrder !== undefined && msg.modulePickOrder.length > 0) modulePickOrder = msg.modulePickOrder;
-        
+
         if (msg.gamePaused !== undefined) gamePaused = msg.gamePaused;
         if (msg.pauseCountdown !== undefined) pauseCountdown = msg.pauseCountdown;
         if (msg.pausedBy !== undefined) pausedBy = msg.pausedBy;
@@ -2225,19 +2307,19 @@
       case "incomingAttack":
         // AGGREGATION: Check if we already have this attack from this person
         const existingAlert = attackPopups.find(a => a.type === msg.attackType && a.from === msg.from);
-        
+
         if (existingAlert) {
           // It exists! Just add to the count and reset the timer
           existingAlert.count = (existingAlert.count || 1) + (msg.count || 1);
-          existingAlert.time = Date.now(); 
+          existingAlert.time = Date.now();
         } else {
           // New attack, add a new row
-          attackPopups.push({ 
-            type: msg.attackType, 
-            from: msg.from, 
+          attackPopups.push({
+            type: msg.attackType,
+            from: msg.from,
             senderSlot: msg.senderSlot, // For sender color
-            count: msg.count || 1, 
-            time: Date.now() 
+            count: msg.count || 1,
+            time: Date.now()
           });
         }
         break;
@@ -2291,7 +2373,10 @@
     }
   }
 
-  // ===== UI =====
+
+  // ============================================================================
+  // UI
+  // ============================================================================
   function showMenu() {
     phase = "menu";
     menuScreen.style.display = "flex";
@@ -2303,7 +2388,7 @@
     gameScreen.style.display = "block";
     resizeCanvas();
   }
-  
+
   function showSpectateOption() {
     // Show a "Watch Game" button prominently in the menu
     let spectateContainer = document.getElementById("spectateContainer");
@@ -2311,12 +2396,12 @@
       spectateContainer = document.createElement("div");
       spectateContainer.id = "spectateContainer";
       spectateContainer.style.cssText = "text-align: center; padding: 20px; margin-top: 20px;";
-      
+
       const infoText = document.createElement("div");
       infoText.style.cssText = "color: #888; font-size: 14px; margin-bottom: 15px;";
       infoText.textContent = "A game is currently in progress";
       spectateContainer.appendChild(infoText);
-      
+
       const spectateBtn = document.createElement("button");
       spectateBtn.id = "spectateBtn";
       spectateBtn.className = "btn spectate";
@@ -2328,7 +2413,7 @@
         }
       };
       spectateContainer.appendChild(spectateBtn);
-      
+
       // Insert after status area or at end of menu
       const statusArea = document.querySelector(".status-area");
       if (statusArea && statusArea.parentNode) {
@@ -2338,14 +2423,14 @@
       }
     }
     spectateContainer.style.display = "block";
-    
+
     const spectateBtn = document.getElementById("spectateBtn");
     if (spectateBtn) {
       const countText = spectatorCount > 0 ? ` (${spectatorCount} watching)` : "";
       spectateBtn.textContent = `👁 WATCH GAME${countText}`;
     }
   }
-  
+
   function hideSpectateOption() {
     const spectateContainer = document.getElementById("spectateContainer");
     if (spectateContainer) spectateContainer.style.display = "none";
@@ -2369,7 +2454,7 @@
       `;
       playersEl.appendChild(div);
     }
-    
+
     // Show spectator count in lobby
     let spectatorInfo = document.getElementById("lobbySpectatorInfo");
     if (!spectatorInfo) {
@@ -2384,12 +2469,12 @@
     } else {
       spectatorInfo.style.display = "none";
     }
-    
+
     // If we're a spectator, show spectator UI
     if (isSpectator) {
       readyBtn.style.display = "none";
       launchBtn.style.display = "none";
-      
+
       // Show spectator status
       let spectatorStatus = document.getElementById("lobbySpectatorStatus");
       if (!spectatorStatus) {
@@ -2403,28 +2488,28 @@
         readyBtn.parentNode.insertBefore(spectatorStatus, readyBtn);
       }
       spectatorStatus.style.display = "block";
-      
+
       // Hide become spectator button
       const becomeSpecBtn = document.getElementById("becomeSpectatorBtn");
       if (becomeSpecBtn) becomeSpecBtn.style.display = "none";
-      
+
       return;
     }
-    
+
     // Normal player UI
     let spectatorStatus = document.getElementById("lobbySpectatorStatus");
     if (spectatorStatus) spectatorStatus.style.display = "none";
-    
+
     const me = lobbyPlayers.find(p => p.id === myId);
     readyBtn.textContent = me?.ready ? "✓ READY" : "READY UP";
     readyBtn.className = "btn" + (me?.ready ? " ready" : "");
     readyBtn.style.display = "block";
-    
+
     // Launch button: show if ready, enable force start if some players ready
     const canForceStart = readyCount >= 1 && !allReady && me?.ready;
     launchBtn.style.display = me?.ready ? "block" : "none";
     launchBtn.disabled = !allReady && !canForceStart;
-    
+
     if (allReady) {
       launchBtn.textContent = "▶ BATTLE";
       launchBtn.className = "btn launch";
@@ -2435,7 +2520,7 @@
       launchBtn.textContent = "▶ BATTLE";
       launchBtn.className = "btn launch disabled";
     }
-    
+
     // Add "Become Spectator" button if not already spectating
     let becomeSpecBtn = document.getElementById("becomeSpectatorBtn");
     if (!becomeSpecBtn) {
@@ -2455,14 +2540,14 @@
       }
     }
     becomeSpecBtn.style.display = "block";
-    
+
     // Update leaderboard
     updateLeaderboardUI();
   }
-  
+
   function updateLeaderboardUI() {
     if (!leaderboardList) return;
-    
+
     if (leaderboard && leaderboard.length > 0) {
       leaderboardList.innerHTML = "";
       // Add a header row for clarity
@@ -2483,10 +2568,10 @@
         const div = document.createElement("div");
         const rankClass = i === 0 ? "gold" : i === 1 ? "silver" : i === 2 ? "bronze" : "";
         div.className = "leaderboard-entry " + rankClass;
-        
+
         // Handle old scores (fallback to score if damage is missing)
         const displayValue = entry.damage !== undefined ? Math.round(entry.damage) : (Math.round(entry.score) + " (pts)");
-        
+
         div.innerHTML = `
           <div class="leaderboard-rank">#${i + 1}</div>
           <div class="leaderboard-name">${entry.name}</div>
@@ -2499,7 +2584,7 @@
       leaderboardList.innerHTML = '<div class="leaderboard-empty">No records yet!</div>';
     }
   }
-  
+
   // Clear leaderboard button with password
   if (clearLeaderboardBtn) {
     clearLeaderboardBtn.addEventListener("click", () => {
@@ -2512,11 +2597,14 @@
     });
   }
 
-  // ===== Chat System =====
+
+  // ============================================================================
+  // CHAT SYSTEM
+  // ============================================================================
   function updateChatUI() {
     const lobbyChatContainer = document.getElementById("lobbyChatContainer");
     const lobbyChatMessages = document.getElementById("lobbyChatMessages");
-    
+
     if (lobbyChatMessages) {
       lobbyChatMessages.innerHTML = "";
       for (const msg of chatMessages) {
@@ -2552,7 +2640,7 @@
   // Setup lobby chat input
   const lobbyChatInput = document.getElementById("lobbyChatInput");
   const lobbyChatSend = document.getElementById("lobbyChatSend");
-  
+
   if (lobbyChatInput) {
     lobbyChatInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -2564,7 +2652,7 @@
     lobbyChatInput.addEventListener("focus", () => { chatInputFocused = true; });
     lobbyChatInput.addEventListener("blur", () => { chatInputFocused = false; });
   }
-  
+
   if (lobbyChatSend) {
     lobbyChatSend.addEventListener("click", () => {
       sendChatMessage(lobbyChatInput.value);
@@ -2572,7 +2660,10 @@
     });
   }
 
-  // ===== Canvas =====
+
+  // ============================================================================
+  // CANVAS
+  // ============================================================================
   function resizeCanvas() {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
@@ -2580,14 +2671,20 @@
   window.addEventListener("resize", resizeCanvas);
   resizeCanvas();
 
-  // ===== Input =====
-  canvas.addEventListener("mousemove", (e) => { 
+
+  // ============================================================================
+  // INPUT
+  // ============================================================================
+  canvas.addEventListener("mousemove", (e) => {
     const rect = canvas.getBoundingClientRect();
     mouseX = (e.clientX - rect.left) * (canvas.width / rect.width);
     mouseY = (e.clientY - rect.top) * (canvas.height / rect.height);
   });
   canvas.addEventListener("mousedown", (e) => {
-    // ===== START OF NEW INTERACTION CODE =====
+
+  // ============================================================================
+  // START OF NEW INTERACTION CODE
+  // ============================================================================
     const rect = canvas.getBoundingClientRect();
     const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
     const my = (e.clientY - rect.top) * (canvas.height / rect.height);
@@ -2618,7 +2715,7 @@
     const myP = lastSnap ? lastSnap.players.find(p => p.id === myId) : null;
     const playerAlive = myP && myP.hp > 0;
     const hasInventory = myP && myP.inventory && myP.inventory.length > 0;
-    
+
     // Clear selection if player died or no longer has inventory
     if (selectedInventoryIndex !== -1 && (!playerAlive || !hasInventory)) {
       selectedInventoryIndex = -1;
@@ -2626,7 +2723,7 @@
     if (selectedInventoryModule && !playerAlive) {
       selectedInventoryModule = null;
     }
-    
+
     if (window.invBounds && window.invBounds.length > 0 && lastSnap && playerAlive && hasInventory) {
       for (let i = 0; i < window.invBounds.length; i++) {
         const b = window.invBounds[i];
@@ -2637,7 +2734,7 @@
             selectedInventoryIndex = -1;
             return;
           }
-          
+
           // Check if any towers have empty module slots
           let hasAvailableSlot = false;
           if (myP && myP.towers) {
@@ -2652,7 +2749,7 @@
               }
             }
           }
-          
+
           if (hasAvailableSlot) {
             // Select the module
             selectedInventoryIndex = i;
@@ -2671,11 +2768,11 @@
       for (const slot of window.moduleSlotPopups) {
         if (mx >= slot.x && mx <= slot.x + slot.w && my >= slot.y && my <= slot.y + slot.h) {
           // Slot the module!
-          send({ 
-            t: "slotModule", 
-            towerIndex: slot.towerIndex, 
-            moduleSlot: slot.moduleSlot, 
-            inventoryIndex: selectedInventoryIndex 
+          send({
+            t: "slotModule",
+            towerIndex: slot.towerIndex,
+            moduleSlot: slot.moduleSlot,
+            inventoryIndex: selectedInventoryIndex
           });
           selectedInventoryIndex = -1; // Deselect
           return;
@@ -2689,13 +2786,13 @@
       if (myP) {
         // Use the same scale calculation as getScale()
         const { sx: scale, offsetX, offsetY } = getScale();
-        
+
         // Calculate tower positions (same as buildMenuOpen logic)
         const segX0 = myP.slot * world.segmentWidth;
         const cx = (segX0 + world.segmentWidth / 2) * scale + offsetX;
         const cy = 560 * scale + offsetY;
         const offsets = [-110, -50, 50, 110];
-        
+
         for (let tIdx = 0; tIdx < 4; tIdx++) {
            const screenX = cx + offsets[tIdx] * scale;
            const screenY = cy - 18 * scale; // Adjust for tower center
@@ -2710,11 +2807,11 @@
                const emptySlotIdx = tower.modules.indexOf(null);
                if (emptySlotIdx !== -1) {
                  // SLOT IT!
-                 send({ 
-                   t: "slotModule", 
-                   towerIndex: tIdx, 
-                   moduleSlot: emptySlotIdx, 
-                   inventoryIndex: selectedInventoryIndex 
+                 send({
+                   t: "slotModule",
+                   towerIndex: tIdx,
+                   moduleSlot: emptySlotIdx,
+                   inventoryIndex: selectedInventoryIndex
                  });
                  selectedInventoryIndex = -1; // Deselect
                  return;
@@ -2723,20 +2820,23 @@
            }
         }
       }
-      
+
       // If we got here with a module selected, clicking elsewhere cancels selection
       if (e.button === 0) {
         selectedInventoryIndex = -1;
         return;
       }
     }
-    
+
     // Right click to cancel selection
     if (e.button === 2 && selectedInventoryIndex !== -1) {
       selectedInventoryIndex = -1;
       return;
     }
-    // ===== END OF NEW INTERACTION CODE =====
+
+  // ============================================================================
+  // END OF NEW INTERACTION CODE
+  // ============================================================================
 
     // (The original code continues below here...)
     if (e.button === 0) { mouseDown = true; handleClick(); }
@@ -2745,20 +2845,20 @@
   canvas.addEventListener("touchstart", (e) => { e.preventDefault(); mouseDown = true; if (e.touches[0]) { mouseX = e.touches[0].clientX; mouseY = e.touches[0].clientY; } handleClick(); });
   canvas.addEventListener("touchmove", (e) => { e.preventDefault(); if (e.touches[0]) { mouseX = e.touches[0].clientX; mouseY = e.touches[0].clientY; } });
   canvas.addEventListener("touchend", (e) => { e.preventDefault(); mouseDown = false; });
-  
+
   // Prevent context menu on right-click (used for canceling module selection)
   canvas.addEventListener("contextmenu", (e) => { e.preventDefault(); });
 
   // Keyboard handling for in-game chat
   let gameChatTyping = false;
-  
+
   document.addEventListener("keydown", (e) => {
     // Don't handle if in lobby chat input
     if (chatInputFocused) return;
-    
+
     // Only handle in-game
     if (phase !== "playing" && phase !== "upgrades") return;
-    
+
     // Escape to close chat
     if (e.key === "Escape" && chatOpen) {
       chatOpen = false;
@@ -2766,7 +2866,7 @@
       gameChatInputText = "";
       return;
     }
-    
+
     // Enter to open chat OR send message
     if (e.key === "Enter") {
       if (!chatOpen) {
@@ -2789,7 +2889,7 @@
         return;
       }
     }
-    
+
     // Space bar to pause/unpause (only when not typing)
     if (e.key === " " && !gameChatTyping && !isSpectator && phase === "playing") {
       if (gamePaused && pauseCountdown <= 0) {
@@ -2800,14 +2900,14 @@
       e.preventDefault();
       return;
     }
-    
+
     // Backspace when typing
     if (e.key === "Backspace" && gameChatTyping) {
       gameChatInputText = gameChatInputText.slice(0, -1);
       e.preventDefault();
       return;
     }
-    
+
     // Regular characters when typing (including all letters!)
     if (gameChatTyping && e.key.length === 1 && gameChatInputText.length < 200) {
       gameChatInputText += e.key;
@@ -2819,7 +2919,7 @@
   function handleClick() {
     // Track if we clicked on UI (to prevent shooting)
     let uiClicked = false;
-    
+
     // Handle in-game chat button click
     if ((phase === "playing" || phase === "upgrades") && window.gameChatBtnBounds) {
       const btn = window.gameChatBtnBounds;
@@ -2829,7 +2929,7 @@
         return;
       }
     }
-    
+
     // Handle chat close button
     if (chatOpen && window.gameChatCloseBounds) {
       const btn = window.gameChatCloseBounds;
@@ -2840,7 +2940,7 @@
         return;
       }
     }
-    
+
     // Handle chat scale minus button
     if (chatOpen && window.chatScaleMinusBounds) {
       const btn = window.chatScaleMinusBounds;
@@ -2851,7 +2951,7 @@
         return;
       }
     }
-    
+
     // Handle chat scale plus button
     if (chatOpen && window.chatScalePlusBounds) {
       const btn = window.chatScalePlusBounds;
@@ -2862,7 +2962,7 @@
         return;
       }
     }
-    
+
     // Handle chat chime toggle button
     if (chatOpen && window.chatChimeBounds) {
       const btn = window.chatChimeBounds;
@@ -2874,7 +2974,7 @@
         return;
       }
     }
-    
+
     // Handle game over return to menu button
     if (phase === "gameover" && gameOverData && gameOverData.menuBtnBounds) {
       const btn = gameOverData.menuBtnBounds;
@@ -2884,7 +2984,7 @@
         return;
       }
     }
-    
+
     if (phase === "playing" && hoveredUpgrade >= 0 && !upgradePicked && upgradeOptions.length > 0) {
       const opt = upgradeOptions[hoveredUpgrade];
       if (opt) {
@@ -2910,7 +3010,7 @@
       mouseDown = false;
       return;
     }
-    
+
     // Check if clicking inside module card panel (even if not on a card)
     if (phase === "playing" && moduleCardPhase && moduleCards.length > 0) {
       const panelW = 220;
@@ -2938,11 +3038,11 @@
     // Handle music player clicks
     if (musicPlayerHover && window.musicPlayerBounds) {
       const mpBounds = window.musicPlayerBounds;
-      
+
       // FIX: Safety check - ensure mouse is actually in bounds
-      if (mouseX >= mpBounds.x && mouseX <= mpBounds.x + mpBounds.w && 
+      if (mouseX >= mpBounds.x && mouseX <= mpBounds.x + mpBounds.w &&
           mouseY >= mpBounds.y && mouseY <= mpBounds.y + mpBounds.h) {
-          
+
         if (musicPlayerHover === "expand") {
           musicState.expanded = true;
         } else if (musicPlayerHover === "collapse") {
@@ -3034,7 +3134,7 @@
       mouseDown = false;
       return;
     }
-    
+
     // Handle gold reserve button clicks
     if (hoveredReserveBtn !== null && phase === "playing") {
       goldReserve = hoveredReserveBtn;
@@ -3056,7 +3156,7 @@
       mouseDown = false;
       return;
     }
-    
+
     // Check if clicking on inventory panel
     if (phase === "playing" && lastSnap) {
       const myPlayer = lastSnap.players.find(p => p.id === myId);
@@ -3093,7 +3193,7 @@
           return; // Don't close build menu, clicked in module panel
         }
       }
-      
+
       // Check if clicking on a module slot
       if (hoveredModuleSlot) {
         if (hoveredModuleSlot.hasModule && !hoveredModuleSlot.locked) {
@@ -3111,7 +3211,7 @@
         mouseDown = false;
         return;
       }
-      
+
       if (hoveredBuildOption === "upgrade") {
         send({ t: "upgradeTower", slotIndex: buildMenuOpen.slotIndex });
         mouseDown = false;
@@ -3169,7 +3269,10 @@
     }
   }
 
-  // ===== Input Loop =====
+
+  // ============================================================================
+  // INPUT LOOP
+  // ============================================================================
   let lastInputX = 0, lastInputY = 0, lastInputShooting = false;
   function sendInput() {
     if (phase !== "playing" || !lastSnap || isSpectator) return;
@@ -3177,7 +3280,7 @@
     const worldX = (mouseX - scale.offsetX) / scale.sx;
     const worldY = (mouseY - scale.offsetY) / scale.sy;
     const shooting = mouseDown && !buildMenuOpen && !uiHovered;
-    
+
     // Only send if position changed significantly or shooting state changed
     const dx = Math.abs(worldX - lastInputX);
     const dy = Math.abs(worldY - lastInputY);
@@ -3190,25 +3293,28 @@
   }
   setInterval(sendInput, 60); // ~16Hz input rate (reduced from 22Hz to lower packet overhead)
 
-  // ===== Rendering =====
+
+  // ============================================================================
+  // RENDERING
+  // ============================================================================
   function getScale() {
     const sw = canvas.width;
     const sh = canvas.height;
     const ww = world.width;
     const wh = world.height;
-    
+
     // Reserve space for UI panels
     const playerCount = lastSnap?.players?.length || 1;
-    
+
     // Right panel: attacks + DPS meters (only in multiplayer) - this needs dedicated space
     const rightPanelReserve = (playerCount > 1) ? 240 : 0; // 220 panel + 20 margin
-    
+
     // Left side: inventory + chat are OVERLAYS (no reserved space needed)
     // They float on top of the game area and are semi-transparent
     const leftPanelReserve = 0;
-    
+
     const availableWidth = sw - rightPanelReserve;
-    
+
     const scale = Math.min(availableWidth / ww, sh / wh);
     const renderW = ww * scale;
     const renderH = wh * scale;
@@ -3223,7 +3329,7 @@
     ctx.font = `bold ${size}px 'Orbitron', 'Courier New', monospace`;
     ctx.textAlign = align;
     ctx.textBaseline = "middle";
-    
+
     ctx.shadowColor = color;
     ctx.shadowBlur = 15;
     ctx.fillStyle = color;
@@ -3235,7 +3341,10 @@
     ctx.restore();
   }
 
-  // ===== Unique Projectile Rendering (OPTIMIZED) =====
+
+  // ============================================================================
+  // UNIQUE PROJECTILE RENDERING (OPTIMIZED)
+  // ============================================================================
   // PERFORMANCE: Removed ctx.save()/restore() wrapper - only use for transforms
   function drawBullet(b, sx, sy, baseColor) {
     const x = b.x * sx;
@@ -3256,7 +3365,7 @@
         const sparkle = 0.8 + Math.sin(time * 10 + b.x + b.y) * 0.2; // Subtle twinkle
         const wobble = Math.sin(time * 6 + b.x * 0.1) * 1.5; // Reduced wobble
         const pulse = 1 + Math.sin(time * 8) * 0.1; // Subtle pulse
-        
+
         // Helper for confetti colors
         const getConfettiAlpha = (c, a) => {
           if (!c) return `rgba(255,255,255,${a})`;
@@ -3264,7 +3373,7 @@
           if (c.startsWith("hsl")) return c.replace("hsl", "hsla").replace(")", `, ${a})`);
           return c;
         };
-        
+
         // Simple colorful trail (reduced from 5 to 2)
         const trailLen = 15 * sx;
         for (let i = 0; i < 2; i++) {
@@ -3278,7 +3387,7 @@
           ctx.lineTo(x - Math.cos(angle) * trailLen * (1 + trailOffset), y - Math.sin(angle) * trailLen * (1 + trailOffset));
           ctx.stroke();
         }
-        
+
         // Single subtle glow ring
         const ringHue = (parseInt(confettiColor.match(/\d+/)?.[0] || 0) + time * 30) % 360;
         ctx.strokeStyle = `hsla(${ringHue}, 80%, 65%, ${0.25 * alpha * sparkle})`;
@@ -3286,16 +3395,16 @@
         ctx.beginPath();
         ctx.arc(x + wobble, y, r * 1.8 * pulse, 0, Math.PI * 2);
         ctx.stroke();
-        
+
         // Simple shape based on bullet id - reduced complexity
         const shapeType = (b.id?.charCodeAt(0) || 0) % 4;
         ctx.fillStyle = getConfettiAlpha(confettiColor, alpha * sparkle);
-        
+
         ctx.save();
         ctx.translate(x + wobble, y);
         const spinSpeed = 3 + (b.id?.charCodeAt(2) || 0) % 2;
         ctx.rotate(time * spinSpeed + (b.id?.charCodeAt(1) || 0));
-        
+
         switch (shapeType) {
           case 0: // Circle
             ctx.beginPath();
@@ -3326,7 +3435,7 @@
             ctx.fillRect(-r * 0.7, -r * 0.7, r * 1.4, r * 1.4);
         }
         ctx.restore();
-        
+
         // White highlight (no sparkle explosion)
         ctx.fillStyle = `rgba(255,255,255,${0.5 * alpha})`;
         ctx.beginPath();
@@ -3389,7 +3498,7 @@
         ctx.fill();
         ctx.restore();
         break;
-      
+
       case "drone":
         // Drone bullet: Small cyan energy bolt
         const droneBulletR = r * 0.6;
@@ -3411,7 +3520,7 @@
         // Main turret: Player-colored energy bolt
         const trail = 12 * sx;
         const color = b.isCrit ? "#ffffff" : (b.bulletColor || baseColor);
-        
+
         // Helper to safe-wrap colors (handles HEX and HSL from confetti)
         const getColorAlpha = (c, a) => {
           if (!c) return `rgba(255,255,255,${a})`;
@@ -3443,12 +3552,12 @@
   // Track last frame time for smooth delta time calculation
   let lastFrameTime = performance.now();
   let isTabVisible = true;
-  
+
   // Handle visibility change - pause heavy rendering when tab is hidden
   document.addEventListener("visibilitychange", () => {
     const wasHidden = !isTabVisible;
     isTabVisible = !document.hidden;
-    
+
     if (isTabVisible && wasHidden) {
       // Clear all accumulated visual effects when returning to tab
       // This prevents a burst of particles/numbers trying to render at once
@@ -3464,7 +3573,7 @@
   function draw() {
 	const { sx, sy, offsetX, offsetY } = getScale();
     requestAnimationFrame(draw);
-    
+
     // Skip heavy rendering when tab is hidden (still process state)
     if (!isTabVisible) return;
 
@@ -3476,11 +3585,11 @@
       const now = performance.now();
       const dt = Math.min((now - lastFrameTime) / 1000, 0.05); // Cap at 50ms to prevent huge jumps
       lastFrameTime = now;
-      
+
       // PERFORMANCE: Track FPS and reduce effects when struggling
       // If dt > 33ms (below 30 FPS), we're struggling - skip some effects
       const isLowFPS = dt > 0.033;
-      
+
       time += dt;
       // Update client-side visual effects (particles, damage numbers, asteroid rotations)
       updateClientEffects(dt);
@@ -3503,20 +3612,20 @@
         drawNeonText("PvP", canvas.width / 2, 85, "#f44", 18, "center");
         return;
       }
-      
+
       // GAME MODIFIER CARD REVEAL ANIMATION
       if (phase === "modifier_reveal" && gameModifierCard) {
         const card = gameModifierCard;
         const mod = card.modifier;
         card.animTime += dt;
-        
+
         // Animation phases
         const enterDuration = 0.8;
-        
+
         let cardAlpha = 1;
         let cardScale = 1;
         let cardY = canvas.height / 2;
-        
+
         if (card.animTime < enterDuration) {
           // Entering: slide up from bottom with scale
           const t = card.animTime / enterDuration;
@@ -3529,66 +3638,66 @@
           const displayT = card.animTime - enterDuration;
           cardY = canvas.height / 2 + Math.sin(displayT * 2) * 5;
         }
-        
+
         // Draw dark overlay
         ctx.fillStyle = `rgba(5, 5, 16, ${0.9 * cardAlpha})`;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
+
         // Card dimensions
         const cardW = 320 * cardScale;
         const cardH = 420 * cardScale;
         const cardX = canvas.width / 2 - cardW / 2;
         const cardTopY = cardY - cardH / 2;
-        
+
         ctx.save();
         ctx.globalAlpha = cardAlpha;
-        
+
         // Card background with glow
         const glowColor = mod.color || "#ffffff";
         ctx.shadowColor = glowColor;
         ctx.shadowBlur = 30 * cardScale;
-        
+
         // Card border (gradient)
         const grad = ctx.createLinearGradient(cardX, cardTopY, cardX, cardTopY + cardH);
         grad.addColorStop(0, mod.color || "#888");
         grad.addColorStop(0.5, "#ffffff");
         grad.addColorStop(1, mod.color || "#888");
-        
+
         // Outer border
         ctx.fillStyle = grad;
         ctx.beginPath();
         const borderR = 15 * cardScale;
         ctx.roundRect(cardX - 4, cardTopY - 4, cardW + 8, cardH + 8, borderR);
         ctx.fill();
-        
+
         // Inner card
         ctx.shadowBlur = 0;
         ctx.fillStyle = "rgba(15, 15, 30, 0.98)";
         ctx.beginPath();
         ctx.roundRect(cardX, cardTopY, cardW, cardH, borderR - 2);
         ctx.fill();
-        
+
         // Header bar
         ctx.fillStyle = mod.color || "#666";
         ctx.globalAlpha = cardAlpha * 0.3;
         ctx.fillRect(cardX, cardTopY, cardW, 60 * cardScale);
         ctx.globalAlpha = cardAlpha;
-        
+
         // "GAME MODIFIER" label
         ctx.font = `bold ${14 * cardScale}px monospace`;
         ctx.fillStyle = "#888";
         ctx.textAlign = "center";
         ctx.fillText("⚙️ GAME MODIFIER ⚙️", canvas.width / 2, cardTopY + 25 * cardScale);
-        
+
         // Icon (large, centered)
         ctx.font = `${80 * cardScale}px serif`;
         ctx.fillText(mod.icon, canvas.width / 2, cardTopY + 150 * cardScale);
-        
+
         // Name
         ctx.font = `bold ${26 * cardScale}px monospace`;
         ctx.fillStyle = mod.color || "#fff";
         ctx.fillText(mod.name, canvas.width / 2, cardTopY + 210 * cardScale);
-        
+
         // Description (word wrap)
         ctx.font = `${15 * cardScale}px monospace`;
         ctx.fillStyle = "#ddd";
@@ -3596,7 +3705,7 @@
         let line = '';
         let lineY = cardTopY + 260 * cardScale;
         const maxWidth = cardW - 40 * cardScale;
-        
+
         for (const word of words) {
           const testLine = line + word + ' ';
           if (ctx.measureText(testLine).width > maxWidth && line !== '') {
@@ -3608,29 +3717,29 @@
           }
         }
         ctx.fillText(line.trim(), canvas.width / 2, lineY);
-        
+
         // Flavor text
         ctx.font = `italic ${12 * cardScale}px serif`;
         ctx.fillStyle = "#888";
         ctx.fillText(mod.flavor, canvas.width / 2, cardTopY + 370 * cardScale);
-        
+
         // Skip button and countdown (server waits 15 seconds total)
         if (card.animTime > enterDuration) {
           const timeRemaining = 15 - card.animTime; // 15 second total delay
           const countdown = Math.ceil(timeRemaining);
-          
+
           // Skip button
           const skipBtnW = 120;
           const skipBtnH = 40;
           const skipBtnX = canvas.width / 2 - skipBtnW / 2;
           const skipBtnY = cardTopY + cardH + 20;
-          
+
           // Store button bounds for click detection
           window.modifierSkipBtnBounds = { x: skipBtnX, y: skipBtnY, w: skipBtnW, h: skipBtnH };
-          
+
           const isHovered = mouseX >= skipBtnX && mouseX <= skipBtnX + skipBtnW &&
                            mouseY >= skipBtnY && mouseY <= skipBtnY + skipBtnH;
-          
+
           if (!card.hasSkipped && !isSpectator) {
             // Draw skip button
             ctx.fillStyle = isHovered ? "rgba(100, 200, 100, 0.4)" : "rgba(60, 120, 60, 0.3)";
@@ -3640,7 +3749,7 @@
             ctx.roundRect(skipBtnX, skipBtnY, skipBtnW, skipBtnH, 8);
             ctx.fill();
             ctx.stroke();
-            
+
             ctx.font = "bold 16px monospace";
             ctx.fillStyle = isHovered ? "#fff" : "#cfc";
             ctx.fillText("⏩ SKIP", canvas.width / 2, skipBtnY + 26);
@@ -3650,16 +3759,16 @@
             ctx.fillStyle = "#8f8";
             ctx.fillText("✓ Skipped", canvas.width / 2, skipBtnY + 26);
           }
-          
+
           // Show skip count and countdown
           const statusY = skipBtnY + skipBtnH + 25;
           ctx.font = "14px monospace";
           ctx.fillStyle = "#aaa";
-          
+
           if (card.totalPlayers > 1) {
             ctx.fillText(`${card.skippedCount}/${card.totalPlayers} players ready`, canvas.width / 2, statusY);
           }
-          
+
           // Countdown
           if (countdown > 0) {
             ctx.font = "12px monospace";
@@ -3671,7 +3780,7 @@
             ctx.fillText("Starting...", canvas.width / 2, statusY + 20);
           }
         }
-        
+
         ctx.restore();
         return;
       }
@@ -3680,10 +3789,10 @@
 
       // Reset UI hover state - will be set true if mouse is over any UI element
       uiHovered = false;
-      
+
       // Check UI bounds for hover blocking (prevents shooting when over UI)
       const uiCheckPlayer = lastSnap.players?.find(p => p.id === myId);
-      
+
       // Module card selection panel
       if (moduleCardPhase && moduleCards.length > 0) {
         const panelW = 220, panelX = 15, panelY = 80;
@@ -3692,7 +3801,7 @@
           uiHovered = true;
         }
       }
-      
+
       // Upgrade cards panel
       if (upgradeOptions.length > 0 && !upgradePicked) {
         const cardW = 140, cardH = 100, cardGap = 15;
@@ -3702,7 +3811,7 @@
           uiHovered = true;
         }
       }
-      
+
       // Inventory panel - horizontal bar to the right of chat button
       const uiCheckInv = uiCheckPlayer?.inventory || [];
       if (uiCheckInv.length > 0) {
@@ -3717,7 +3826,7 @@
           uiHovered = true;
         }
       }
-      
+
       // Attack panel (right side) - only in multiplayer
       if (lastSnap.players?.length > 1) {
         const { rightPanelReserve } = getScale();
@@ -3728,9 +3837,9 @@
           uiHovered = true;
         }
       }
-      
+
       // Note: Inventory and chat are overlays - their hover is handled by specific bounds checks
-      
+
       // Pause button (in HUD bar)
       if (phase === "playing" && !isSpectator) {
         const pauseBtnX = 115, pauseBtnY = 11, pauseBtnW = 36, pauseBtnH = 28;
@@ -3738,7 +3847,7 @@
           uiHovered = true;
         }
       }
-      
+
       // Build menu
       if (buildMenuOpen) {
         uiHovered = true;
@@ -3767,7 +3876,7 @@
       const segCount = Math.round(world.width / world.segmentWidth);
       for (let i = 1; i < segCount; i++) {
         const x = i * world.segmentWidth * sx;
-        
+
         // Wall glow effect
         const gradient = ctx.createLinearGradient(x - 15, 0, x + 15, 0);
         gradient.addColorStop(0, "rgba(160,0,255,0)");
@@ -3775,7 +3884,7 @@
         gradient.addColorStop(1, "rgba(160,0,255,0)");
         ctx.fillStyle = gradient;
         ctx.fillRect(x - 15, 0, 30, world.height * sy);
-        
+
         // Main wall line
         ctx.strokeStyle = "rgba(160,0,255,0.8)";
         ctx.lineWidth = 3;
@@ -3785,7 +3894,7 @@
         ctx.lineTo(x, world.height * sy);
         ctx.stroke();
         clearShadow(ctx);
-        
+
         // Energy pulse effect
         const pulseY = ((time * 100) % (world.height * sy));
         ctx.fillStyle = "rgba(200,100,255,0.6)";
@@ -3836,7 +3945,7 @@
           const x = exp.x * sx;
           const y = exp.y * sy;
           const r = exp.radius * sx;
-          
+
           // Outer glow ring
           ctx.strokeStyle = hexToRgba(exp.color, alpha);
           ctx.lineWidth = 4;
@@ -3845,13 +3954,13 @@
           ctx.beginPath();
           ctx.arc(x, y, r, 0, Math.PI * 2);
           ctx.stroke();
-          
+
           // Inner fill (very faint)
           ctx.fillStyle = hexToRgba(exp.color, alpha * 0.15);
           ctx.beginPath();
           ctx.arc(x, y, r, 0, Math.PI * 2);
           ctx.fill();
-          
+
           // Pulsing inner ring
           const pulseR = r * (0.5 + 0.2 * Math.sin(Date.now() * 0.01));
           ctx.strokeStyle = hexToRgba("#fff", alpha * 0.5);
@@ -3859,7 +3968,7 @@
           ctx.beginPath();
           ctx.arc(x, y, pulseR, 0, Math.PI * 2);
           ctx.stroke();
-          
+
           ctx.shadowBlur = 0;
         }
       }
@@ -3871,27 +3980,27 @@
           const x = ghost.x * sx;
           const y = ghost.y * sy;
           const r = ghost.r * sx;
-          
+
           // Ghostly glow
           ctx.shadowColor = "#8844ff";
           ctx.shadowBlur = 15;
-          
+
           // Semi-transparent asteroid shape
           ctx.fillStyle = hexToRgba("#8844ff", alpha * 0.5);
           ctx.strokeStyle = hexToRgba("#aa66ff", alpha);
           ctx.lineWidth = 2;
-          
+
           ctx.beginPath();
           ctx.arc(x, y, r, 0, Math.PI * 2);
           ctx.fill();
           ctx.stroke();
-          
+
           // Inner glow
           ctx.fillStyle = hexToRgba("#ffffff", alpha * 0.3);
           ctx.beginPath();
           ctx.arc(x, y, r * 0.5, 0, Math.PI * 2);
           ctx.fill();
-          
+
           ctx.shadowBlur = 0;
         }
       }
@@ -3904,20 +4013,20 @@
           const px = p.x * sx;
           const py = p.y * sy;
           const pSize = (p.size || 2) * sx;
-          
+
           // Special confetti particle rendering! 🎉
           if (p.isConfetti) {
             ctx.save();
             ctx.translate(px, py);
-            
+
             // Update and apply rotation
             const rotation = (p.rotation || 0) + (p.spin || 0) * 0.016;
             p.rotation = rotation;
             ctx.rotate(rotation);
-            
+
             // Parse HSL color for the fill
             ctx.fillStyle = p.color.replace(')', `, ${alpha})`).replace('hsl', 'hsla');
-            
+
             switch (p.confettiShape) {
               case 'star':
                 // 4-pointed star
@@ -3962,20 +4071,20 @@
       // Tesla Coil Lightning Effects
       // PERFORMANCE: Skip outer glow only in low FPS situations
       const drawLightningGlow = !isLowFPS;
-      
+
       for (const lightning of clientLightning) {
         const alpha = lightning.life / lightning.maxLife;
         const playerColor = PLAYER_COLORS[lightning.slot]?.main || "#0ff";
         const coreColor = lightning.isCrit ? "#fff" : playerColor;
         const glowColor = lightning.isCrit ? "#ff0" : "#0ff";
-        
+
         ctx.save();
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
-        
+
         for (const segment of lightning.segments) {
           if (segment.length < 2) continue;
-          
+
           // Outer glow (skip in low quality/FPS)
           if (drawLightningGlow) {
             ctx.strokeStyle = hexToRgba(glowColor, alpha * 0.3);
@@ -3988,7 +4097,7 @@
               ctx.lineTo(segment[i].x * sx, segment[i].y * sy);
             }
             ctx.stroke();
-            
+
             // Mid glow
             ctx.strokeStyle = hexToRgba(coreColor, alpha * 0.6);
             ctx.lineWidth = 6 * sx;
@@ -4000,7 +4109,7 @@
             }
             ctx.stroke();
           }
-          
+
           // Bright core (always drawn)
           ctx.strokeStyle = hexToRgba("#fff", alpha);
           ctx.lineWidth = drawLightningGlow ? 2 * sx : 3 * sx;
@@ -4013,41 +4122,41 @@
           }
           ctx.stroke();
         }
-        
+
         ctx.restore();
       }
-      
+
       // Module Effect Tracers (Pinball, Viral spread)
       // PERFORMANCE: Skip shadow and dashes when FPS is low
       for (const tracer of pendingTracers) {
         const alpha = tracer.life / 0.5; // Assuming max life of 0.5
         ctx.strokeStyle = hexToRgba(tracer.color, alpha * 0.8);
         ctx.lineWidth = 3 * sx;
-        
+
         if (!isLowFPS) {
           ctx.save();
           ctx.shadowColor = tracer.color;
           ctx.shadowBlur = 10;
           ctx.setLineDash([5, 5]);
         }
-        
+
         ctx.beginPath();
         ctx.moveTo(tracer.x1 * sx, tracer.y1 * sy);
         ctx.lineTo(tracer.x2 * sx, tracer.y2 * sy);
         ctx.stroke();
-        
+
         if (!isLowFPS) {
           ctx.restore();
         }
       }
-      
+
       // Railgun Beams - bright instant laser effect
       for (const beam of railgunBeams) {
         const alpha = beam.life / beam.maxLife;
         const beamWidth = beam.isCrit ? 8 : 5;
-        
+
         ctx.save();
-        
+
         // Outer glow
         ctx.strokeStyle = hexToRgba(beam.color, alpha * 0.3);
         ctx.lineWidth = (beamWidth + 8) * sx;
@@ -4056,7 +4165,7 @@
         ctx.moveTo(beam.x1 * sx, beam.y1 * sy);
         ctx.lineTo(beam.x2 * sx, beam.y2 * sy);
         ctx.stroke();
-        
+
         // Middle glow
         ctx.strokeStyle = hexToRgba(beam.color, alpha * 0.6);
         ctx.lineWidth = (beamWidth + 4) * sx;
@@ -4064,7 +4173,7 @@
         ctx.moveTo(beam.x1 * sx, beam.y1 * sy);
         ctx.lineTo(beam.x2 * sx, beam.y2 * sy);
         ctx.stroke();
-        
+
         // Core beam (white/bright)
         ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
         ctx.lineWidth = beamWidth * sx;
@@ -4074,7 +4183,7 @@
         ctx.moveTo(beam.x1 * sx, beam.y1 * sy);
         ctx.lineTo(beam.x2 * sx, beam.y2 * sy);
         ctx.stroke();
-        
+
         ctx.restore();
       }
 
@@ -4082,7 +4191,7 @@
       // PERFORMANCE: Get render bounds once for culling
       const renderWidth = world.width * sx;
       const renderHeight = world.height * sy;
-      
+
       for (const m of lastSnap.missiles) {
         const x = m.x * sx;
         const y = m.y * sy;
@@ -4105,30 +4214,33 @@
           baseColor = ATTACK_TYPES[m.attackType].color;
         }
 
-        // ===== BATTLESHIP RENDERING =====
+
+  // ============================================================================
+  // BATTLESHIP RENDERING
+  // ============================================================================
         const isBattleship = m.isBattleship || m.type === "battleship" || cached?.isBattleship;
-        
+
         if (isBattleship) {
           ctx.save();
           ctx.translate(x, y);
-          
+
           // Apply hull rotation (ship rocks as it descends)
           const hullRotation = m.hullRotation || 0;
           ctx.rotate(hullRotation);
-          
+
           // Check if images are loaded
           const hullImg = battleshipImages.hull;
           const flame1Img = battleshipImages.flame1;
           const flame2Img = battleshipImages.flame2;
           const turretImg = battleshipImages.turret;
           const imagesReady = hullImg.complete && hullImg.naturalWidth > 0;
-          
+
           if (imagesReady) {
             // NO SCALING - Draw images at their native pixel size
             // Ship image is 240x330 pixels
             const hullW = 240;
             const hullH = 330;
-            
+
             // FTL effect for battleship - phasing in effect
             if (m.inFTL) {
               // Draw FTL streaks behind the ship
@@ -4142,24 +4254,24 @@
                 ctx.lineTo(offsetX, 0);
                 ctx.stroke();
               }
-              
+
               // Phasing effect - ship is visible but slightly stretched and translucent
               ctx.scale(1, 1.3); // Slight vertical stretch
               ctx.globalAlpha = 0.7; // Visible but phasing in
             }
-            
+
             // Draw flames (flickering FAST between frame 1 and 2)
-            const flameFrame = Math.floor(Date.now() / 30) % 2; // Switch every 30ms (was 100ms)
+            const flameFrame = Math.floor(Date.now() / 30) % 2; // Switch every 30ms
             const flameImg = flameFrame === 0 ? flame1Img : flame2Img;
             if (flameImg.complete && flameImg.naturalWidth > 0) {
               ctx.drawImage(flameImg, -hullW/2, -hullH/2, hullW, hullH);
             }
-            
+
             // Draw hull at 1:1 pixel size
             ctx.drawImage(hullImg, -hullW/2, -hullH/2, hullW, hullH);
-            
+
             ctx.globalAlpha = 1;
-            
+
             // Draw turrets (only when not in FTL)
             if (turretImg.complete && turretImg.naturalWidth > 0 && !m.inFTL) {
               // Get turret data from server
@@ -4167,36 +4279,36 @@
               const turretDestroyed = m.turretDestroyed || [false, false, false, false];
               const turretHPs = m.turretHPs || [10, 10, 10, 10];
               const turretMaxHPs = m.turretMaxHPs || [10, 10, 10, 10];
-              
+
               // Turret sprite is 35x46 pixels
               const turretW = 35;
               const turretH = 46;
-              
+
               for (let t = 0; t < 4; t++) {
                 // Get turret offset in pixels (relative to ship center, no scaling)
                 const offset = BATTLESHIP_TURRET_OFFSETS[t];
                 const isDestroyed = turretDestroyed[t];
-                
+
                 ctx.save();
                 // Move to turret base position
                 ctx.translate(offset.x, offset.y);
-                
+
                 if (isDestroyed) {
                   // Draw smoking wreckage for destroyed turret
                   ctx.globalAlpha = 0.6;
-                  
+
                   // Damaged base (dark, charred)
                   ctx.fillStyle = "#222";
                   ctx.beginPath();
                   ctx.ellipse(0, 0, 12, 8, 0, 0, Math.PI * 2);
                   ctx.fill();
-                  
+
                   // Debris pieces
                   ctx.fillStyle = "#444";
                   ctx.fillRect(-8, -5, 6, 4);
                   ctx.fillRect(3, -3, 5, 3);
                   ctx.fillRect(-4, 2, 7, 3);
-                  
+
                   // Animated smoke rising from wreckage
                   const smokeTime = Date.now() / 200;
                   ctx.globalAlpha = 0.3 + Math.sin(smokeTime + t) * 0.1;
@@ -4209,7 +4321,7 @@
                     ctx.arc(smokeX, smokeY, smokeSize, 0, Math.PI * 2);
                     ctx.fill();
                   }
-                  
+
                   // Occasional sparks
                   if (Math.sin(Date.now() / 100 + t * 1.5) > 0.7) {
                     ctx.fillStyle = "#ff6600";
@@ -4222,15 +4334,15 @@
                   // Active turret - rotate and draw
                   const rotationAngle = turretAngles[t] - Math.PI/2;
                   ctx.rotate(rotationAngle);
-                  
+
                   // Draw turret with pivot at (18, 17) as the rotation center
                   ctx.drawImage(turretImg, -TURRET_PIVOT.x, -TURRET_PIVOT.y, turretW, turretH);
-                  
+
                   ctx.globalAlpha = 1;
                 }
-                
+
                 ctx.restore();
-                
+
                 // Draw HP bar above active turrets
                 if (!isDestroyed && turretHPs[t] < turretMaxHPs[t]) {
                   const hpPercent = turretHPs[t] / turretMaxHPs[t];
@@ -4238,15 +4350,15 @@
                   const barH = 3;
                   const barX = offset.x - barW / 2;
                   const barY = offset.y - 28;
-                  
+
                   // Background
                   ctx.fillStyle = "rgba(0,0,0,0.7)";
                   ctx.fillRect(barX, barY, barW, barH);
-                  
+
                   // HP fill
                   ctx.fillStyle = hpPercent > 0.5 ? "#00ff88" : (hpPercent > 0.25 ? "#ffaa00" : "#ff4444");
                   ctx.fillRect(barX, barY, barW * hpPercent, barH);
-                  
+
                   // Border
                   ctx.strokeStyle = "#fff";
                   ctx.lineWidth = 0.5;
@@ -4254,7 +4366,7 @@
                 }
               }
             }
-            
+
             ctx.globalAlpha = 1;
           } else {
             // Fallback rendering if images not loaded
@@ -4266,9 +4378,9 @@
             ctx.fill();
             ctx.stroke();
           }
-          
+
           ctx.restore();
-          
+
           // HP bar for battleship (use fixed size since no scaling)
           if (m.hp < m.maxHp) {
             const bw = 100, bh = 4 * sy, bx = x - bw / 2, by = y - 180 - 10 * sy;
@@ -4280,7 +4392,7 @@
             ctx.lineWidth = 1;
             ctx.strokeRect(bx, by, bw, bh);
           }
-          
+
           continue; // Skip normal asteroid rendering
         }
 
@@ -4292,7 +4404,7 @@
           const bossAdVariantFTL = m.bossAdVariant;
           const isMiniBossFTL = m.isMiniBoss;
           const isMiniBossAdFTL = m.isMiniBossAd;
-          
+
           let ftlBossImage = null;
           if ((isBossFTL || isMiniBossFTL) && bossImages.boss && bossImages.boss.complete && bossImages.boss.naturalWidth > 0) {
             ftlBossImage = bossImages.boss;
@@ -4309,24 +4421,24 @@
               ftlBossImage = adImg;
             }
           }
-          
+
           ctx.save();
-          
+
           // Draw streak lines (simplified - no gradients for performance)
           const streakLength = 80 * sy;
           const numStreaks = isBossFTL ? 8 : (isBossAdFTL ? 5 : (isMiniBossFTL ? 6 : (isMiniBossAdFTL ? 3 : 3)));
           const streakSpread = ftlBossImage ? r * 2 : r * 1.5;
-          
+
           // Use solid colors instead of gradients - mini-boss uses orange-red
           let streakColor = "rgba(180,200,255,0.5)";
           if (isBossFTL) streakColor = "rgba(255,100,50,0.6)";
           else if (isBossAdFTL) streakColor = "rgba(255,150,50,0.5)";
           else if (isMiniBossFTL) streakColor = "rgba(255,80,0,0.7)";
           else if (isMiniBossAdFTL) streakColor = "rgba(255,120,0,0.5)";
-          
+
           ctx.strokeStyle = streakColor;
           ctx.lineWidth = (isMiniBossFTL || isMiniBossAdFTL) ? 3 : 2;
-          
+
           for (let i = 0; i < numStreaks; i++) {
             const offsetX = (i - numStreaks/2) * (streakSpread / numStreaks);
             ctx.beginPath();
@@ -4334,50 +4446,50 @@
             ctx.lineTo(x + offsetX, y);
             ctx.stroke();
           }
-          
+
           if (ftlBossImage) {
             // Render boss image with FTL effect
             ctx.translate(x, y);
             ctx.scale(1, 1.8); // Less stretch for image (2.5 distorts too much)
-            
+
             // Glow effect - mini-boss uses orange, boss uses red
             const glowColor = (isBossFTL) ? "#ff4400" : (isMiniBossFTL ? "#ff6600" : "#ff8800");
             setShadow(ctx, glowColor, isMiniBossFTL ? 20 : 30);
-            
+
             // Draw the image with slight transparency
             ctx.globalAlpha = 0.9;
             const imgSize = r * 2.2;
             ctx.drawImage(ftlBossImage, -imgSize/2, -imgSize/2, imgSize, imgSize);
-            
+
             // Add white overlay for "emerging from warp" effect
             ctx.globalCompositeOperation = "lighter";
             ctx.globalAlpha = 0.3;
             ctx.drawImage(ftlBossImage, -imgSize/2, -imgSize/2, imgSize, imgSize);
             ctx.globalCompositeOperation = "source-over";
             ctx.globalAlpha = 1;
-            
+
             clearShadow(ctx);
           } else {
             // Standard FTL blob for regular asteroids
             setShadow(ctx, "#aaccff", 25);
-            
+
             ctx.translate(x, y);
             ctx.scale(1, 2.5); // Stretch vertically
             ctx.rotate(rotation);
-            
+
             const ftlGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
             ftlGrad.addColorStop(0, "#ffffff");
             ftlGrad.addColorStop(0.4, baseColor);
             ftlGrad.addColorStop(1, hexToRgba(baseColor, 0.5));
             ctx.fillStyle = ftlGrad;
-            
+
             ctx.beginPath();
             ctx.arc(0, 0, r, 0, Math.PI * 2);
             ctx.fill();
-            
+
             clearShadow(ctx);
           }
-          
+
           ctx.restore();
           continue; // Skip normal rendering for FTL asteroids
         }
@@ -4392,10 +4504,10 @@
         const isMiniBoss = m.isMiniBoss || cached?.isMiniBoss;
         const isMiniBossAd = m.isMiniBossAd || cached?.isMiniBossAd;
         const isBerserker = m.attackType === "berserker" || m.isBerserker;
-        
+
         // Calculate berserker rage intensity (0-1 based on HP loss)
         const berserkerRage = isBerserker ? Math.max(0, 1 - (m.hp / m.maxHp)) : 0;
-        
+
         // Determine which image to use (if any) - check individual image directly
         // Mini-boss and mini-boss ads use the same images as boss, just scaled down
         let bossImage = null;
@@ -4417,18 +4529,21 @@
 
         ctx.save();
         ctx.translate(x, y);
-        
-        // ===== PVP ATTACK VISUAL OVERHAUL =====
+
+
+  // ============================================================================
+  // PVP ATTACK VISUAL OVERHAUL
+  // ============================================================================
         // Get sender info for visual distinction
         const senderSlot = cached?.senderSlot;
         const attackType = m.attackType || cached?.attackType;
         const isPvPAttack = attackType && senderSlot !== null && senderSlot !== undefined;
         const senderColor = isPvPAttack ? (PLAYER_COLORS[senderSlot]?.main || "#ff00ff") : null;
         const time = Date.now();
-        
+
         if (isPvPAttack && !isBoss && !isBossAd && !isMiniBoss && !isMiniBossAd) {
           ctx.save();
-          
+
           // === SENDER COLOR TRAIL ===
           // Animated trailing particles in sender's color
           const trailCount = 5;
@@ -4438,14 +4553,14 @@
             const trailY = -r * 0.5 - trailAge * r * 1.5;
             const trailX = Math.sin(time * 0.005 + t * 1.5) * r * 0.3;
             const trailSize = r * (0.3 - trailAge * 0.1);
-            
+
             ctx.globalAlpha = trailAlpha * phaseAlpha;
             ctx.fillStyle = senderColor;
             ctx.beginPath();
             ctx.arc(trailX, trailY, Math.max(2, trailSize), 0, Math.PI * 2);
             ctx.fill();
           }
-          
+
           // === SENDER COLOR RING ===
           // Pulsing ring around asteroid in sender's color
           const ringPulse = Math.sin(time * 0.006) * 0.15 + 0.85;
@@ -4458,10 +4573,10 @@
           ctx.arc(0, 0, ringRadius, 0, Math.PI * 2);
           ctx.stroke();
           ctx.setLineDash([]);
-          
+
           // === ATTACK TYPE SPECIFIC EFFECTS ===
           ctx.globalAlpha = phaseAlpha;
-          
+
           if (attackType === "swarm") {
             // 🐝 SWARM: Buzzing particle trails
             for (let i = 0; i < 4; i++) {
@@ -4486,7 +4601,7 @@
               ctx.lineTo(r * 0.5, -r - lineOffset * r * 2);
               ctx.stroke();
             }
-            
+
           } else if (attackType === "bruiser") {
             // 🪨 BRUISER: Heavy rock aura, impact cracks
             ctx.globalAlpha = 0.4 * phaseAlpha;
@@ -4506,7 +4621,7 @@
               ctx.lineTo(Math.cos(crackAngle) * r * 1.4, Math.sin(crackAngle) * r * 1.4);
               ctx.stroke();
             }
-            
+
           } else if (attackType === "carrier") {
             // 👑 CARRIER: Crown particles, royal purple aura
             ctx.globalAlpha = 0.5 * phaseAlpha;
@@ -4530,7 +4645,7 @@
               ctx.textBaseline = "middle";
               ctx.fillText("✦", Math.cos(sparkAngle) * sparkR, Math.sin(sparkAngle) * sparkR);
             }
-            
+
           } else if (attackType === "splitter") {
             // 💎 SPLITTER: Crystal shards, prismatic reflections
             ctx.globalAlpha = 0.6 * phaseAlpha;
@@ -4557,7 +4672,7 @@
             ctx.lineTo(-4, 0);
             ctx.closePath();
             ctx.fill();
-            
+
           } else if (attackType === "ghost") {
             // 👻 GHOST: Enhanced ethereal trail, phasing rings
             ctx.globalAlpha = 0.3 * phaseAlpha;
@@ -4579,7 +4694,7 @@
             ctx.beginPath();
             ctx.arc(0, 0, r * (1 + phaseWave * 0.5), 0, Math.PI * 2);
             ctx.stroke();
-            
+
           } else if (attackType === "berserker") {
             // 🔥 BERSERKER: Enhanced fire trail (adds to existing effect)
             // Fire trail behind
@@ -4599,16 +4714,19 @@
               ctx.fill();
             }
           }
-          
+
           ctx.restore();
         }
-        // ===== END PVP ATTACK VISUAL OVERHAUL =====
-        
+
+  // ============================================================================
+  // END PVP ATTACK VISUAL OVERHAUL
+  // ============================================================================
+
         if (bossImage) {
           // Render boss/boss-ad/mini-boss using image
           ctx.rotate(rotation);
           ctx.globalAlpha = phaseAlpha + 0.3; // Slightly more visible for bosses
-          
+
           // Draw glow effect behind boss
           if (isBoss) {
             setShadow(ctx, "#ff0000", 20);
@@ -4619,7 +4737,7 @@
           } else if (isMiniBossAd) {
             setShadow(ctx, "#ff6600", 8); // Smaller glow for mini-boss ads
           }
-          
+
           // Draw the image centered and scaled to fit the radius
           const imgSize = r * 2.2; // Slightly larger than hitbox
           ctx.drawImage(bossImage, -imgSize/2, -imgSize/2, imgSize, imgSize);
@@ -4628,7 +4746,7 @@
         } else {
           // Standard procedural asteroid rendering
           ctx.rotate(rotation);
-          
+
           // Special color for mini-boss
           let renderColor = baseColor;
           let glowSize = 8;
@@ -4646,14 +4764,14 @@
             renderColor = `rgb(${r},${g},${b})`;
             glowSize = 8 + berserkerRage * 20;
           }
-          
+
           // Viral Payload: Infected asteroids turn green
           if (m.infected) {
             const pulse = Math.sin(Date.now() * 0.01) * 0.3 + 0.7;
             renderColor = `rgb(0, ${Math.floor(255 * pulse)}, 0)`;
             glowSize = 12 + pulse * 8;
           }
-          
+
           ctx.fillStyle = hexToRgba(renderColor, phaseAlpha);
           ctx.strokeStyle = renderColor;
           ctx.lineWidth = 1.5;
@@ -4679,7 +4797,7 @@
           }
           clearShadow(ctx);
         }
-        
+
         ctx.restore();
 
         // Static charge visual (Chain Reaction module)
@@ -4690,7 +4808,7 @@
           ctx.lineWidth = 2;
           ctx.shadowColor = "#ffff00";
           ctx.shadowBlur = 10 + chargeIntensity * 15;
-          
+
           // Electric arcs around the asteroid
           const arcCount = 3 + Math.floor(chargeIntensity * 3);
           for (let i = 0; i < arcCount; i++) {
@@ -4704,32 +4822,32 @@
           }
           ctx.restore();
         }
-        
+
         // Viral infection visual (Viral Payload module)
         if (m.infected) {
           ctx.save();
           ctx.shadowColor = "#00ff00";
           ctx.shadowBlur = 15;
-          
+
           // Toxic bubbles around the asteroid
           const bubbleCount = 5;
           for (let i = 0; i < bubbleCount; i++) {
             const angle = (Date.now() * 0.003 + i * Math.PI * 2 / bubbleCount) % (Math.PI * 2);
             const bubbleR = r * (1.1 + Math.sin(Date.now() * 0.01 + i) * 0.2);
             const bubbleSize = 3 + Math.sin(Date.now() * 0.008 + i * 2) * 2;
-            
+
             ctx.fillStyle = hexToRgba("#00ff00", 0.6);
             ctx.beginPath();
             ctx.arc(x + Math.cos(angle) * bubbleR, y + Math.sin(angle) * bubbleR, bubbleSize, 0, Math.PI * 2);
             ctx.fill();
           }
-          
+
           // Virus icon indicator
           ctx.font = `${8 * sx}px sans-serif`;
           ctx.textAlign = "center";
           ctx.fillStyle = "#00ff00";
           ctx.fillText("🦠", x, y - r - 5 * sy);
-          
+
           ctx.restore();
         }
 
@@ -4742,43 +4860,46 @@
           ctx.fillRect(bx, by, bw * (m.hp / m.maxHp), bh);
         }
 
-        // ===== PVP ATTACK ICON OVERHAUL =====
+
+  // ============================================================================
+  // PVP ATTACK ICON OVERHAUL
+  // ============================================================================
         // Skip for boss/boss-ads/mini-boss which use images
         if (!isBoss && !isBossAd && !isMiniBoss && !isMiniBossAd && m.attackType && ATTACK_TYPES[m.attackType]) {
           const atkDef = ATTACK_TYPES[m.attackType];
           const senderSlot = cached?.senderSlot;
           const senderColor = (senderSlot !== null && senderSlot !== undefined) ? (PLAYER_COLORS[senderSlot]?.main || "#fff") : "#fff";
           const time = Date.now();
-          
+
           ctx.save();
-          
+
           // Animated icon position (slight bob)
           const bobOffset = Math.sin(time * 0.005) * 2 * sy;
           const iconY = y + r + 14 * sy + bobOffset;
-          
+
           // Background pill with sender color
           const pillW = 28 * sx;
           const pillH = 16 * sy;
           const pillX = x - pillW / 2;
           const pillY = iconY - pillH / 2 - 2 * sy;
-          
+
           // Sender color glow behind
           ctx.shadowColor = senderColor;
           ctx.shadowBlur = 8;
-          
+
           // Dark pill background
           ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
           ctx.beginPath();
           ctx.roundRect(pillX, pillY, pillW, pillH, pillH / 2);
           ctx.fill();
-          
+
           // Sender color border
           ctx.strokeStyle = senderColor;
           ctx.lineWidth = 1.5;
           ctx.stroke();
-          
+
           ctx.shadowBlur = 0;
-          
+
           // Icon with slight scaling pulse
           const iconPulse = 1 + Math.sin(time * 0.008) * 0.1;
           ctx.font = `${10 * sx * iconPulse}px sans-serif`;
@@ -4786,10 +4907,10 @@
           ctx.textBaseline = "middle";
           ctx.fillStyle = "#fff";
           ctx.fillText(atkDef.icon, x, iconY);
-          
+
           ctx.restore();
         }
-        
+
         // Berserker rage flames (visual effect when enraged)
         if (isBerserker && berserkerRage > 0.2) {
           ctx.save();
@@ -4810,63 +4931,63 @@
         const baseColor = PLAYER_COLORS[b.slot]?.main || "#0ff";
         drawBullet(b, sx, sy, baseColor);
       }
-      
+
       // Render enemy bullets (from battleships) - use server data if available
       const serverEnemyBullets = lastSnap.enemyBullets || [];
       const clientEnemyBullets = window.enemyBullets || [];
-      
+
       // Prefer server-provided bullets (more accurate)
       const enemyBulletsToRender = serverEnemyBullets.length > 0 ? serverEnemyBullets : clientEnemyBullets;
-      
+
       // Clean up client-side bullets if server has taken over
       if (serverEnemyBullets.length > 0) {
         window.enemyBullets = [];
       }
-      
+
       for (let i = enemyBulletsToRender.length - 1; i >= 0; i--) {
         const eb = enemyBulletsToRender[i];
-        
+
         // For client-side bullets, update position and lifetime
         if (serverEnemyBullets.length === 0) {
           const dt = 1/60;
           eb.x += eb.vx * dt;
           eb.y += eb.vy * dt;
           eb.life -= dt;
-          
+
           // Remove if expired or off screen
           if (eb.life <= 0 || eb.y > world.height + 50 || eb.x < -50 || eb.x > world.width + 50) {
             clientEnemyBullets.splice(i, 1);
             continue;
           }
         }
-        
+
         // Draw enemy bullet
         const bx = eb.x * sx;
         const by = eb.y * sy;
-        
+
         ctx.save();
         ctx.translate(bx, by);
-        
+
         // Rotate to face direction of travel
         const angle = Math.atan2(eb.vy || 1, eb.vx || 0);
         ctx.rotate(angle);
-        
+
         // Red glowing bullet
         ctx.shadowColor = "#ff4400";
         ctx.shadowBlur = 8;
-        
+
         // Bullet body (elongated)
         ctx.fillStyle = "#ff6644";
         ctx.beginPath();
         ctx.ellipse(0, 0, 6 * sx, 3 * sx, 0, 0, Math.PI * 2);
         ctx.fill();
-        
+
         // Bright core
         ctx.fillStyle = "#ffaa88";
         ctx.beginPath();
         ctx.ellipse(0, 0, 3 * sx, 1.5 * sx, 0, 0, Math.PI * 2);
         ctx.fill();
-        
+
         ctx.shadowBlur = 0;
         ctx.restore();
       }
@@ -4930,48 +5051,48 @@
         const turretAlpha = isDead ? 0.3 : 1;
         const groundY = 560 * sy; // Base of playing field
         const mainStunned = (p.mainTurretStun || 0) > 0;
-        
+
         // Check if turret images are loaded
         const hasBase = turretImages.base.complete && turretImages.base.naturalWidth > 0;
         const hasBarrel = turretImages.barrel.complete && turretImages.barrel.naturalWidth > 0;
-        
+
         if (hasBase && hasBarrel) {
           // Calculate base size preserving aspect ratio
           const baseAspect = turretImages.base.naturalWidth / turretImages.base.naturalHeight;
           const baseW = 43.75 * sx; // Width (35 * 1.25 = 25% bigger)
           const baseH = baseW / baseAspect; // Height calculated from aspect ratio
-          
+
           // Barrel dimensions (preserve aspect ratio)
           const barrelAspect = turretImages.barrel.naturalWidth / turretImages.barrel.naturalHeight;
           const barrelH = 35 * sy;
           const barrelW = barrelH * barrelAspect;
-          
+
           // Position: bottom of base at ground, horizontally centered
           const baseX = cx - baseW / 2;
           const baseY = groundY - baseH;
           const turretCenterX = cx;
           const turretCenterY = groundY - baseH / 2; // Center of base for barrel rotation
-          
+
           ctx.save();
           ctx.globalAlpha = mainStunned ? (0.4 + Math.sin(Date.now() / 50) * 0.2) : turretAlpha;
-          
+
           // Apply stun filter
           if (mainStunned) {
             ctx.filter = 'hue-rotate(-60deg) saturate(1.5)';
           }
-          
+
           // Draw glow effect behind turret
           if (!isDead && !mainStunned) {
             setShadow(ctx, color.main, 15);
           } else if (mainStunned) {
             setShadow(ctx, "#ff4400", 15);
           }
-          
+
           // Draw the base first (below barrel) - bottom at ground level
           ctx.drawImage(turretImages.base, baseX, baseY, baseW, baseH);
-          
+
           clearShadow(ctx);
-          
+
           // Draw the rotating barrel on top
           ctx.save();
           ctx.translate(turretCenterX, turretCenterY);
@@ -4979,10 +5100,10 @@
           // Barrel anchor point at 25% from bottom (75% above, 25% below)
           ctx.drawImage(turretImages.barrel, -barrelW / 2, -barrelH * 0.75, barrelW, barrelH);
           ctx.restore();
-          
+
           ctx.filter = 'none';
           ctx.restore();
-          
+
           // Draw stun spark above turret
           if (mainStunned) {
             ctx.save();
@@ -5020,7 +5141,7 @@
         towers.forEach((t, i) => {
           const tx = cx + offsets[i] * sx;
           const ty = 560 * sy;
-          
+
           // Check hover for OPPONENT towers (not own)
           // Note: tx/ty are in translated coordinates, mouseX/mouseY are screen coords
           // Need to add offsetX/offsetY to convert tx/ty to screen coords
@@ -5041,7 +5162,7 @@
               };
             }
           }
-          
+
           if (t) {
             const typeInfo = TOWER_TYPES[t.type];
             if (typeInfo) {
@@ -5055,12 +5176,12 @@
               // Platform (doesn't rotate)
               const platformW = 22 * sx * scale;
               const platformH = 6 * sy * scale;
-              
+
               // Apply stun filter to platform
               if (towerStunned) {
                 ctx.filter = 'hue-rotate(-60deg) saturate(1.5)';
               }
-              
+
               ctx.fillStyle = hexToRgba("#333", 0.9 * towerAlpha);
               ctx.strokeStyle = hexToRgba(towerStunned ? "#ff4400" : tColor, 0.6 * towerAlpha);
               ctx.lineWidth = 2;
@@ -5071,46 +5192,46 @@
 
                 // Check for Copycat module - render mini main turret INSTEAD of normal tower
                 const hasCopycat = t.modules && t.modules.includes && t.modules.includes("copycat");
-                
+
                 if (hasCopycat) {
                   // Draw a mini version of the main turret using the same sprites
                   const hasBase = turretImages.base.complete && turretImages.base.naturalWidth > 0;
                   const hasBarrel = turretImages.barrel.complete && turretImages.barrel.naturalWidth > 0;
-                  
+
                   if (hasBase && hasBarrel) {
                     const miniScale = 0.5; // 50% of main turret size
                     const baseAspect = turretImages.base.naturalWidth / turretImages.base.naturalHeight;
                     const baseW = 43.75 * sx * miniScale;
                     const baseH = baseW / baseAspect;
-                    
+
                     const barrelAspect = turretImages.barrel.naturalWidth / turretImages.barrel.naturalHeight;
                     const barrelH = 35 * sy * miniScale;
                     const barrelW = barrelH * barrelAspect;
-                    
+
                     // Position mini turret on the platform
                     const turretCenterX = tx;
                     const turretCenterY = ty - platformH - baseH / 2;
-                    
+
                     ctx.save();
                     ctx.globalAlpha = towerAlpha;
-                    
+
                     // Glow effect matching player color
                     if (!isDead) {
                       setShadow(ctx, color.main, 12);
                     }
-                    
+
                     // Draw mini base on platform
                     ctx.drawImage(turretImages.base, tx - baseW / 2, ty - platformH - baseH, baseW, baseH);
-                    
+
                     clearShadow(ctx);
-                    
+
                     // Draw mini rotating barrel
                     ctx.save();
                     ctx.translate(turretCenterX, turretCenterY);
                     ctx.rotate(towerAngle + Math.PI / 2);
                     ctx.drawImage(turretImages.barrel, -barrelW / 2, -barrelH * 0.75, barrelW, barrelH);
                     ctx.restore();
-                    
+
                     ctx.restore();
                   } else {
                     // Fallback if images not loaded - draw simple copy
@@ -5198,7 +5319,7 @@
                   clearShadow(ctx);
                   ctx.filter = 'none'; // Reset filter after tower rendering
                 }
-                
+
                 // Draw stun spark above tower
                 if (towerStunned) {
                   ctx.save();
@@ -5209,32 +5330,32 @@
                   ctx.fill();
                   ctx.restore();
                 }
-                
+
                 // Drone Command: Render orbiting drone for this tower
                 if (t.dronePos) {
                   const droneX = t.dronePos.x * sx;
                   const droneY = t.dronePos.y * sy;
                   const droneSize = 6 * sx;
-                  
+
                   ctx.save();
                   ctx.translate(droneX, droneY);
-                  
+
                   // Drone glow
                   ctx.shadowColor = "#44aaff";
                   ctx.shadowBlur = 8;
-                  
+
                   // Drone body (UFO shape)
                   ctx.fillStyle = hexToRgba("#44aaff", isDead ? 0.3 : 0.9);
                   ctx.beginPath();
                   ctx.ellipse(0, 0, droneSize, droneSize * 0.5, 0, 0, Math.PI * 2);
                   ctx.fill();
-                  
+
                   // Drone dome
                   ctx.fillStyle = hexToRgba("#88ccff", isDead ? 0.3 : 0.8);
                   ctx.beginPath();
                   ctx.arc(0, -droneSize * 0.2, droneSize * 0.4, Math.PI, 0);
                   ctx.fill();
-                  
+
                   // Drone lights (pulsing)
                   const dronePulse = Math.sin(Date.now() / 100 + i) * 0.3 + 0.7;
                   ctx.fillStyle = `rgba(255, 255, 100, ${dronePulse * (isDead ? 0.3 : 1)})`;
@@ -5242,7 +5363,7 @@
                   ctx.arc(-droneSize * 0.6, 0, 1.5 * sx, 0, Math.PI * 2);
                   ctx.arc(droneSize * 0.6, 0, 1.5 * sx, 0, Math.PI * 2);
                   ctx.fill();
-                  
+
                   ctx.restore();
                 }
 
@@ -5315,13 +5436,13 @@
         ctx.font = `bold ${8 * sx}px 'Courier New', monospace`;
         ctx.fillStyle = "#fff";
         ctx.fillText(`${p.hp}/${p.maxHp}`, cx, hpBarY + hpBarH / 2 + 1);
-        
+
         // Gold display under HP bar
         if (!isDead) {
           ctx.font = `bold ${10 * sx}px 'Courier New', monospace`;
           ctx.fillStyle = "#ffd700";
           ctx.fillText(`${p.gold} 🟡`, cx, hpBarY + hpBarH + 12);
-          
+
           // Total income display (what they earned last wave)
           if (p.totalIncome > 0) {
             ctx.font = `bold ${9 * sx}px 'Courier New', monospace`;
@@ -5332,27 +5453,30 @@
       }
       ctx.restore();
 
-      // ===== OPPONENT TOWER MODULE TOOLTIP =====
+
+  // ============================================================================
+  // OPPONENT TOWER MODULE TOOLTIP
+  // ============================================================================
       if (hoveredOpponentTower && hoveredOpponentTower.tower) {
         const t = hoveredOpponentTower.tower;
         const typeInfo = TOWER_TYPES[t.type];
         const modules = t.modules || [];
         const MODULES = window.TOWER_MODULES || {};
-        
+
         // Tooltip dimensions
         const tooltipW = 160;
         const hasModules = modules.length > 0 && modules.some(m => m);
         const moduleCount = modules.filter(m => m).length;
         const tooltipH = 45 + (hasModules ? moduleCount * 22 : 20);
-        
+
         // Position tooltip above the tower
         let tooltipX = hoveredOpponentTower.x - tooltipW / 2;
         let tooltipY = hoveredOpponentTower.y - tooltipH - 25;
-        
+
         // Keep on screen
         tooltipX = Math.max(5, Math.min(canvas.width - tooltipW - 5, tooltipX));
         tooltipY = Math.max(5, tooltipY);
-        
+
         // Background
         ctx.fillStyle = "rgba(10,15,30,0.95)";
         ctx.strokeStyle = hoveredOpponentTower.color || "#7ae0ff";
@@ -5361,25 +5485,25 @@
         ctx.roundRect(tooltipX, tooltipY, tooltipW, tooltipH, 8);
         ctx.fill();
         ctx.stroke();
-        
+
         // Player name and tower type
         ctx.font = "bold 10px 'Courier New', monospace";
         ctx.textAlign = "left";
         ctx.fillStyle = hoveredOpponentTower.color || "#fff";
         ctx.fillText(`${hoveredOpponentTower.playerName}'s`, tooltipX + 8, tooltipY + 14);
-        
+
         ctx.fillStyle = typeInfo?.color || "#fff";
         ctx.font = "bold 11px 'Courier New', monospace";
         const towerName = typeInfo?.name || "Tower";
         const levelText = t.level > 1 ? ` ${"★".repeat(Math.min(t.level - 1, 4))}` : "";
         ctx.fillText(`${towerName}${levelText}`, tooltipX + 8, tooltipY + 28);
-        
+
         // Modules
         if (hasModules) {
           ctx.font = "9px 'Courier New', monospace";
           ctx.fillStyle = "#888";
           ctx.fillText("MODULES:", tooltipX + 8, tooltipY + 42);
-          
+
           let modY = tooltipY + 56;
           for (const modId of modules) {
             if (!modId) continue;
@@ -5396,7 +5520,7 @@
           ctx.fillStyle = "#555";
           ctx.fillText("No modules", tooltipX + 8, tooltipY + 42);
         }
-        
+
         ctx.textAlign = "left";
       }
 
@@ -5404,7 +5528,7 @@
       ctx.fillStyle = "rgba(0,0,0,0.7)";
       ctx.fillRect(0, 0, canvas.width, 50);
       drawNeonText(`WAVE ${wave}`, 20, 25, "#ff0", 18, "left");
-      
+
       // Gravity indicator (shows when > 1.0x) - below wave text
       const gravityMult = lastSnap.gravityMult || 1;
       if (gravityMult > 1.05) {
@@ -5417,21 +5541,21 @@
         ctx.fillStyle = `rgb(${r}, ${g}, 100)`;
         ctx.fillText(`⬇${gravityMult.toFixed(2)}x`, 22, 42);
       }
-      
+
       // Pause button in HUD bar (for non-spectators)
       if (phase === "playing" && !isSpectator) {
         const pauseBtnW = 36;
         const pauseBtnH = 28;
         const pauseBtnX = 115;
         const pauseBtnY = 11;
-        
-        hoveredPauseButton = mouseX >= pauseBtnX && mouseX <= pauseBtnX + pauseBtnW && 
+
+        hoveredPauseButton = mouseX >= pauseBtnX && mouseX <= pauseBtnX + pauseBtnW &&
                              mouseY >= pauseBtnY && mouseY <= pauseBtnY + pauseBtnH;
-        
+
         const isPaused = gamePaused || pauseCountdown > 0;
         const btnColor = isPaused ? "#ff6600" : "#555";
         const btnText = isPaused ? (pauseCountdown > 0 ? `▶${Math.ceil(pauseCountdown)}` : "▶") : "❚❚";
-        
+
         ctx.fillStyle = hoveredPauseButton ? (isPaused ? "rgba(255,102,0,0.3)" : "rgba(100,100,100,0.3)") : "rgba(40,40,60,0.5)";
         ctx.strokeStyle = hoveredPauseButton ? (isPaused ? "#ff6600" : "#888") : btnColor;
         ctx.lineWidth = hoveredPauseButton ? 2 : 1;
@@ -5439,7 +5563,7 @@
         ctx.roundRect(pauseBtnX, pauseBtnY, pauseBtnW, pauseBtnH, 4);
         ctx.fill();
         ctx.stroke();
-        
+
         ctx.font = "bold 12px 'Courier New', monospace";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
@@ -5448,7 +5572,7 @@
         ctx.textBaseline = "alphabetic";
         ctx.textAlign = "left";
       }
-      
+
       // Game modifier indicator (after pause button, on main line)
       let hudNextX = 160; // After pause button
       if (activeGameModifier && activeGameModifier.id !== "standard") {
@@ -5458,7 +5582,7 @@
         ctx.fillText(`${activeGameModifier.icon} ${activeGameModifier.name}`, hudNextX, 25);
         hudNextX += ctx.measureText(`${activeGameModifier.icon} ${activeGameModifier.name}`).width + 15;
       }
-      
+
       // Spectator indicator
       if (isSpectator) {
         ctx.fillStyle = "rgba(255,100,100,0.9)";
@@ -5476,7 +5600,7 @@
         ctx.fillText(`👁 ${spectatorCount}`, canvas.width / 2, 42);
         ctx.textAlign = "left";
       }
-      
+
       const myPlayer = lastSnap.players.find(p => p.id === myId);
       if (myPlayer) {
         // Gold display (positioned after modifier or at base position)
@@ -5493,7 +5617,7 @@
         // Kills further right
         drawNeonText(`${myPlayer.kills} 💀`, goldX + goldWidth + 50, 25, "#f44", 14, "left");
       }
-      
+
       // Latency display (top right, before scoreboard)
       if (latency > 0) {
         ctx.font = "10px 'Courier New', monospace";
@@ -5519,7 +5643,10 @@
       }
       ctx.textAlign = "left";
 
-      // ===== MUSIC PLAYER (Above Stats Button - Bottom Right) =====
+
+  // ============================================================================
+  // MUSIC PLAYER (ABOVE STATS BUTTON - BOTTOM RIGHT)
+  // ============================================================================
       // Only show during gameplay (not lobby or gameover)
       if (musicState.trackName && phase === "playing") {
         const mpW = musicState.expanded ? 220 : 40;
@@ -5527,14 +5654,14 @@
         const mpX = canvas.width - mpW - 12;
         // Position well above stats button (stats btn is at canvas.height - 47)
         const mpY = canvas.height - mpH - 100;
-        
+
         // Store bounds for click detection
         window.musicPlayerBounds = { x: mpX, y: mpY, w: mpW, h: mpH };
-        
+
         // Check hover
-        const isHovering = mouseX >= mpX && mouseX <= mpX + mpW && 
+        const isHovering = mouseX >= mpX && mouseX <= mpX + mpW &&
                            mouseY >= mpY && mouseY <= mpY + mpH;
-        
+
         // Background
         ctx.fillStyle = isHovering ? "rgba(20,30,50,0.95)" : "rgba(10,17,34,0.9)";
         ctx.strokeStyle = "#7ae0ff55";
@@ -5543,11 +5670,11 @@
         ctx.roundRect(mpX, mpY, mpW, mpH, 8);
         ctx.fill();
         ctx.stroke();
-        
+
         if (musicState.expanded) {
           // Expanded view - full controls
           musicPlayerHover = null;
-          
+
           // Track name (scrolling if too long)
           ctx.save();
           ctx.beginPath();
@@ -5559,7 +5686,7 @@
           const displayName = `${trackNum}. ${musicState.trackName.replace('.mp3', '')}`;
           ctx.fillText(displayName, mpX + 8, mpY + 20);
           ctx.restore();
-          
+
           // Check if current player is DAMAGE leader (can control music)
           let isScoreLeader = true;
           let leaderName = "";
@@ -5578,35 +5705,35 @@
             isScoreLeader = myPlayer && leader && myPlayer.id === leader.id;
             leaderName = leader ? leader.name : "";
           }
-          
+
           // Show DJ crown indicator
           ctx.font = "10px sans-serif";
           ctx.fillStyle = isScoreLeader ? "#ffd700" : "#555";
           ctx.textAlign = "right";
           ctx.fillText(isScoreLeader ? "👑 DJ" : `👑 ${leaderName.slice(0,6)}`, mpX + mpW - 30, mpY + 20);
           ctx.textAlign = "left";
-          
+
           // Collapse button (top right)
           const collapseX = mpX + mpW - 28;
           const collapseY = mpY + 8;
-          const collapseHover = mouseX >= collapseX && mouseX <= collapseX + 20 && 
+          const collapseHover = mouseX >= collapseX && mouseX <= collapseX + 20 &&
                                 mouseY >= collapseY && mouseY <= collapseY + 18;
           ctx.fillStyle = collapseHover ? "#7ae0ff" : "#557";
           ctx.font = "14px sans-serif";
           ctx.fillText("▼", collapseX + 4, collapseY + 14);
           if (collapseHover) musicPlayerHover = "collapse";
-          
+
           // Control buttons row
           const btnY = mpY + 32;
           const btnSize = 28;
           const btnSpacing = 6;
           let btnX = mpX + 10;
-          
+
           // Previous button (leader only)
-          const prevHover = mouseX >= btnX && mouseX <= btnX + btnSize && 
+          const prevHover = mouseX >= btnX && mouseX <= btnX + btnSize &&
                             mouseY >= btnY && mouseY <= btnY + btnSize;
           const prevEnabled = isScoreLeader;
-          ctx.fillStyle = !prevEnabled ? "rgba(30,30,40,0.4)" : 
+          ctx.fillStyle = !prevEnabled ? "rgba(30,30,40,0.4)" :
                           (prevHover ? "rgba(122,224,255,0.3)" : "rgba(40,60,100,0.4)");
           ctx.strokeStyle = !prevEnabled ? "#333" : (prevHover ? "#7ae0ff" : "#557");
           ctx.lineWidth = 1;
@@ -5620,7 +5747,7 @@
           ctx.fillText("⏮", btnX + btnSize/2, btnY + btnSize/2 + 5);
           if (prevHover && prevEnabled) musicPlayerHover = "prev";
           btnX += btnSize + btnSpacing;
-          
+
           // Play/Pause (visual only - always playing)
           ctx.fillStyle = "rgba(122,224,255,0.2)";
           ctx.strokeStyle = "#7ae0ff";
@@ -5631,12 +5758,12 @@
           ctx.fillStyle = "#7ae0ff";
           ctx.fillText("▶", btnX + btnSize/2, btnY + btnSize/2 + 5);
           btnX += btnSize + btnSpacing;
-          
+
           // Next button (leader only)
-          const nextHover = mouseX >= btnX && mouseX <= btnX + btnSize && 
+          const nextHover = mouseX >= btnX && mouseX <= btnX + btnSize &&
                             mouseY >= btnY && mouseY <= btnY + btnSize;
           const nextEnabled = isScoreLeader;
-          ctx.fillStyle = !nextEnabled ? "rgba(30,30,40,0.4)" : 
+          ctx.fillStyle = !nextEnabled ? "rgba(30,30,40,0.4)" :
                           (nextHover ? "rgba(122,224,255,0.3)" : "rgba(40,60,100,0.4)");
           ctx.strokeStyle = !nextEnabled ? "#333" : (nextHover ? "#7ae0ff" : "#557");
           ctx.beginPath();
@@ -5647,28 +5774,28 @@
           ctx.fillText("⏭", btnX + btnSize/2, btnY + btnSize/2 + 5);
           if (nextHover && nextEnabled) musicPlayerHover = "next";
           btnX += btnSize + btnSpacing;
-          
+
           // Shuffle button (leader only)
-          const shuffleHover = mouseX >= btnX && mouseX <= btnX + btnSize && 
+          const shuffleHover = mouseX >= btnX && mouseX <= btnX + btnSize &&
                                mouseY >= btnY && mouseY <= btnY + btnSize;
           const shuffleEnabled = isScoreLeader;
-          ctx.fillStyle = !shuffleEnabled ? "rgba(30,30,40,0.4)" : 
-                          (shuffleHover ? "rgba(122,224,255,0.3)" : 
+          ctx.fillStyle = !shuffleEnabled ? "rgba(30,30,40,0.4)" :
+                          (shuffleHover ? "rgba(122,224,255,0.3)" :
                           (musicState.shuffle ? "rgba(122,224,255,0.4)" : "rgba(40,60,100,0.4)"));
-          ctx.strokeStyle = !shuffleEnabled ? "#333" : 
+          ctx.strokeStyle = !shuffleEnabled ? "#333" :
                             (shuffleHover || musicState.shuffle ? "#7ae0ff" : "#557");
           ctx.beginPath();
           ctx.roundRect(btnX, btnY, btnSize, btnSize, 4);
           ctx.fill();
           ctx.stroke();
-          ctx.fillStyle = !shuffleEnabled ? "#444" : 
+          ctx.fillStyle = !shuffleEnabled ? "#444" :
                           (musicState.shuffle ? "#7ae0ff" : (shuffleHover ? "#fff" : "#aaa"));
           ctx.fillText("🔀", btnX + btnSize/2, btnY + btnSize/2 + 5);
           if (shuffleHover && shuffleEnabled) musicPlayerHover = "shuffle";
           btnX += btnSize + btnSpacing;
-          
+
           // Mute button (everyone can use)
-          const muteHover = mouseX >= btnX && mouseX <= btnX + btnSize && 
+          const muteHover = mouseX >= btnX && mouseX <= btnX + btnSize &&
                             mouseY >= btnY && mouseY <= btnY + btnSize;
           ctx.fillStyle = muteHover ? "rgba(122,224,255,0.3)" : "rgba(40,60,100,0.4)";
           ctx.strokeStyle = muteHover ? "#7ae0ff" : "#557";
@@ -5679,36 +5806,36 @@
           ctx.fillStyle = muteHover ? "#fff" : "#aaa";
           ctx.fillText(musicState.muted ? "🔇" : "🔊", btnX + btnSize/2, btnY + btnSize/2 + 5);
           if (muteHover) musicPlayerHover = "mute";
-          
+
           // Volume slider
           const volX = mpX + 10;
           const volY = mpY + 66;
           const volW = mpW - 20;
           const volH = 6;
-          
+
           ctx.fillStyle = "rgba(40,60,100,0.6)";
           ctx.beginPath();
           ctx.roundRect(volX, volY, volW, volH, 3);
           ctx.fill();
-          
+
           const volFillW = volW * musicState.volume;
           ctx.fillStyle = "#7ae0ff";
           ctx.beginPath();
           ctx.roundRect(volX, volY, volFillW, volH, 3);
           ctx.fill();
-          
+
           // Volume knob
           const knobX = volX + volFillW;
           ctx.fillStyle = "#fff";
           ctx.beginPath();
           ctx.arc(knobX, volY + volH/2, 5, 0, Math.PI * 2);
           ctx.fill();
-          
+
           // Check volume slider hover
           if (mouseX >= volX && mouseX <= volX + volW && mouseY >= volY - 5 && mouseY <= volY + volH + 5) {
             musicPlayerHover = "volume";
           }
-          
+
           ctx.textAlign = "left";
         } else {
           // Collapsed view - just music icon
@@ -5718,7 +5845,7 @@
           ctx.textAlign = "center";
           ctx.fillText("🎵", mpX + mpW/2, mpY + mpH/2 + 7);
           ctx.textAlign = "left";
-          
+
           if (isHovering) musicPlayerHover = "expand";
         }
       } else {
@@ -5727,16 +5854,19 @@
         musicPlayerHover = null;
       }
 
-      // ===== DEATH MODS PANEL (For dead players only) =====
+
+  // ============================================================================
+  // DEATH MODS PANEL (FOR DEAD PLAYERS ONLY)
+  // ============================================================================
       if (phase === "playing" && myPlayer && myPlayer.hp <= 0 && !isSpectator) {
         hoveredDeathMod = null;
         const spite = myPlayer.spite || 0;
-        
+
         const panelW = 200;
         const panelH = 280;
         const panelX = 15;
         const panelY = 60;
-        
+
         // Panel background
         const grad = ctx.createLinearGradient(panelX, panelY, panelX, panelY + panelH);
         grad.addColorStop(0, "rgba(40,10,30,0.95)");
@@ -5748,41 +5878,41 @@
         ctx.roundRect(panelX, panelY, panelW, panelH, 10);
         ctx.fill();
         ctx.stroke();
-        
+
         // Title
         ctx.font = "bold 14px 'Courier New', monospace";
         ctx.fillStyle = "#f44";
         ctx.textAlign = "center";
         ctx.fillText("💀 SPITE POWERS 💀", panelX + panelW / 2, panelY + 22);
-        
+
         // Spite currency
         ctx.font = "bold 16px 'Courier New', monospace";
         ctx.fillStyle = "#f88";
         ctx.fillText(`${spite} 💢`, panelX + panelW / 2, panelY + 45);
-        
+
         ctx.font = "9px 'Courier New', monospace";
         ctx.fillStyle = "#888";
         ctx.fillText("+1 per wave while dead", panelX + panelW / 2, panelY + 58);
-        
+
         // Death mod buttons
         const modIds = Object.keys(DEATH_MODS);
         let modY = panelY + 72;
-        
+
         for (const modId of modIds) {
           const mod = DEATH_MODS[modId];
           const canAfford = spite >= mod.cost;
-          
+
           const btnH = 38;
           const btnX = panelX + 8;
           const btnW = panelW - 16;
-          
-          const isHover = mouseX >= btnX && mouseX <= btnX + btnW && 
+
+          const isHover = mouseX >= btnX && mouseX <= btnX + btnW &&
                           mouseY >= modY && mouseY <= modY + btnH;
-          
+
           if (isHover) hoveredDeathMod = modId;
-          
+
           // Button background
-          ctx.fillStyle = !canAfford ? "rgba(30,20,25,0.6)" : 
+          ctx.fillStyle = !canAfford ? "rgba(30,20,25,0.6)" :
                           (isHover ? "rgba(100,40,60,0.7)" : "rgba(60,20,40,0.6)");
           ctx.strokeStyle = !canAfford ? "#333" : (isHover ? "#f66" : "#844");
           ctx.lineWidth = 1;
@@ -5790,18 +5920,18 @@
           ctx.roundRect(btnX, modY, btnW, btnH, 5);
           ctx.fill();
           ctx.stroke();
-          
+
           // Icon and name
           ctx.font = "bold 11px 'Courier New', monospace";
           ctx.textAlign = "left";
           ctx.fillStyle = !canAfford ? "#555" : (isHover ? "#fff" : "#ccc");
           ctx.fillText(`${mod.icon} ${mod.name}`, btnX + 6, modY + 14);
-          
+
           // Cost
           ctx.textAlign = "right";
           ctx.fillStyle = !canAfford ? "#622" : (isHover ? "#f88" : "#f66");
           ctx.fillText(`${mod.cost}💢`, btnX + btnW - 6, modY + 14);
-          
+
           // Description
           ctx.font = "9px 'Courier New', monospace";
           ctx.textAlign = "left";
@@ -5810,17 +5940,20 @@
           if (mod.desc.length > 30) {
             ctx.fillText(mod.desc.slice(30), btnX + 6, modY + 36);
           }
-          
+
           modY += btnH + 4;
         }
-        
+
         ctx.textAlign = "left";
       }
 
-      // ===== UNIFIED RIGHT PANEL (Attacks + DPS Meters) =====
+
+  // ============================================================================
+  // UNIFIED RIGHT PANEL (ATTACKS + DPS METERS)
+  // ============================================================================
       if (phase === "playing" && lastSnap && lastSnap.players.length > 1) {
         hoveredAttack = null;
-        const panelW = 220; // 25% bigger (was 175)
+        const panelW = 220; // 25% bigger
         // Position panel in the dedicated right column (after game area)
         const { rightPanelReserve } = getScale();
         const panelX = canvas.width - rightPanelReserve + 10; // Start at right reserved area with margin
@@ -5841,14 +5974,14 @@
           ctx.roundRect(x, y, w, h, 12);
           ctx.fill();
           ctx.stroke();
-          
+
           // Title
           if (title) {
             ctx.font = "bold 14px 'Orbitron', sans-serif"; // Bigger font
             ctx.fillStyle = titleColor;
             ctx.textAlign = "center";
             ctx.fillText(title, x + w / 2, y + 20);
-            
+
             // Separator line
             ctx.strokeStyle = hexToRgba(borderColor, 0.4);
             ctx.lineWidth = 1;
@@ -5865,7 +5998,7 @@
           const barWidth = maxDamage > 0 ? (damage / maxDamage) * (panelW - 55) : 0;
           const percent = totalDamage > 0 ? ((damage / totalDamage) * 100).toFixed(0) : "0";
           const isMe = p.id === myId;
-          
+
           // Highlight row for current player
           if (isMe) {
             ctx.fillStyle = "rgba(122,224,255,0.08)";
@@ -5873,7 +6006,7 @@
             ctx.roundRect(panelX + 4, rowY - 2, panelW - 8, 32, 5);
             ctx.fill();
           }
-          
+
           // Player color indicator
           ctx.fillStyle = color.main;
           ctx.shadowColor = color.main;
@@ -5882,7 +6015,7 @@
           ctx.roundRect(panelX + 10, rowY + 2, 5, 24, 2);
           ctx.fill();
           ctx.shadowBlur = 0;
-          
+
           // Rank / Crown
           ctx.font = "bold 12px sans-serif";
           ctx.textAlign = "left";
@@ -5890,30 +6023,30 @@
             ctx.fillStyle = "#ffd700";
             ctx.fillText("👑", panelX + 20, rowY + 18);
           }
-          
+
           // Player name
           ctx.font = "bold 11px 'Courier New', monospace";
           ctx.fillStyle = isLeader ? "#ffd700" : "#e8f0ff";
           const displayName = p.name.length > 10 ? p.name.substring(0, 9) + "…" : p.name;
           ctx.fillText(displayName, panelX + (isLeader ? 36 : 22), rowY + 12);
-          
+
           // Damage amount
           ctx.font = "bold 11px 'Courier New', monospace";
           ctx.textAlign = "right";
           ctx.fillStyle = "#91ff7a";
           ctx.fillText(Math.round(damage).toLocaleString(), panelX + panelW - 38, rowY + 12);
-          
+
           // Percentage
           ctx.font = "bold 10px 'Courier New', monospace";
           ctx.fillStyle = isLeader ? "#ffd700" : "#7ae0ff";
           ctx.fillText(percent + "%", panelX + panelW - 10, rowY + 12);
-          
+
           // Damage bar background
           ctx.fillStyle = "rgba(255,255,255,0.08)";
           ctx.beginPath();
           ctx.roundRect(panelX + 22, rowY + 18, panelW - 55, 7, 3);
           ctx.fill();
-          
+
           // Damage bar fill
           if (barWidth > 2) {
             const barGrad = ctx.createLinearGradient(panelX + 22, 0, panelX + 22 + barWidth, 0);
@@ -5924,7 +6057,7 @@
             ctx.beginPath();
             ctx.roundRect(panelX + 22, rowY + 18, barWidth, 7, 3);
             ctx.fill();
-            
+
             // Glow for leader
             if (isLeader) {
               ctx.shadowColor = color.main;
@@ -5932,42 +6065,45 @@
               ctx.fill();
               ctx.shadowBlur = 0;
             }
-            
+
             // End pip
             ctx.fillStyle = "rgba(255,255,255,0.9)";
             ctx.beginPath();
             ctx.arc(panelX + 22 + barWidth - 1, rowY + 21.5, 2.5, 0, Math.PI * 2);
             ctx.fill();
           }
-          
+
           ctx.textAlign = "left";
         }
 
-        // ===== ATTACK SPAWN PANEL =====
+
+  // ============================================================================
+  // ATTACK SPAWN PANEL
+  // ============================================================================
         // GAME MODIFIER: Pacifist Protocol disables attacks
         const attacksDisabled = activeGameModifier && activeGameModifier.id === "noMobs";
         if (isAlive && !attacksDisabled) {
           const attackPanelH = 410; // Increased for gold reserve buttons
           drawSectionPanel(panelX, currentY, panelW, attackPanelH, "rgba(255,68,68,0.5)", "⚔️ SEND ATTACKS", "#ff6666");
-          
+
           // Quantity mode buttons (1x, 10x, MAX)
           const qBtnW = (panelW - 30) / 3;
           const qBtnH = 26;
           const qBtnY = currentY + 36;
           hoveredQuantityBtn = null;
-          
+
           const quantityModes = [1, 10, "max"];
           const quantityLabels = ["1x", "10x", "MAX"];
-          
+
           quantityModes.forEach((mode, i) => {
             const qBtnX = panelX + 8 + i * (qBtnW + 4);
             const isSelected = attackQuantityMode === mode;
             const isHovered = mouseX >= qBtnX && mouseX <= qBtnX + qBtnW && mouseY >= qBtnY && mouseY <= qBtnY + qBtnH;
-            
+
             if (isHovered) hoveredQuantityBtn = mode;
-            
+
             // Button background
-            ctx.fillStyle = isSelected ? "rgba(255,100,100,0.4)" : 
+            ctx.fillStyle = isSelected ? "rgba(255,100,100,0.4)" :
                             isHovered ? "rgba(255,100,100,0.25)" : "rgba(40,40,60,0.6)";
             ctx.strokeStyle = isSelected ? "#ff6666" : isHovered ? "#ff8888" : "#444";
             ctx.lineWidth = isSelected ? 2 : 1;
@@ -5975,33 +6111,33 @@
             ctx.roundRect(qBtnX, qBtnY, qBtnW, qBtnH, 5);
             ctx.fill();
             ctx.stroke();
-            
+
             // Label
             ctx.font = "bold 11px 'Courier New', monospace";
             ctx.textAlign = "center";
             ctx.fillStyle = isSelected ? "#fff" : "#999";
             ctx.fillText(quantityLabels[i], qBtnX + qBtnW / 2, qBtnY + 17);
           });
-          
+
           // Gold Reserve buttons (No Limit, +1K, +2K)
           const rBtnW = (panelW - 30) / 3;
           const rBtnH = 26;
           const rBtnY = qBtnY + qBtnH + 6;
           hoveredReserveBtn = null;
-          
+
           const reserveModes = [0, 1000, 2000];
           const reserveLabels = ["NO LIMIT", "+1K", "+2K"];
           const reserveColors = ["#888", "#ffd700", "#ffd700"];
-          
+
           reserveModes.forEach((mode, i) => {
             const rBtnX = panelX + 8 + i * (rBtnW + 4);
             const isSelected = goldReserve === mode;
             const isHovered = mouseX >= rBtnX && mouseX <= rBtnX + rBtnW && mouseY >= rBtnY && mouseY <= rBtnY + rBtnH;
-            
+
             if (isHovered) hoveredReserveBtn = mode;
-            
+
             // Button background - gold tint for reserve buttons
-            ctx.fillStyle = isSelected ? (mode === 0 ? "rgba(100,100,100,0.4)" : "rgba(255,200,50,0.3)") : 
+            ctx.fillStyle = isSelected ? (mode === 0 ? "rgba(100,100,100,0.4)" : "rgba(255,200,50,0.3)") :
                             isHovered ? (mode === 0 ? "rgba(100,100,100,0.25)" : "rgba(255,200,50,0.2)") : "rgba(40,40,60,0.6)";
             ctx.strokeStyle = isSelected ? reserveColors[i] : isHovered ? "#aa8" : "#444";
             ctx.lineWidth = isSelected ? 2 : 1;
@@ -6009,7 +6145,7 @@
             ctx.roundRect(rBtnX, rBtnY, rBtnW, rBtnH, 5);
             ctx.fill();
             ctx.stroke();
-            
+
             // Label
             ctx.font = "bold 9px 'Courier New', monospace";
             ctx.textAlign = "center";
@@ -6019,10 +6155,10 @@
 
           // Attack buttons
           const attacks = Object.entries(ATTACK_TYPES);
-          const btnH = 45; // 25% bigger (was 36)
+          const btnH = 45; // 25% bigger
           const btnGap = 4;
           const startY = rBtnY + rBtnH + 10; // Start after reserve buttons
-          
+
           // Calculate spendable gold (respecting reserve)
           const spendableGold = Math.max(0, myGold - goldReserve);
 
@@ -6030,12 +6166,12 @@
             const btnY = startY + i * (btnH + btnGap);
             const btnX = panelX + 8;
             const btnW = panelW - 16;
-            
+
             // Calculate cost based on quantity mode AND gold reserve
             let displayCost = atk.cost;
             let canAfford = spendableGold >= atk.cost;
             let affordCount = Math.floor(spendableGold / atk.cost);
-            
+
             if (attackQuantityMode === 10) {
               displayCost = atk.cost * Math.min(10, affordCount);
               canAfford = affordCount >= 1;
@@ -6043,15 +6179,15 @@
               displayCost = atk.cost * affordCount;
               canAfford = affordCount >= 1;
             }
-            
+
             const isHovered = mouseX >= btnX && mouseX <= btnX + btnW && mouseY >= btnY && mouseY <= btnY + btnH;
 
             if (isHovered && canAfford) hoveredAttack = key;
 
             // Button background
-            ctx.fillStyle = isHovered && canAfford ? hexToRgba(atk.color, 0.35) : 
+            ctx.fillStyle = isHovered && canAfford ? hexToRgba(atk.color, 0.35) :
                             canAfford ? hexToRgba(atk.color, 0.12) : "rgba(20,20,30,0.6)";
-            ctx.strokeStyle = isHovered && canAfford ? atk.color : 
+            ctx.strokeStyle = isHovered && canAfford ? atk.color :
                               canAfford ? hexToRgba(atk.color, 0.4) : "#2a2a3a";
             ctx.lineWidth = isHovered && canAfford ? 2 : 1;
             ctx.beginPath();
@@ -6094,7 +6230,7 @@
           // Show disabled message for Pacifist Protocol
           const disabledH = 80;
           drawSectionPanel(panelX, currentY, panelW, disabledH, "rgba(100,100,100,0.3)", "⚔️ ATTACKS", "#666");
-          
+
           ctx.font = "14px 'Courier New', monospace";
           ctx.textAlign = "center";
           ctx.fillStyle = "#888";
@@ -6102,12 +6238,15 @@
           ctx.font = "11px 'Courier New', monospace";
           ctx.fillStyle = "#666";
           ctx.fillText("Pacifist Protocol active", panelX + panelW / 2, currentY + 62);
-          
+
           ctx.textAlign = "left";
           currentY += disabledH + 10;
         }
 
-        // ===== TOTAL RUN DPS PANEL =====
+
+  // ============================================================================
+  // TOTAL RUN DPS PANEL
+  // ============================================================================
         // Count active players without creating new array
         let playerCount = 0;
         let totalDamage = 0;
@@ -6120,10 +6259,10 @@
             if (dmg > maxDamage) maxDamage = dmg;
           }
         }
-        
+
         const totalDmgPanelH = 55 + playerCount * 38;
         drawSectionPanel(panelX, currentY, panelW, totalDmgPanelH, "rgba(145,255,122,0.4)", "📊 TOTAL DAMAGE", "#91ff7a");
-        
+
         // Total damage number (centered, big)
         ctx.font = "bold 16px 'Orbitron', sans-serif";
         ctx.textAlign = "center";
@@ -6132,10 +6271,10 @@
         ctx.shadowBlur = 12;
         ctx.fillText(Math.round(totalDamage).toLocaleString(), panelX + panelW / 2, currentY + 45);
         ctx.shadowBlur = 0;
-        
+
         // Sort players by total damage (reuse sortedPlayers array)
         const sortedByTotal = lastSnap.players.slice().sort((a, b) => (b.damageDealt || 0) - (a.damageDealt || 0));
-        
+
         let rowIndex = 0;
         for (const p of sortedByTotal) {
           if (p.slot < 0) continue;
@@ -6143,10 +6282,13 @@
           drawPlayerDamageRow(p, rowY, p.damageDealt || 0, maxDamage, totalDamage, rowIndex === 0, panelX, panelW);
           rowIndex++;
         }
-        
+
         currentY += totalDmgPanelH + 10;
 
-        // ===== CURRENT WAVE DPS PANEL =====
+
+  // ============================================================================
+  // CURRENT WAVE DPS PANEL
+  // ============================================================================
         // Calculate wave totals
         let totalWaveDamage = 0;
         let maxWaveDamage = 1;
@@ -6157,10 +6299,10 @@
             if (dmg > maxWaveDamage) maxWaveDamage = dmg;
           }
         }
-        
+
         const waveDmgPanelH = 55 + playerCount * 38;
         drawSectionPanel(panelX, currentY, panelW, waveDmgPanelH, "rgba(122,224,255,0.4)", "🌊 WAVE " + wave + " DAMAGE", "#7ae0ff");
-        
+
         // Wave damage number (centered, big)
         ctx.font = "bold 16px 'Orbitron', sans-serif";
         ctx.textAlign = "center";
@@ -6169,10 +6311,10 @@
         ctx.shadowBlur = 12;
         ctx.fillText(Math.round(totalWaveDamage).toLocaleString(), panelX + panelW / 2, currentY + 45);
         ctx.shadowBlur = 0;
-        
+
         // Sort players by wave damage
         const sortedByWave = lastSnap.players.slice().sort((a, b) => (b.waveDamage || 0) - (a.waveDamage || 0));
-        
+
         rowIndex = 0;
         for (const p of sortedByWave) {
           if (p.slot < 0) continue;
@@ -6180,40 +6322,43 @@
           drawPlayerDamageRow(p, rowY, p.waveDamage || 0, maxWaveDamage, totalWaveDamage, rowIndex === 0, panelX, panelW);
           rowIndex++;
         }
-        
+
         ctx.textAlign = "left";
       }
 
-// ===== BUY UPGRADE BUTTON (Always visible in playing phase) =====
+
+  // ============================================================================
+  // BUY UPGRADE BUTTON (ALWAYS VISIBLE IN PLAYING PHASE)
+  // ============================================================================
       if (phase === "playing" && myPlayer) {
         const canAffordBuy = myPlayer.gold >= buyUpgradeCost;
-        
+
         // Logic to dodge the Attack Panel - use reserved column space
         const buyW = 140;
         const buyH = 40;
-        
+
         // Use the reserved right panel space from getScale
         const { rightPanelReserve } = getScale();
         const isPvP = lastSnap && lastSnap.players && lastSnap.players.length > 1;
-        
+
         // Position: Just to the left of the reserved right panel area
         const buyX = isPvP ? canvas.width - rightPanelReserve - buyW - 10 : canvas.width - buyW - 20;
         const buyY = 60; // Below the score/wave HUD
 
-        const isBuyHovered = mouseX >= buyX && mouseX <= buyX + buyW && 
+        const isBuyHovered = mouseX >= buyX && mouseX <= buyX + buyW &&
                              mouseY >= buyY && mouseY <= buyY + buyH;
-        
+
         // Store this for the click handler
-        hoveredBuyUpgrade = isBuyHovered; 
+        hoveredBuyUpgrade = isBuyHovered;
         window.buyUpgradeBtnBounds = { x: buyX, y: buyY, w: buyW, h: buyH };
 
         // Draw Button Body
-        ctx.fillStyle = isBuyHovered && canAffordBuy ? "rgba(100,255,150,0.4)" : 
+        ctx.fillStyle = isBuyHovered && canAffordBuy ? "rgba(100,255,150,0.4)" :
                         canAffordBuy ? "rgba(60,200,120,0.25)" : "rgba(40,40,60,0.4)";
-        ctx.strokeStyle = isBuyHovered && canAffordBuy ? "#7affaa" : 
+        ctx.strokeStyle = isBuyHovered && canAffordBuy ? "#7affaa" :
                           canAffordBuy ? "rgba(122,255,170,0.5)" : "#444";
         ctx.lineWidth = isBuyHovered && canAffordBuy ? 2 : 1;
-        
+
         ctx.beginPath();
         ctx.roundRect(buyX, buyY, buyW, buyH, 6);
         ctx.fill();
@@ -6223,36 +6368,39 @@
         ctx.font = "bold 12px 'Courier New', monospace";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        
+
         ctx.fillStyle = canAffordBuy ? "#7affaa" : "#555";
         ctx.fillText(`BUY UPGRADE (${buyUpgradeCost}g)`, buyX + buyW / 2, buyY + buyH / 2);
-        
+
         // Reset text alignment defaults
-        ctx.textAlign = "left"; 
+        ctx.textAlign = "left";
         ctx.textBaseline = "alphabetic";
       }
-      
-      // ===== INVENTORY PANEL (Module Cards) - Horizontal bar to the right of chat button =====
+
+
+  // ============================================================================
+  // INVENTORY PANEL (MODULE CARDS) - HORIZONTAL BAR TO THE RIGHT OF CHAT BUTTON
+  // ============================================================================
       // Clear inventory bounds at start
       window.invBounds = [];
-      
+
       if (phase === "playing" && myPlayer && myPlayer.inventory && myPlayer.inventory.length > 0) {
         const MODULES = window.TOWER_MODULES || {};
         const inv = myPlayer.inventory;
-        
+
         // Original card size, horizontal layout to the right of chat button
         const cardSize = 36;
         const cardGap = 6;
-        
+
         // Position: to the right of chat button (chat button is at x=10, size=44)
         const chatBtnRight = 10 + 44 + 10; // chat X + chat width + gap
         const invPanelX = chatBtnRight;
         const invPanelY = canvas.height - cardSize - 24; // Align with chat button vertically
-        
+
         // Panel width based on number of items (horizontal strip)
         const invPanelW = 12 + inv.length * (cardSize + cardGap);
         const invPanelH = cardSize + 12;
-        
+
         // Semi-transparent panel background
         ctx.fillStyle = selectedInventoryIndex !== -1 ? "rgba(0,40,0,0.85)" : "rgba(10,10,25,0.8)";
         ctx.strokeStyle = selectedInventoryIndex !== -1 ? "#00ff00" : "rgba(255,215,0,0.4)";
@@ -6261,25 +6409,25 @@
         ctx.roundRect(invPanelX, invPanelY, invPanelW, invPanelH, 6);
         ctx.fill();
         ctx.stroke();
-        
+
         // Module cards - horizontal row
         const startX = invPanelX + 6;
         const startY = invPanelY + 6;
-        
+
         for (let i = 0; i < inv.length; i++) {
           const moduleId = inv[i];
           const mod = MODULES[moduleId];
           if (!mod) continue;
-          
+
           const cardX = startX + i * (cardSize + cardGap);
           const cardY = startY;
-          
+
           const isHovered = mouseX >= cardX && mouseX <= cardX + cardSize && mouseY >= cardY && mouseY <= cardY + cardSize;
           const isSelected = selectedInventoryIndex === i;
-          
+
           // Store bounds for click detection
           window.invBounds[i] = { x: cardX, y: cardY, w: cardSize, h: cardSize };
-          
+
           // Card background - highlight if selected
           if (isSelected) {
             ctx.fillStyle = hexToRgba("#00ff00", 0.7);
@@ -6298,29 +6446,29 @@
           ctx.fill();
           ctx.stroke();
           ctx.shadowBlur = 0;
-          
+
           // Icon (original size)
           ctx.font = "20px sans-serif";
           ctx.textAlign = "center";
           ctx.fillStyle = "#fff";
           ctx.fillText(mod.icon, cardX + cardSize / 2, cardY + cardSize / 2 + 6);
-          
+
           // Store for hover tooltip (but not for click - that uses invBounds now)
           if (isHovered && !isSelected) {
             selectedInventoryModule = { index: i, moduleId };
-            
+
             // Detailed tooltip panel - position ABOVE the card since we're at bottom of screen
             const tooltipW = 220;
             const tooltipH = 100;
             let tooltipX = cardX;
             let tooltipY = cardY - tooltipH - 10; // Above the card
-            
+
             // Keep tooltip on screen horizontally
             if (tooltipX + tooltipW > canvas.width - 10) {
               tooltipX = canvas.width - tooltipW - 10;
             }
             if (tooltipX < 10) tooltipX = 10;
-            
+
             // Tooltip background
             ctx.fillStyle = "rgba(5,5,20,0.97)";
             ctx.strokeStyle = mod.color;
@@ -6332,13 +6480,13 @@
             ctx.fill();
             ctx.stroke();
             ctx.shadowBlur = 0;
-            
+
             // Module name with icon
             ctx.font = "bold 14px 'Courier New', monospace";
             ctx.fillStyle = mod.color;
             ctx.textAlign = "left";
             ctx.fillText(`${mod.icon} ${mod.name}`, tooltipX + 10, tooltipY + 22);
-            
+
             // Horizontal divider
             ctx.strokeStyle = "rgba(255,255,255,0.2)";
             ctx.lineWidth = 1;
@@ -6346,7 +6494,7 @@
             ctx.moveTo(tooltipX + 10, tooltipY + 32);
             ctx.lineTo(tooltipX + tooltipW - 10, tooltipY + 32);
             ctx.stroke();
-            
+
             // Description text (word-wrapped)
             ctx.font = "12px 'Courier New', monospace";
             ctx.fillStyle = "#ddd";
@@ -6370,7 +6518,7 @@
             if (line && lineY <= tooltipY + tooltipH - 15) {
               ctx.fillText(line, tooltipX + 10, lineY);
             }
-            
+
             // Usage hint at bottom
             ctx.font = "bold 10px 'Courier New', monospace";
             ctx.fillStyle = "#888";
@@ -6378,50 +6526,53 @@
             ctx.fillText("Click to select, then click tower", tooltipX + tooltipW / 2, tooltipY + tooltipH - 8);
           }
         }
-        
+
         ctx.textAlign = "left";
-        
+
         // No hint text needed - compact layout saves space
       }
-      
-      // ===== TOWER MODULE SLOT POPUPS (when module selected) =====
+
+
+  // ============================================================================
+  // TOWER MODULE SLOT POPUPS (WHEN MODULE SELECTED)
+  // ============================================================================
       // Store slot bounds for click detection
       window.moduleSlotPopups = [];
-      
+
       if (phase === "playing" && selectedInventoryIndex !== -1 && myPlayer && !buildMenuOpen) {
         ctx.save();
         const { sx, sy, offsetX, offsetY } = getScale();
         const MODULES = window.TOWER_MODULES || {};
-        
+
         // Calculate tower positions (same as buildMenuOpen logic)
         const segX0 = myPlayer.slot * world.segmentWidth;
         const cx = (segX0 + world.segmentWidth / 2) * sx + offsetX;
         const cy = 560 * sy + offsetY;
         const towerOffsets = [-110, -50, 50, 110];
-        
+
         // Get the selected module info
         const selectedModuleId = myPlayer.inventory[selectedInventoryIndex];
         const selectedMod = MODULES[selectedModuleId];
-        
+
         // Check all 4 tower slots
         for (let tIdx = 0; tIdx < 4; tIdx++) {
           const tower = myPlayer.towers[tIdx];
-          
+
           if (tower && tower.modules) {
             // Check if tower has an empty slot
             const emptySlots = tower.modules.map((m, i) => m === null ? i : -1).filter(i => i !== -1);
-            
+
             if (emptySlots.length > 0) {
               // Calculate screen position
               const towerX = cx + towerOffsets[tIdx] * sx;
               const towerY = cy - 18 * sy;
-              
+
               // Draw mini popup above tower
               const popupW = 100;
               const popupH = 70;
               const popupX = towerX - popupW / 2;
               const popupY = towerY - popupH - 35;
-              
+
               // Popup background
               ctx.fillStyle = "rgba(10,20,30,0.95)";
               ctx.strokeStyle = "#00ff00";
@@ -6433,29 +6584,29 @@
               ctx.fill();
               ctx.stroke();
               ctx.shadowBlur = 0;
-              
+
               // Tower name
               const towerType = TOWER_TYPES[tower.type];
               ctx.font = "bold 9px 'Courier New', monospace";
               ctx.textAlign = "center";
               ctx.fillStyle = towerType?.color || "#fff";
               ctx.fillText(towerType?.name || "Tower", popupX + popupW / 2, popupY + 12);
-              
+
               // Module slots (3 slots)
               const slotSize = 26;
               const slotGap = 6;
               const totalSlotW = 3 * slotSize + 2 * slotGap;
               const slotStartX = popupX + (popupW - totalSlotW) / 2;
               const slotY = popupY + 20;
-              
+
               for (let i = 0; i < 3; i++) {
                 const slotX = slotStartX + i * (slotSize + slotGap);
                 const moduleId = tower.modules[i];
                 const mod = moduleId ? MODULES[moduleId] : null;
                 const isEmpty = mod === null;
-                
+
                 const isSlotHovered = mouseX >= slotX && mouseX <= slotX + slotSize && mouseY >= slotY && mouseY <= slotY + slotSize;
-                
+
                 // Slot background - highlight empty slots
                 if (isEmpty) {
                   const pulse = Math.sin(Date.now() / 200) * 0.2 + 0.4;
@@ -6471,21 +6622,21 @@
                 ctx.roundRect(slotX, slotY, slotSize, slotSize, 4);
                 ctx.fill();
                 ctx.stroke();
-                
+
                 if (mod) {
                   // Module icon
                   ctx.font = "14px sans-serif";
                   ctx.fillStyle = "#fff";
                   ctx.textAlign = "center";
                   ctx.fillText(mod.icon, slotX + slotSize / 2, slotY + slotSize / 2 + 4);
-                  
+
                   // Tooltip for slotted module on hover
                   if (isSlotHovered) {
                     const tooltipW = 180;
                     const tooltipH = 80;
                     let tooltipX = slotX + slotSize + 10;
                     let tooltipY = slotY - 20;
-                    
+
                     // Keep tooltip on screen
                     if (tooltipX + tooltipW > canvas.width - 10) {
                       tooltipX = slotX - tooltipW - 10;
@@ -6494,7 +6645,7 @@
                       tooltipY = canvas.height - tooltipH - 10;
                     }
                     if (tooltipY < 10) tooltipY = 10;
-                    
+
                     // Tooltip background
                     ctx.fillStyle = "rgba(5,5,20,0.97)";
                     ctx.strokeStyle = mod.color;
@@ -6506,13 +6657,13 @@
                     ctx.fill();
                     ctx.stroke();
                     ctx.shadowBlur = 0;
-                    
+
                     // Module name
                     ctx.font = "bold 12px 'Courier New', monospace";
                     ctx.fillStyle = mod.color;
                     ctx.textAlign = "left";
                     ctx.fillText(`${mod.icon} ${mod.name}`, tooltipX + 8, tooltipY + 18);
-                    
+
                     // Description
                     ctx.font = "10px 'Courier New', monospace";
                     ctx.fillStyle = "#ddd";
@@ -6552,7 +6703,7 @@
                     ctx.fillText("+", slotX + slotSize / 2, slotY + slotSize / 2 + 4);
                   }
                 }
-                
+
                 // Store empty slot bounds for click detection
                 if (isEmpty) {
                   window.moduleSlotPopups.push({
@@ -6561,13 +6712,13 @@
                   });
                 }
               }
-              
+
               // "Click slot" hint
               ctx.font = "bold 8px 'Courier New', monospace";
               ctx.fillStyle = "#0f0";
               ctx.textAlign = "center";
               ctx.fillText("CLICK EMPTY SLOT", popupX + popupW / 2, popupY + popupH - 6);
-              
+
               // Draw arrow pointing to tower
               ctx.fillStyle = "#00ff00";
               ctx.beginPath();
@@ -6581,17 +6732,20 @@
         }
         ctx.restore();
       }
-      
-      // ===== STATS PANEL BUTTON & PANEL =====
+
+
+  // ============================================================================
+  // STATS PANEL BUTTON & PANEL
+  // ============================================================================
       if (phase === "playing" && myPlayer) {
         const btnW = 90;
         const btnH = 32;
         const btnX = canvas.width - btnW - 15;
         const btnY = canvas.height - btnH - 15;
-        
+
         // Check if hovering stats button
         hoveredStatsBtn = mouseX >= btnX && mouseX <= btnX + btnW && mouseY >= btnY && mouseY <= btnY + btnH;
-        
+
         // Stats button
         ctx.fillStyle = hoveredStatsBtn ? "rgba(100,180,255,0.4)" : statsPanelOpen ? "rgba(80,150,220,0.35)" : "rgba(40,60,100,0.6)";
         ctx.strokeStyle = hoveredStatsBtn ? "#7ae0ff" : statsPanelOpen ? "#5ac8ff" : "rgba(122,224,255,0.4)";
@@ -6600,12 +6754,12 @@
         ctx.roundRect(btnX, btnY, btnW, btnH, 6);
         ctx.fill();
         ctx.stroke();
-        
+
         ctx.font = "bold 12px 'Courier New', monospace";
         ctx.textAlign = "center";
         ctx.fillStyle = hoveredStatsBtn || statsPanelOpen ? "#fff" : "#aaa";
         ctx.fillText("📊 STATS", btnX + btnW / 2, btnY + 21);
-        
+
         // Stats panel (shows when open)
         if (statsPanelOpen) {
           const u = myPlayer.upgrades || {};
@@ -6613,7 +6767,7 @@
           const panelH = 400; // Taller to fit quality option
           const panelX = canvas.width - panelW - 15;
           const panelY = btnY - panelH - 10;
-          
+
           // Panel background
           const grad = ctx.createLinearGradient(panelX, panelY, panelX, panelY + panelH);
           grad.addColorStop(0, "rgba(10,17,40,0.95)");
@@ -6625,13 +6779,13 @@
           ctx.roundRect(panelX, panelY, panelW, panelH, 10);
           ctx.fill();
           ctx.stroke();
-          
+
           // Title
           ctx.font = "bold 14px 'Orbitron', sans-serif";
           ctx.fillStyle = "#7ae0ff";
           ctx.textAlign = "center";
           ctx.fillText("📊 YOUR STATS", panelX + panelW / 2, panelY + 22);
-          
+
           // Separator
           ctx.strokeStyle = "rgba(122,224,255,0.3)";
           ctx.lineWidth = 1;
@@ -6639,13 +6793,13 @@
           ctx.moveTo(panelX + 10, panelY + 32);
           ctx.lineTo(panelX + panelW - 10, panelY + 32);
           ctx.stroke();
-          
+
           // Stats list
           ctx.font = "11px 'Courier New', monospace";
           ctx.textAlign = "left";
           let statY = panelY + 52;
           const lineH = 20;
-          
+
           const stats = [
             { label: "Base Damage", value: `+${(u.damageAdd || 0).toFixed(1)}`, color: "#ff6666" },
             { label: "Fire Rate", value: `${((u.fireRateMult || 1) * 100).toFixed(0)}%`, color: "#ffaa00" },
@@ -6660,7 +6814,7 @@
             { label: "Grav Power", value: `${u.slowfield || 0}`, color: "#00ffff" },
             { label: "Gold Bonus", value: `+${((u.goldBonus || 0) * 100).toFixed(0)}%`, color: "#ffd700" },
           ];
-          
+
           stats.forEach((stat, i) => {
             // Label
             ctx.fillStyle = "#aaa";
@@ -6671,32 +6825,32 @@
             ctx.fillText(stat.value, panelX + panelW - 15, statY + i * lineH);
             ctx.textAlign = "left";
           });
-          
+
           // Options section
           const optionsY = statY + stats.length * lineH + 10;
-          
+
           // Separator
           ctx.strokeStyle = "rgba(122,224,255,0.3)";
           ctx.beginPath();
           ctx.moveTo(panelX + 10, optionsY);
           ctx.lineTo(panelX + panelW - 10, optionsY);
           ctx.stroke();
-          
+
           ctx.font = "bold 11px 'Orbitron', sans-serif";
           ctx.fillStyle = "#7ae0ff";
           ctx.textAlign = "center";
           ctx.fillText("⚙️ OPTIONS", panelX + panelW / 2, optionsY + 18);
-          
+
           // Damage numbers toggle button
           const toggleY = optionsY + 28;
           const toggleW = panelW - 30;
           const toggleH = 28;
           const toggleX = panelX + 15;
-          
-          const isHoveringDmgToggle = mouseX >= toggleX && mouseX <= toggleX + toggleW && 
+
+          const isHoveringDmgToggle = mouseX >= toggleX && mouseX <= toggleX + toggleW &&
                                        mouseY >= toggleY && mouseY <= toggleY + toggleH;
           window.dmgToggleBounds = { x: toggleX, y: toggleY, w: toggleW, h: toggleH };
-          
+
           ctx.fillStyle = isHoveringDmgToggle ? "rgba(100,180,255,0.3)" : "rgba(40,60,100,0.4)";
           ctx.strokeStyle = isHoveringDmgToggle ? "#7ae0ff" : "rgba(122,224,255,0.3)";
           ctx.lineWidth = 1;
@@ -6704,17 +6858,17 @@
           ctx.roundRect(toggleX, toggleY, toggleW, toggleH, 5);
           ctx.fill();
           ctx.stroke();
-          
+
           ctx.font = "11px 'Courier New', monospace";
           ctx.textAlign = "left";
           ctx.fillStyle = "#ccc";
           ctx.fillText("Damage Numbers:", toggleX + 8, toggleY + 18);
-          
+
           ctx.textAlign = "right";
           ctx.fillStyle = showDamageNumbers ? "#66ff66" : "#ff6666";
           ctx.fillText(showDamageNumbers ? "ON" : "OFF", toggleX + toggleW - 8, toggleY + 18);
         }
-        
+
         ctx.textAlign = "left";
       }
 
@@ -6730,33 +6884,36 @@
         ctx.fillText(`${atkDef?.icon || "?"} ${atkDef?.name || "?"} QUEUED!${targetText}`, canvas.width / 2, canvas.height - 40);
       }
 
-      // ===== INCOMING ATTACK ALERTS (POPUP & SLIDE) =====
+
+  // ============================================================================
+  // INCOMING ATTACK ALERTS (POPUP & SLIDE)
+  // ============================================================================
       const currentTime = Date.now();
-      
+
       // CRASH FIX: Get scale object safely without redeclaring 'offsetX'
       const uiScale = getScale();
-      const uS = uiScale.sx; 
+      const uS = uiScale.sx;
       const uX = uiScale.offsetX;
       const uY = uiScale.offsetY;
 
       // Target Slot: Default to 1.5 (center) if spectating
-      const targetSlot = (mySlot !== undefined && mySlot >= 0) ? mySlot : 1.5; 
-      
+      const targetSlot = (mySlot !== undefined && mySlot >= 0) ? mySlot : 1.5;
+
       // DOCK DESTINATION: Left side of lane + padding
       const laneX = (targetSlot * world.segmentWidth) * uS + uX;
-      const dockX = laneX + (40 * uS); 
-      // UPDATED: Higher up (was 100, now 60)
-      const dockY = 60 * uS + uY; 
+      const dockX = laneX + (40 * uS);
+      // UPDATED: Higher up
+      const dockY = 60 * uS + uY;
 
       for (let i = 0; i < attackPopups.length; i++) {
         const popup = attackPopups[i];
         const age = (currentTime - popup.time) / 1000;
         const atkDef = ATTACK_TYPES[popup.type];
         if (!atkDef) continue;
-        
+
         // Get sender color
-        const senderColor = (popup.senderSlot !== undefined && popup.senderSlot !== null) 
-          ? (PLAYER_COLORS[popup.senderSlot]?.main || "#ff4444") 
+        const senderColor = (popup.senderSlot !== undefined && popup.senderSlot !== null)
+          ? (PLAYER_COLORS[popup.senderSlot]?.main || "#ff4444")
           : "#ff4444";
 
         let x, y, scale, alpha, phase;
@@ -6771,24 +6928,24 @@
           y = canvas.height / 3;
           scale = 1.0 * elastic;
           alpha = 1;
-        
+
         } else if (age < 2.5) {
           // PHASE 2: SLIDE (Center -> Left)
           phase = "slide";
-          const t = (age - 1.5); 
+          const t = (age - 1.5);
           const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
           x = (canvas.width / 2) + (dockX - (canvas.width / 2)) * ease;
           y = (canvas.height / 3) + (dockY - (canvas.height / 3)) * ease;
-          scale = 1.0 - (0.2 * ease); 
+          scale = 1.0 - (0.2 * ease);
           alpha = 1;
 
         } else {
           // PHASE 3: DOCKED (Sleek List)
           phase = "docked";
           x = dockX;
-          // UPDATED: Tighter spacing (was 45, now 35)
-          y = dockY + (i * 35 * uS); 
-          scale = 0.8; 
+          // UPDATED: Tighter spacing
+          y = dockY + (i * 35 * uS);
+          scale = 0.8;
           alpha = 1;
         }
 
@@ -6801,7 +6958,7 @@
             // === SLEEK SIDEBAR UI ===
             const barW = 140;
             const barH = 40;
-            
+
             // 1. Background (Gradient fade to right)
             const grad = ctx.createLinearGradient(-30, 0, barW, 0);
             grad.addColorStop(0, "rgba(0, 0, 0, 0.9)");
@@ -6832,7 +6989,7 @@
             ctx.fillStyle = "#fff";
             ctx.textAlign = "left";
             ctx.fillText(`x${popup.count || 1}`, 20, 2);
-            
+
             // 5. Label (Small Text below number) - NOW SHOWS SENDER NAME
             ctx.font = "10px sans-serif";
             ctx.fillStyle = senderColor;
@@ -6856,7 +7013,7 @@
                 ctx.font = "bold 28px 'Orbitron', sans-serif";
                 ctx.fillStyle = senderColor; // Sender's color
                 ctx.fillText("INCOMING!", 0, 30);
-                
+
                 ctx.font = "bold 16px 'Courier New', monospace";
                 ctx.fillStyle = "#fff";
                 ctx.shadowBlur = 0;
@@ -6970,7 +7127,7 @@
           ctx.textAlign = "right";
           ctx.fillStyle = "#0f8";
           ctx.fillText("+" + sellValue + " G", mx + menuW - 18, sellY + 18);
-          
+
           // Module Slots (3 slots)
           if (tower.modules || myInventory.length > 0) {
             const modY = sellY + 36;
@@ -6978,21 +7135,21 @@
             ctx.textAlign = "center";
             ctx.fillStyle = "#888";
             ctx.fillText("MODULES", mx + menuW / 2, modY);
-            
+
             const slotSize = 36;
             const slotGap = 8;
             const totalSlotW = 3 * slotSize + 2 * slotGap;
             const slotStartX = mx + (menuW - totalSlotW) / 2;
             const slotY = modY + 8;
-            
+
             for (let i = 0; i < 3; i++) {
               const slotX = slotStartX + i * (slotSize + slotGap);
               const moduleId = tower.modules ? tower.modules[i] : null;
               const mod = moduleId ? MODULES[moduleId] : null;
               const lockWaves = tower.moduleLockWaves ? tower.moduleLockWaves[i] : 0;
-              
+
               const isSlotHovered = mouseX >= slotX && mouseX <= slotX + slotSize && mouseY >= slotY && mouseY <= slotY + slotSize;
-              
+
               // Slot background
               ctx.fillStyle = mod ? hexToRgba(mod.color, 0.3) : "rgba(40,40,60,0.5)";
               ctx.strokeStyle = mod ? mod.color : "#444";
@@ -7001,27 +7158,27 @@
               ctx.roundRect(slotX, slotY, slotSize, slotSize, 5);
               ctx.fill();
               ctx.stroke();
-              
+
               if (mod) {
                 // Module icon
                 ctx.font = "20px sans-serif";
                 ctx.fillStyle = "#fff";
                 ctx.fillText(mod.icon, slotX + slotSize / 2, slotY + slotSize / 2 + 6);
-                
+
                 // Lock indicator
                 if (lockWaves > 0) {
                   ctx.font = "bold 8px 'Courier New', monospace";
                   ctx.fillStyle = "#f00";
                   ctx.fillText("🔒" + lockWaves, slotX + slotSize / 2, slotY + slotSize - 2);
                 }
-                
+
                 // Tooltip for slotted module on hover
                 if (isSlotHovered) {
                   const tooltipW = 200;
                   const tooltipH = 90;
                   let tooltipX = slotX + slotSize + 10;
                   let tooltipY = slotY - 20;
-                  
+
                   // Keep tooltip on screen
                   if (tooltipX + tooltipW > canvas.width - 10) {
                     tooltipX = slotX - tooltipW - 10;
@@ -7030,7 +7187,7 @@
                     tooltipY = canvas.height - tooltipH - 10;
                   }
                   if (tooltipY < 10) tooltipY = 10;
-                  
+
                   // Tooltip background
                   ctx.fillStyle = "rgba(5,5,20,0.97)";
                   ctx.strokeStyle = mod.color;
@@ -7042,13 +7199,13 @@
                   ctx.fill();
                   ctx.stroke();
                   ctx.shadowBlur = 0;
-                  
+
                   // Module name with icon
                   ctx.font = "bold 14px 'Courier New', monospace";
                   ctx.fillStyle = mod.color;
                   ctx.textAlign = "left";
                   ctx.fillText(`${mod.icon} ${mod.name}`, tooltipX + 10, tooltipY + 22);
-                  
+
                   // Description text (word-wrapped)
                   ctx.font = "12px 'Courier New', monospace";
                   ctx.fillStyle = "#ddd";
@@ -7080,13 +7237,13 @@
                 ctx.fillStyle = "#444";
                 ctx.fillText("+", slotX + slotSize / 2, slotY + slotSize / 2 + 5);
               }
-              
+
               // Store slot info for click handling
               if (isSlotHovered) {
                 hoveredModuleSlot = { towerIndex: buildMenuOpen.slotIndex, slotIndex: i, hasModule: !!mod, locked: lockWaves > 0 };
               }
             }
-            
+
             // Inventory hint
             if (myInventory.length > 0 && !tower.modules?.every(m => m !== null)) {
               ctx.font = "8px 'Courier New', monospace";
@@ -7170,7 +7327,7 @@
       // Upgrade cards at top of screen (during gameplay)
       if (phase === "playing" && upgradeOptions.length > 0 && !upgradePicked) {
         // No blocking background - just floating cards with nice borders
-        
+
         // Wave indicator and queue
         ctx.font = "bold 12px 'Courier New', monospace";
         ctx.textAlign = "center";
@@ -7180,7 +7337,7 @@
         const queueText = upgradeQueueSize > 1 ? ` (+${upgradeQueueSize - 1} pending)` : "";
         ctx.fillText(`WAVE ${upgradeWaveNum} UPGRADE${queueText}`, canvas.width / 2, 68);
         ctx.shadowBlur = 0;
-        
+
         // Cards - compact horizontal design at top
         const cardW = 140;
         const cardH = 150;
@@ -7188,62 +7345,62 @@
         const totalW = upgradeOptions.length * cardW + (upgradeOptions.length - 1) * gap;
         const startX = canvas.width / 2 - totalW / 2;
         const cardY = 78;
-        
+
         hoveredUpgrade = -1;
-        
+
         for (let i = 0; i < upgradeOptions.length; i++) {
           const opt = upgradeOptions[i];
           const cardX = startX + i * (cardW + gap);
           const isHovered = mouseX >= cardX && mouseX <= cardX + cardW && mouseY >= cardY && mouseY <= cardY + cardH;
           if (isHovered) hoveredUpgrade = i;
-          
+
           const rarityColor = opt.rarityColor || "#fff";
-          
+
           // Card background - solid with glow border
           ctx.save();
-          
+
           // Outer glow
           ctx.shadowColor = rarityColor;
           ctx.shadowBlur = isHovered ? 25 : 15;
-          
+
           // Main card body - more opaque
           const cardGrad = ctx.createLinearGradient(cardX, cardY, cardX, cardY + cardH);
           cardGrad.addColorStop(0, isHovered ? "rgba(60,60,80,0.98)" : "rgba(20,20,35,0.97)");
           cardGrad.addColorStop(1, isHovered ? "rgba(45,45,65,0.98)" : "rgba(15,15,28,0.97)");
           ctx.fillStyle = cardGrad;
-          
+
           ctx.beginPath();
           ctx.roundRect(cardX, cardY, cardW, cardH, 8);
           ctx.fill();
-          
+
           // Strong border with rarity color
           ctx.strokeStyle = rarityColor;
           ctx.lineWidth = isHovered ? 3 : 2;
           ctx.stroke();
           ctx.restore();
-          
+
           // Rarity indicator bar at top
           ctx.fillStyle = rarityColor;
           ctx.beginPath();
           ctx.roundRect(cardX + 8, cardY + 6, cardW - 16, 2, 1);
           ctx.fill();
-          
+
           // Rarity label
           ctx.font = "bold 8px 'Courier New', monospace";
           ctx.textAlign = "center";
           ctx.fillStyle = hexToRgba(rarityColor, 0.8);
           ctx.fillText(opt.rarityLabel, cardX + cardW / 2, cardY + 20);
-          
+
           // Icon
           ctx.font = "32px sans-serif";
           ctx.fillStyle = "#fff";
           ctx.fillText(opt.icon, cardX + cardW / 2, cardY + 58);
-          
+
           // Title
           ctx.font = "bold 11px 'Courier New', monospace";
           ctx.fillStyle = "#fff";
           ctx.fillText(opt.title, cardX + cardW / 2, cardY + 82);
-          
+
           // Description - compact
           ctx.font = "9px 'Courier New', monospace";
           ctx.fillStyle = "rgba(255,255,255,0.7)";
@@ -7259,7 +7416,7 @@
           } else {
             ctx.fillText(desc, cardX + cardW / 2, cardY + 108);
           }
-          
+
           // Hover hint
           if (isHovered) {
             if (banishMode) {
@@ -7272,7 +7429,7 @@
               ctx.fillText("CLICK", cardX + cardW / 2, cardY + cardH - 12);
             }
           }
-          
+
           // Banish mode overlay - red tint on cards
           if (banishMode) {
             ctx.fillStyle = "rgba(255,50,50,0.15)";
@@ -7281,32 +7438,32 @@
             ctx.fill();
           }
         }
-        
+
         // Reroll button to the right of cards
         const myPlayer = lastSnap?.players.find(p => p.id === myId);
         const myGold = myPlayer?.gold || 0;
         const canAffordReroll = myGold >= currentRerollCost;
-        
+
         const rerollBtnW = 70;
         const rerollBtnH = 50;
         const rerollBtnX = startX + totalW + 20;
         const rerollBtnY = cardY + cardH / 2 - rerollBtnH / 2;
-        
-        const isRerollHovered = mouseX >= rerollBtnX && mouseX <= rerollBtnX + rerollBtnW && 
+
+        const isRerollHovered = mouseX >= rerollBtnX && mouseX <= rerollBtnX + rerollBtnW &&
                                 mouseY >= rerollBtnY && mouseY <= rerollBtnY + rerollBtnH;
         hoveredReroll = isRerollHovered;
-        
+
         // Reroll button background
-        ctx.fillStyle = isRerollHovered && canAffordReroll ? "rgba(100,180,255,0.4)" : 
+        ctx.fillStyle = isRerollHovered && canAffordReroll ? "rgba(100,180,255,0.4)" :
                         canAffordReroll ? "rgba(60,120,200,0.25)" : "rgba(40,40,60,0.4)";
-        ctx.strokeStyle = isRerollHovered && canAffordReroll ? "#7ae0ff" : 
+        ctx.strokeStyle = isRerollHovered && canAffordReroll ? "#7ae0ff" :
                           canAffordReroll ? "rgba(122,224,255,0.5)" : "#444";
         ctx.lineWidth = isRerollHovered && canAffordReroll ? 2 : 1;
         ctx.beginPath();
         ctx.roundRect(rerollBtnX, rerollBtnY, rerollBtnW, rerollBtnH, 6);
         ctx.fill();
         ctx.stroke();
-        
+
         // Reroll button text
         ctx.font = "18px sans-serif";
         ctx.textAlign = "center";
@@ -7314,18 +7471,18 @@
         ctx.fillText("🎲", rerollBtnX + rerollBtnW / 2, rerollBtnY + 25);
         ctx.font = "bold 10px 'Courier New', monospace";
         ctx.fillText(`${currentRerollCost}g`, rerollBtnX + rerollBtnW / 2, rerollBtnY + 42);
-        
+
         // Banish button (next to reroll) - ONLY SHOWS IF NOT YET USED
         if (banishedCount < 1) {
           const banishBtnW = 70;
           const banishBtnH = 50;
           const banishBtnX = rerollBtnX + rerollBtnW + 8;
           const banishBtnY = rerollBtnY;
-          
-          const isBanishHovered = mouseX >= banishBtnX && mouseX <= banishBtnX + banishBtnW && 
+
+          const isBanishHovered = mouseX >= banishBtnX && mouseX <= banishBtnX + banishBtnW &&
                                   mouseY >= banishBtnY && mouseY <= banishBtnY + banishBtnH;
           hoveredBanish = isBanishHovered;
-          
+
           // Banish button background - red/orange theme
           ctx.fillStyle = banishMode ? "rgba(200,80,80,0.5)" :
                           (isBanishHovered ? "rgba(180,100,60,0.4)" : "rgba(100,50,40,0.25)");
@@ -7336,7 +7493,7 @@
           ctx.roundRect(banishBtnX, banishBtnY, banishBtnW, banishBtnH, 6);
           ctx.fill();
           ctx.stroke();
-          
+
           // Banish button text
           ctx.font = "18px sans-serif";
           ctx.fillStyle = banishMode ? "#f44" : (isBanishHovered ? "#f84" : "#a64");
@@ -7347,9 +7504,9 @@
         } else {
           hoveredBanish = false;
         }
-        
+
         ctx.textAlign = "left";
-        
+
         // Banish mode indicator on cards
         if (banishMode) {
           ctx.font = "bold 12px 'Courier New', monospace";
@@ -7364,13 +7521,13 @@
       if (phase === "playing" && moduleCardPhase && moduleCards.length > 0) {
         const MODULES = window.TOWER_MODULES || {};
         const isMyTurn = currentModulePicker === myId;
-        
+
         // Left panel dimensions
         const panelW = 220;
         const panelX = 15;
         const panelY = 80;
         const panelH = Math.min(canvas.height - 160, 60 + moduleCards.length * 95 + 50);
-        
+
         // Panel background
         ctx.fillStyle = "rgba(10,10,30,0.95)";
         ctx.strokeStyle = isMyTurn ? "#ffd700" : "#666";
@@ -7382,13 +7539,13 @@
         ctx.fill();
         ctx.stroke();
         ctx.shadowBlur = 0;
-        
+
         // Title
         ctx.font = "bold 14px 'Courier New', monospace";
         ctx.textAlign = "center";
         ctx.fillStyle = "#ffd700";
         ctx.fillText("🏆 BOSS REWARD", panelX + panelW / 2, panelY + 25);
-        
+
         // Current picker info
         ctx.font = "bold 11px 'Courier New', monospace";
         if (isMyTurn) {
@@ -7403,54 +7560,54 @@
           ctx.font = "10px 'Courier New', monospace";
           ctx.fillText(`(${Math.ceil(modulePickTimeLeft)}s)`, panelX + panelW / 2, panelY + 58);
         }
-        
+
         // Module Cards - vertical list
         const modCardW = panelW - 20;
         const modCardH = 80;
         const modGap = 10;
         const modStartY = panelY + 65;
-        
+
         hoveredModuleCard = -1;
-        
+
         for (let i = 0; i < moduleCards.length; i++) {
           const card = moduleCards[i];
           const mod = MODULES[card.id] || card;
           const cardX = panelX + 10;
           const cardY = modStartY + i * (modCardH + modGap);
-          
+
           // Skip if card would be off screen
           if (cardY + modCardH > panelY + panelH - 10) continue;
-          
+
           const isHovered = isMyTurn && mouseX >= cardX && mouseX <= cardX + modCardW && mouseY >= cardY && mouseY <= cardY + modCardH;
           if (isHovered) hoveredModuleCard = i;
-          
+
           // Card background
           ctx.save();
           ctx.shadowColor = mod.color || "#fff";
           ctx.shadowBlur = isHovered ? 15 : 8;
-          
+
           ctx.fillStyle = isHovered ? hexToRgba(mod.color, 0.3) : "rgba(20,20,40,0.9)";
           ctx.strokeStyle = mod.color || "#fff";
           ctx.lineWidth = isHovered ? 2 : 1;
-          
+
           ctx.beginPath();
           ctx.roundRect(cardX, cardY, modCardW, modCardH, 8);
           ctx.fill();
           ctx.stroke();
           ctx.restore();
-          
+
           // Icon (left side)
           ctx.font = "32px sans-serif";
           ctx.textAlign = "center";
           ctx.fillStyle = "#fff";
           ctx.fillText(mod.icon || "?", cardX + 30, cardY + 50);
-          
+
           // Name (right of icon)
           ctx.font = "bold 11px 'Courier New', monospace";
           ctx.textAlign = "left";
           ctx.fillStyle = mod.color || "#fff";
           ctx.fillText(mod.name || card.id, cardX + 60, cardY + 22);
-          
+
           // Description (wrapped, smaller)
           ctx.font = "9px 'Courier New', monospace";
           ctx.fillStyle = "#aaa";
@@ -7471,7 +7628,7 @@
             }
           }
           if (line && lineY <= cardY + modCardH - 10) ctx.fillText(line, cardX + 60, lineY);
-          
+
           // Click hint
           if (isHovered) {
             ctx.font = "bold 9px 'Courier New', monospace";
@@ -7480,13 +7637,13 @@
             ctx.fillText("CLICK ►", cardX + modCardW - 8, cardY + modCardH - 8);
           }
         }
-        
+
         // Cards remaining indicator
         ctx.font = "9px 'Courier New', monospace";
         ctx.textAlign = "center";
         ctx.fillStyle = "#666";
         ctx.fillText(`${moduleCards.length} card${moduleCards.length !== 1 ? 's' : ''} remaining`, panelX + panelW / 2, panelY + panelH - 12);
-        
+
         ctx.textAlign = "left";
       }
 
@@ -7495,10 +7652,10 @@
         // Semi-transparent overlay
         ctx.fillStyle = "rgba(0,0,0,0.7)";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
+
         // Pause message
         ctx.textAlign = "center";
-        
+
         if (pauseCountdown > 0) {
           // Countdown to resume
           ctx.font = "bold 72px 'Courier New', monospace";
@@ -7507,7 +7664,7 @@
           ctx.shadowBlur = 20;
           ctx.fillText(Math.ceil(pauseCountdown), canvas.width / 2, canvas.height / 2 - 20);
           ctx.shadowBlur = 0;
-          
+
           ctx.font = "bold 24px 'Courier New', monospace";
           ctx.fillStyle = "#fff";
           ctx.fillText("RESUMING...", canvas.width / 2, canvas.height / 2 + 40);
@@ -7519,16 +7676,16 @@
           ctx.shadowBlur = 20;
           ctx.fillText("⏸ PAUSED", canvas.width / 2, canvas.height / 2 - 20);
           ctx.shadowBlur = 0;
-          
+
           ctx.font = "16px 'Courier New', monospace";
           ctx.fillStyle = "#aaa";
           ctx.fillText(`Paused by ${pausedBy || 'a player'}`, canvas.width / 2, canvas.height / 2 + 25);
-          
+
           ctx.font = "bold 14px 'Courier New', monospace";
           ctx.fillStyle = "#ff6600";
           ctx.fillText("Click RESUME or press SPACE to continue", canvas.width / 2, canvas.height / 2 + 55);
         }
-        
+
         ctx.textAlign = "left";
       }
 
@@ -7590,7 +7747,7 @@
         ctx.textAlign = "left";
       }
 
-      // Module acquired feedback  
+      // Module acquired feedback
       if (moduleFeedback && Date.now() - moduleFeedback.time < 2500) {
         const MODULES = window.TOWER_MODULES || {};
         const mod = MODULES[moduleFeedback.moduleId];
@@ -7737,13 +7894,13 @@
       if (phase === "gameover" && gameOverData) {
         ctx.fillStyle = "rgba(0,0,0,0.85)";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
+
         if (gameOverData.solo) {
           // Solo mode game over
           const player = gameOverData.scores[0];
           drawNeonText("GAME OVER", canvas.width / 2, 80, "#f44", 36, "center");
           drawNeonText(`Wave ${gameOverData.wave}`, canvas.width / 2, 130, "#0ff", 24, "center");
-          
+
           ctx.font = "bold 18px 'Courier New', monospace";
           ctx.textAlign = "center";
           ctx.fillStyle = "#fff";
@@ -7762,7 +7919,7 @@
           }
 
           drawNeonText(`Wave ${gameOverData.wave}`, canvas.width / 2, 160, "#0ff", 18, "center");
-          
+
           // Final standings
           ctx.font = "bold 14px 'Courier New', monospace";
           ctx.textAlign = "center";
@@ -7781,7 +7938,7 @@
         const btnX = canvas.width / 2 - btnW / 2;
         const btnY = canvas.height - 120;
         const isHovered = mouseX >= btnX && mouseX <= btnX + btnW && mouseY >= btnY && mouseY <= btnY + btnH;
-        
+
         ctx.fillStyle = isHovered ? "rgba(0,255,136,0.3)" : "rgba(0,255,136,0.1)";
         ctx.strokeStyle = isHovered ? "#0f8" : "rgba(0,255,136,0.5)";
         ctx.lineWidth = isHovered ? 3 : 2;
@@ -7792,23 +7949,26 @@
         ctx.fill();
         ctx.stroke();
         ctx.shadowBlur = 0;
-        
+
         ctx.font = "bold 16px 'Courier New', monospace";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillStyle = isHovered ? "#fff" : "#0f8";
         ctx.fillText("RETURN TO MENU", canvas.width / 2, btnY + btnH / 2);
-        
+
         // Store button bounds for click handling
         gameOverData.menuBtnBounds = { x: btnX, y: btnY, w: btnW, h: btnH };
       }
 
-      // ===== In-Game Chat UI =====
+
+  // ============================================================================
+  // IN-GAME CHAT UI
+  // ============================================================================
       if (phase === "playing" || phase === "upgrades") {
         const chatBtnSize = 44;
         const chatBtnX = 10;
         const chatBtnY = canvas.height - chatBtnSize - 10;
-        
+
         // Draw chat toggle button
         ctx.fillStyle = chatOpen ? "rgba(0,255,255,0.3)" : "rgba(30,30,50,0.85)";
         ctx.strokeStyle = chatUnread > 0 && !chatOpen ? "#ff0" : "#0ff";
@@ -7817,14 +7977,14 @@
         ctx.roundRect(chatBtnX, chatBtnY, chatBtnSize, chatBtnSize, 8);
         ctx.fill();
         ctx.stroke();
-        
+
         // Chat icon
         ctx.fillStyle = chatUnread > 0 && !chatOpen ? "#ff0" : "#fff";
         ctx.font = "bold 22px Arial";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillText("💬", chatBtnX + chatBtnSize/2, chatBtnY + chatBtnSize/2);
-        
+
         // Unread badge
         if (chatUnread > 0 && !chatOpen) {
           ctx.fillStyle = "#f44";
@@ -7834,7 +7994,7 @@
           ctx.fillStyle = "#fff";
           ctx.font = "bold 12px Arial";
           ctx.fillText(chatUnread > 9 ? "9+" : chatUnread, chatBtnX + chatBtnSize - 5, chatBtnY + 9);
-          
+
           // Pulse animation for unread
           const pulse = Math.sin(time * 5) * 0.3 + 0.7;
           ctx.strokeStyle = `rgba(255,255,0,${pulse})`;
@@ -7843,10 +8003,10 @@
           ctx.roundRect(chatBtnX - 2, chatBtnY - 2, chatBtnSize + 4, chatBtnSize + 4, 10);
           ctx.stroke();
         }
-        
+
         // Store chat button bounds
         window.gameChatBtnBounds = { x: chatBtnX, y: chatBtnY, w: chatBtnSize, h: chatBtnSize };
-        
+
         // Draw chat popup if open
         if (chatOpen) {
           // Base dimensions scaled by chatScale
@@ -7856,13 +8016,13 @@
           const chatH = Math.round(baseChatH * chatScale);
           const chatX = 10;
           const chatY = canvas.height - chatH - chatBtnSize - 20;
-          
+
           // Scaled font sizes
           const headerFontSize = Math.round(14 * chatScale);
           const msgFontSize = Math.round(15 * chatScale);
           const timeFontSize = Math.round(12 * chatScale);
           const inputFontSize = Math.round(14 * chatScale);
-          
+
           // Chat window background with better contrast
           ctx.fillStyle = "rgba(8,12,24,0.97)";
           ctx.strokeStyle = "#0ff";
@@ -7871,28 +8031,28 @@
           ctx.roundRect(chatX, chatY, chatW, chatH, 12);
           ctx.fill();
           ctx.stroke();
-          
+
           // Chat header with title
           const headerH = Math.round(40 * chatScale);
           ctx.fillStyle = "rgba(0,255,255,0.12)";
           ctx.beginPath();
           ctx.roundRect(chatX, chatY, chatW, headerH, [12, 12, 0, 0]);
           ctx.fill();
-          
+
           ctx.fillStyle = "#0ff";
           ctx.font = `bold ${headerFontSize}px Orbitron, sans-serif`;
           ctx.textAlign = "left";
           ctx.textBaseline = "middle";
           ctx.fillText("💬 GAME CHAT", chatX + 15, chatY + headerH/2);
-          
+
           // Scale controls (- and + buttons)
           const scaleBtnSize = Math.round(24 * chatScale);
           const scaleBtnY = chatY + (headerH - scaleBtnSize) / 2;
-          
+
           // Minus button
           const minusBtnX = chatX + chatW - scaleBtnSize * 3 - 50;
-          ctx.fillStyle = mouseX >= minusBtnX && mouseX <= minusBtnX + scaleBtnSize && 
-                          mouseY >= scaleBtnY && mouseY <= scaleBtnY + scaleBtnSize ? 
+          ctx.fillStyle = mouseX >= minusBtnX && mouseX <= minusBtnX + scaleBtnSize &&
+                          mouseY >= scaleBtnY && mouseY <= scaleBtnY + scaleBtnSize ?
                           "rgba(255,100,100,0.4)" : "rgba(60,60,80,0.5)";
           ctx.strokeStyle = "#888";
           ctx.lineWidth = 1;
@@ -7905,11 +8065,11 @@
           ctx.textAlign = "center";
           ctx.fillText("−", minusBtnX + scaleBtnSize/2, scaleBtnY + scaleBtnSize/2 + 1);
           window.chatScaleMinusBounds = { x: minusBtnX, y: scaleBtnY, w: scaleBtnSize, h: scaleBtnSize };
-          
+
           // Plus button
           const plusBtnX = minusBtnX + scaleBtnSize + 4;
-          ctx.fillStyle = mouseX >= plusBtnX && mouseX <= plusBtnX + scaleBtnSize && 
-                          mouseY >= scaleBtnY && mouseY <= scaleBtnY + scaleBtnSize ? 
+          ctx.fillStyle = mouseX >= plusBtnX && mouseX <= plusBtnX + scaleBtnSize &&
+                          mouseY >= scaleBtnY && mouseY <= scaleBtnY + scaleBtnSize ?
                           "rgba(100,255,100,0.4)" : "rgba(60,60,80,0.5)";
           ctx.beginPath();
           ctx.roundRect(plusBtnX, scaleBtnY, scaleBtnSize, scaleBtnSize, 4);
@@ -7918,12 +8078,12 @@
           ctx.fillStyle = "#fff";
           ctx.fillText("+", plusBtnX + scaleBtnSize/2, scaleBtnY + scaleBtnSize/2 + 1);
           window.chatScalePlusBounds = { x: plusBtnX, y: scaleBtnY, w: scaleBtnSize, h: scaleBtnSize };
-          
+
           // Chime toggle button
           const chimeBtnX = plusBtnX + scaleBtnSize + 8;
           const chimeOn = chatChimeEnabled;
-          ctx.fillStyle = mouseX >= chimeBtnX && mouseX <= chimeBtnX + scaleBtnSize && 
-                          mouseY >= scaleBtnY && mouseY <= scaleBtnY + scaleBtnSize ? 
+          ctx.fillStyle = mouseX >= chimeBtnX && mouseX <= chimeBtnX + scaleBtnSize &&
+                          mouseY >= scaleBtnY && mouseY <= scaleBtnY + scaleBtnSize ?
                           "rgba(255,200,100,0.4)" : (chimeOn ? "rgba(255,200,100,0.25)" : "rgba(60,60,80,0.5)");
           ctx.strokeStyle = chimeOn ? "#ffc844" : "#888";
           ctx.beginPath();
@@ -7934,11 +8094,11 @@
           ctx.font = `${Math.round(14 * chatScale)}px Arial`;
           ctx.fillText(chimeOn ? "🔔" : "🔕", chimeBtnX + scaleBtnSize/2, scaleBtnY + scaleBtnSize/2 + 1);
           window.chatChimeBounds = { x: chimeBtnX, y: scaleBtnY, w: scaleBtnSize, h: scaleBtnSize };
-          
+
           // Close button
           const closeBtnX = chatX + chatW - scaleBtnSize - 8;
-          ctx.fillStyle = mouseX >= closeBtnX && mouseX <= closeBtnX + scaleBtnSize && 
-                          mouseY >= scaleBtnY && mouseY <= scaleBtnY + scaleBtnSize ? 
+          ctx.fillStyle = mouseX >= closeBtnX && mouseX <= closeBtnX + scaleBtnSize &&
+                          mouseY >= scaleBtnY && mouseY <= scaleBtnY + scaleBtnSize ?
                           "rgba(255,68,68,0.5)" : "rgba(255,68,68,0.2)";
           ctx.strokeStyle = "#f44";
           ctx.beginPath();
@@ -7949,47 +8109,47 @@
           ctx.font = `bold ${Math.round(16 * chatScale)}px Arial`;
           ctx.fillText("✕", closeBtnX + scaleBtnSize/2, scaleBtnY + scaleBtnSize/2 + 1);
           window.gameChatCloseBounds = { x: closeBtnX, y: scaleBtnY, w: scaleBtnSize, h: scaleBtnSize };
-          
+
           // Messages area with better padding
           const msgAreaY = chatY + headerH + 8;
           const inputAreaH = Math.round(45 * chatScale);
           const msgAreaH = chatH - headerH - inputAreaH - 20;
-          
+
           // Messages background
           ctx.fillStyle = "rgba(0,0,0,0.3)";
           ctx.beginPath();
           ctx.roundRect(chatX + 8, msgAreaY, chatW - 16, msgAreaH, 6);
           ctx.fill();
-          
+
           ctx.save();
           ctx.beginPath();
           ctx.rect(chatX + 10, msgAreaY + 4, chatW - 20, msgAreaH - 8);
           ctx.clip();
-          
+
           ctx.textAlign = "left";
           ctx.textBaseline = "top";
-          
+
           const lineHeight = Math.round(22 * chatScale);
           const maxLines = Math.floor((msgAreaH - 8) / lineHeight);
           const recentMessages = chatMessages.slice(-maxLines);
-          
+
           for (let i = 0; i < recentMessages.length; i++) {
             const msg = recentMessages[i];
             const y = msgAreaY + 6 + i * lineHeight;
             const msgTime = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            
+
             // Time stamp
             ctx.fillStyle = "#556";
             ctx.font = `${timeFontSize}px 'Courier New', monospace`;
             ctx.fillText(msgTime, chatX + 14, y);
-            
+
             // Player name with color
             ctx.fillStyle = "#0ff";
             ctx.font = `bold ${msgFontSize}px Rajdhani, sans-serif`;
             const nameText = msg.from + ":";
             const timeWidth = ctx.measureText(msgTime).width;
             ctx.fillText(nameText, chatX + 20 + timeWidth + 8, y);
-            
+
             // Message text - allow longer messages
             ctx.fillStyle = "#e8e8e8";
             ctx.font = `${msgFontSize}px Rajdhani, sans-serif`;
@@ -8005,11 +8165,11 @@
             ctx.fillText(displayText, chatX + 28 + timeWidth + nameWidth + 4, y);
           }
           ctx.restore();
-          
+
           // Input area with better styling
           const inputY = chatY + chatH - inputAreaH - 8;
           const inputH = Math.round(36 * chatScale);
-          
+
           ctx.fillStyle = gameChatTyping ? "rgba(0,80,80,0.5)" : "rgba(0,0,0,0.4)";
           ctx.strokeStyle = gameChatTyping ? "#0ff" : "#444";
           ctx.lineWidth = gameChatTyping ? 2 : 1;
@@ -8017,11 +8177,11 @@
           ctx.roundRect(chatX + 8, inputY, chatW - 16, inputH, 6);
           ctx.fill();
           ctx.stroke();
-          
+
           ctx.font = `${inputFontSize}px Rajdhani, sans-serif`;
           ctx.textAlign = "left";
           ctx.textBaseline = "middle";
-          
+
           if (gameChatInputText) {
             ctx.fillStyle = "#fff";
             // Show cursor when typing
@@ -8031,23 +8191,26 @@
             ctx.fillStyle = gameChatTyping ? "#8af" : "#667";
             ctx.fillText(gameChatTyping ? "Type your message..." : "Press ENTER to chat", chatX + 16, inputY + inputH/2);
           }
-          
+
           window.gameChatInputBounds = { x: chatX + 8, y: inputY, w: chatW - 16, h: inputH };
           window.gameChatBounds = { x: chatX, y: chatY, w: chatW, h: chatH };
         }
       }
 
-      // ===== MUSIC PERMISSION POPUP (only show during gameplay) =====
+
+  // ============================================================================
+  // MUSIC PERMISSION POPUP (ONLY SHOW DURING GAMEPLAY)
+  // ============================================================================
       if (showMusicPermissionPrompt && musicState.trackName && phase === "playing") {
         const popW = 300;
         const popH = 120;
         const popX = (canvas.width - popW) / 2;
         const popY = (canvas.height - popH) / 2;
-        
+
         // Darken background
         ctx.fillStyle = "rgba(0,0,0,0.7)";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
+
         // Popup background
         ctx.fillStyle = "rgba(20,25,40,0.98)";
         ctx.strokeStyle = "#7ae0ff";
@@ -8056,27 +8219,27 @@
         ctx.roundRect(popX, popY, popW, popH, 12);
         ctx.fill();
         ctx.stroke();
-        
+
         // Title
         ctx.font = "bold 16px 'Courier New', monospace";
         ctx.fillStyle = "#7ae0ff";
         ctx.textAlign = "center";
         ctx.fillText("🎵 Enable Music?", popX + popW / 2, popY + 30);
-        
+
         // Description
         ctx.font = "12px 'Courier New', monospace";
         ctx.fillStyle = "#aaa";
         ctx.fillText("Click to enable synchronized music", popX + popW / 2, popY + 55);
-        
+
         // Button
         const btnW = 120;
         const btnH = 32;
         const btnX = popX + (popW - btnW) / 2;
         const btnY = popY + popH - btnH - 15;
-        
-        const btnHover = mouseX >= btnX && mouseX <= btnX + btnW && 
+
+        const btnHover = mouseX >= btnX && mouseX <= btnX + btnW &&
                          mouseY >= btnY && mouseY <= btnY + btnH;
-        
+
         ctx.fillStyle = btnHover ? "rgba(122,224,255,0.4)" : "rgba(60,100,140,0.6)";
         ctx.strokeStyle = btnHover ? "#7ae0ff" : "#557";
         ctx.lineWidth = 1;
@@ -8084,14 +8247,14 @@
         ctx.roundRect(btnX, btnY, btnW, btnH, 6);
         ctx.fill();
         ctx.stroke();
-        
+
         ctx.font = "bold 14px 'Courier New', monospace";
         ctx.fillStyle = btnHover ? "#fff" : "#ccc";
         ctx.fillText("▶ ENABLE", btnX + btnW / 2, btnY + 21);
-        
+
         // Store bounds for click detection
         window.musicPermissionBtnBounds = { x: btnX, y: btnY, w: btnW, h: btnH };
-        
+
         ctx.textAlign = "left";
       }
     } catch (err) {
@@ -8117,17 +8280,17 @@
   }, 300));
 
   readyBtn.onclick = () => { send({ t: "ready" }); };
-  
+
   // Connect button handler
   const connectBtn = document.getElementById("connectBtn");
   if (connectBtn) {
     connectBtn.onclick = () => { connect(); };
   }
-  
-  launchBtn.onclick = () => { 
+
+  launchBtn.onclick = () => {
     const me = lobbyPlayers.find(p => p.id === myId);
     if (!me?.ready) return;
-    
+
     if (allReady) {
       send({ t: "start" });
     } else if (readyCount >= 1) {
