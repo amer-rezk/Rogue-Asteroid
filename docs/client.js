@@ -741,7 +741,7 @@
     }
   }
 
-  function createClientDamageNumber(x, y, amount, isCrit, customColor = null) {
+  function createClientDamageNumber(x, y, amount, isCrit, customColor = null, isOverCrit = false) {
     // Limit damage numbers for performance
     if (clientDamageNumbers.length >= HIGH_QUALITY_SETTINGS.maxDamageNumbers) {
       // Remove oldest damage number
@@ -751,9 +751,10 @@
       x, y,
       amount: typeof amount === 'string' ? amount : Math.round(amount * 10) / 10,
       isCrit,
+      isOverCrit,
       customColor,
-      life: 1.0,
-      vy: -60
+      life: isOverCrit ? 1.5 : 1.0, // Overcrits stay longer
+      vy: isOverCrit ? -80 : -60 // Overcrits fly higher
     });
   }
 
@@ -1358,7 +1359,7 @@
 
         case "damage":
           if (!skipVisualEffects) {
-            createClientDamageNumber(ev.x, ev.y, ev.amount, ev.isCrit);
+            createClientDamageNumber(ev.x, ev.y, ev.amount, ev.isCrit, null, ev.isOverCrit);
           }
           break;
 
@@ -1413,7 +1414,7 @@
         case "railgun":
           // Railgun bouncing beam effect
           if (!skipVisualEffects && ev.segments && ev.segments.length > 0) {
-            const beamColor = ev.isCrit ? "#ffff00" : "#00ff00";
+            const beamColor = ev.isOverCrit ? "#ff8800" : (ev.isCrit ? "#ffff00" : "#00ff00");
 
             // Create beam for each segment
             for (const seg of ev.segments) {
@@ -1422,26 +1423,29 @@
                 x2: seg.x2, y2: seg.y2,
                 slot: ev.slot,
                 isCrit: ev.isCrit,
-                life: 0.25,
-                maxLife: 0.25,
+                isOverCrit: ev.isOverCrit,
+                life: ev.isOverCrit ? 0.4 : 0.25, // Overcrit beams last longer
+                maxLife: ev.isOverCrit ? 0.4 : 0.25,
                 color: beamColor
               });
             }
 
-            // Muzzle flash at origin
+            // Muzzle flash at origin (bigger for overcrit)
             const firstSeg = ev.segments[0];
             const firstAngle = Math.atan2(firstSeg.y2 - firstSeg.y1, firstSeg.x2 - firstSeg.x1);
-            for (let i = 0; i < 6; i++) {
+            const flashCount = ev.isOverCrit ? 10 : 6;
+            for (let i = 0; i < flashCount; i++) {
               const angle = firstAngle + (Math.random() - 0.5) * 0.5;
+              const speedMult = ev.isOverCrit ? 1.5 : 1.0;
               clientParticles.push({
                 x: firstSeg.x1,
                 y: firstSeg.y1,
-                vx: Math.cos(angle) * (60 + Math.random() * 40),
-                vy: Math.sin(angle) * (60 + Math.random() * 40),
+                vx: Math.cos(angle) * (60 + Math.random() * 40) * speedMult,
+                vy: Math.sin(angle) * (60 + Math.random() * 40) * speedMult,
                 life: 0.15 + Math.random() * 0.1,
                 maxLife: 0.25,
                 color: beamColor,
-                size: 3 + Math.random() * 3
+                size: (3 + Math.random() * 3) * (ev.isOverCrit ? 1.5 : 1.0)
               });
             }
 
@@ -1480,6 +1484,7 @@
             vx: ev.vx, vy: ev.vy,
             r: ev.r || 3,
             isCrit: ev.isCrit,
+            isOverCrit: ev.isOverCrit || false,
             bulletColor: ev.bulletColor,
             bulletType: ev.bulletType, // For visual rendering (gatling/sniper/missile/main)
             slot: ev.slot,
@@ -3431,7 +3436,14 @@
   function drawBullet(b, sx, sy, baseColor) {
     const x = b.x * sx;
     const y = b.y * sy;
-    const r = b.r * sx;
+    let r = b.r * sx;
+
+    // OverCrit bullets are larger and have special glow
+    if (b.isOverCrit) {
+      r *= 1.5;
+      ctx.shadowColor = "#ff8800";
+      ctx.shadowBlur = 20;
+    }
 
     const angle = Math.atan2(b.vy, b.vx);
     const fadeStart = 0.5;
@@ -3627,6 +3639,12 @@
         ctx.fill();
         break;
     }
+
+    // Clear overcrit glow
+    if (b.isOverCrit) {
+      ctx.shadowBlur = 0;
+    }
+
     // PERFORMANCE: No ctx.restore() needed - we only modified fillStyle/strokeStyle/lineWidth
     // which get overwritten by the next draw call anyway
   }
@@ -5150,11 +5168,19 @@
       // Damage numbers
       if (showDamageNumbers && lastSnap.damageNumbers) {
         for (const d of lastSnap.damageNumbers) {
-          ctx.font = `bold ${d.isCrit ? 16 : 12}px 'Courier New', monospace`;
+          // OverCrit: Larger font and special styling
+          const fontSize = d.isOverCrit ? 22 : (d.isCrit ? 16 : 12);
+          ctx.font = `bold ${fontSize}px 'Courier New', monospace`;
           ctx.textAlign = "center";
           // Use custom color if provided, otherwise default crit/normal colors
           if (d.customColor) {
             ctx.fillStyle = hexToRgba(d.customColor, d.life);
+          } else if (d.isOverCrit) {
+            // OverCrit: Rainbow/gold pulsing effect
+            const pulse = 0.7 + Math.sin(time * 10) * 0.3;
+            ctx.fillStyle = `rgba(255,${Math.floor(150 + 100 * pulse)},0,${d.life})`;
+            ctx.shadowColor = "#ff0";
+            ctx.shadowBlur = 15;
           } else {
             ctx.fillStyle = d.isCrit ? `rgba(255,255,0,${d.life})` : `rgba(255,255,255,${d.life})`;
           }
@@ -5166,7 +5192,14 @@
             const rounded = Math.round(d.amount * 100) / 100;
             displayText = Number.isInteger(rounded) ? rounded.toString() : rounded.toFixed(2).replace(/\.?0+$/, '');
           }
+          // OverCrit prefix
+          if (d.isOverCrit) {
+            displayText = "💥" + displayText;
+          }
           ctx.fillText(displayText, d.x * sx, d.y * sy);
+          if (d.isOverCrit) {
+            ctx.shadowBlur = 0;
+          }
         }
       }
 

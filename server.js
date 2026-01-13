@@ -859,7 +859,7 @@ const UPGRADE_DEFS = [
   { id: "spd", name: "Velocity", cat: "offense", icon: "💨", desc: "+{val}% Bullet Speed", stat: "bulletSpeedMult", base: 0.08, type: "mult" },
   { id: "fire", name: "Rapid Fire", cat: "offense", icon: "🔥", desc: "+{val}% Fire Rate", stat: "fireRateMult", base: 0.05, type: "mult" },
   { id: "multi", name: "Multishot", cat: "offense", icon: "⚔️", desc: "+{val} Bullets (-{penalty}% dmg)", stat: "multishot", base: 1, type: "multishot" },
-  { id: "crit", name: "Crit Scope", cat: "offense", icon: "🎯", desc: "+{val}% Crit Chance", stat: "critChance", base: 0.05, type: "add_cap", cap: 1.0 },
+  { id: "crit", name: "Crit Scope", cat: "offense", icon: "🎯", desc: "+{val}% Crit Chance", stat: "critChance", base: 0.05, type: "add" },
   { id: "boom", name: "Explosive", cat: "offense", icon: "💣", desc: "Explosions size +{val}", stat: "explosive", base: 1, type: "add" },
   { id: "caliber", name: "Dissipating Slug", cat: "offense", icon: "⚫", desc: "+{val}% slug chance", stat: "slugChance", base: 2.5, type: "add" },
   { id: "rico", name: "Ricochet", cat: "utility", icon: "🎱", desc: "Chains to {val} enemies (-10% dmg each)", stat: "ricochet", base: 1, type: "add" },
@@ -893,19 +893,21 @@ function makeUpgradeOptions(player) {
     const def = pool[Math.floor(Math.random() * pool.length)];
     if (opts.find(o => o.defId === def.id)) { i--; continue; }
     if (def.type === "bool" && player.upgrades[def.stat]) { i--; continue; }
-    if (def.stat === "critChance" && (player.upgrades.critChance || 0) >= 1) { i--; continue; }
     if (def.stat === "slugChance" && (player.upgrades.slugChance || 0) >= 100) { i--; continue; }
 
-    let rarityKey = rollRarity();
-
-    // Multishot and Chain Lightning are rare+ only (skip if common rolled)
-    if ((def.id === "multi" || def.id === "chain") && rarityKey === "common") {
-      rarityKey = "rare";
-    }
-
-    // Ricochet is epic+ only (reroll if common or rare)
-    if (def.id === "rico" && (rarityKey === "common" || rarityKey === "rare")) {
-      rarityKey = Math.random() < 0.75 ? "epic" : "legendary";
+    // Roll rarity - some cards are rare+ only
+    const isRarePlusOnly = (def.id === "multi" || def.id === "chain" || def.id === "rico");
+    let rarityKey;
+    
+    if (isRarePlusOnly) {
+      // Roll only among rare/epic/legendary with correct proportions
+      // Rare: 17, Epic: 6, Legendary: 2 -> Total: 25
+      const rand = Math.random() * 25;
+      if (rand < 17) rarityKey = "rare";           // 68% (17/25)
+      else if (rand < 23) rarityKey = "epic";      // 24% (6/25)
+      else rarityKey = "legendary";                 // 8% (2/25)
+    } else {
+      rarityKey = rollRarity();
     }
 
     const rarity = RARITY_CONFIG[rarityKey];
@@ -928,11 +930,11 @@ function makeUpgradeOptions(player) {
       effect.val = val / 100; // Convert to decimal
       effect.type = "add";
     } else if (def.id === "rico") {
-      // Ricochet: Epic: +1, Legendary: +2
-      val = rarityKey === "legendary" ? 2 : 1;
+      // Ricochet: Common/Rare: +1, Epic: +2, Legendary: +3
+      val = rarityKey === "legendary" ? 3 : rarityKey === "epic" ? 2 : 1;
       desc = def.desc.replace("{val}", val);
       effect.val = val;
-    } else if (def.type === "add" || def.type === "mult" || def.type === "add_cap") {
+    } else if (def.type === "add" || def.type === "mult") {
       val = def.base * rarity.scale;
       if (def.stat === "shield" || def.stat === "ricochet" || def.stat === "pierce") {
         val = Math.max(1, Math.round(val));
@@ -943,6 +945,16 @@ function makeUpgradeOptions(player) {
       }
       desc = def.desc.replace("{val}", val);
       effect.val = def.type === "mult" || def.stat === "critChance" ? val / 100 : val;
+
+      // Special: Show overcrit potential for crit cards
+      if (def.stat === "critChance") {
+        const currentCrit = (player.upgrades?.critChance || 0) * 100;
+        const newCrit = currentCrit + val;
+        if (newCrit > 100) {
+          const overCritChance = Math.round(newCrit - 100);
+          desc = `+${val}% Crit (${overCritChance}% OVERCRIT!)`;
+        }
+      }
     }
 
     opts.push({
@@ -2234,6 +2246,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
     r: bulletR,
     dmg: finalDmg,
     isCrit,
+    isOverCrit,
     explosive: explosive,
     lifespan: lifespan,
     maxLifespan: lifespan, // For Temporal Boomerang
@@ -2282,6 +2295,7 @@ function fireBullet(owner, originX, originY, targetX, targetY, angleOffset = 0, 
       vy: bullet.vy,
       slot: bullet.ownerSlot,
       isCrit: bullet.isCrit,
+      isOverCrit: bullet.isOverCrit,
       bulletColor: bullet.bulletColor,
       bulletType: bullet.bulletType, // For visual rendering (gatling/sniper/missile/main)
       ricochet: bullet.ricochet,
@@ -2622,6 +2636,7 @@ function fireRailgun(owner, originX, originY, targetX, targetY, props = {}) {
     segments: beamSegments,
     slot: ownerSlot,
     isCrit,
+    isOverCrit,
     hitCount: hitEnemies.length
   });
 }
@@ -2840,12 +2855,12 @@ function createExplosion(x, y, radius, color) {
 }
 
 // OPTIMIZED: Add damage number - throttled under heavy load
-function addDamageNumber(x, y, amount, isCrit) {
+function addDamageNumber(x, y, amount, isCrit, isOverCrit = false) {
   const maxEvents = getMaxVisualEvents();
-  // PERFORMANCE: Always show crits, throttle normal damage numbers
-  if (!isCrit && visualEventCount >= maxEvents) return;
+  // PERFORMANCE: Always show crits and overcrits, throttle normal damage numbers
+  if (!isCrit && !isOverCrit && visualEventCount >= maxEvents) return;
   visualEventCount++;
-  queueEvent("damage", { x, y, amount, isCrit });
+  queueEvent("damage", { x, y, amount, isCrit, isOverCrit });
 }
 
 function bounceOffWalls(m) {
@@ -4687,7 +4702,7 @@ function tick() {
             }
           }
 
-          addDamageNumber(m.x, m.y - m.r, hitDamage, b.isCrit);
+          addDamageNumber(m.x, m.y - m.r, hitDamage, b.isCrit, b.isOverCrit);
 
           if (owner) {
             owner.damageDealt = (owner.damageDealt || 0) + hitDamage;
@@ -5027,11 +5042,18 @@ function tick() {
 
             // Apply module effects if any
             if (mine.modules && mine.modules.length > 0) {
-              // Viral Payload: Mark enemy as infected
-              if (mine.modules.includes("viralPayload")) {
-                if (!m.infected) {
+              // Viral Payload: Mark enemy as infected with proper DOT setup
+              const viralCount = countModule(mine.modules, "viralPayload");
+              if (viralCount > 0) {
+                if (!m.infected || (m.infectionStack || 0) < viralCount) {
                   m.infected = true;
-                  m.infectedBy = mine.ownerId;
+                  m.infectionStack = viralCount;
+                  m.infectionOwner = mine.ownerId;
+                  m.infectionSlot = mine.ownerSlot;
+                  // DOT based on mine damage and viral count
+                  m.infectionDamage = (mine.damage * 0.1) * (0.5 + (viralCount - 1) * 0.25);
+                  m.infectionLife = 5.0 + (viralCount - 1);
+                  queueEvent("infected", { id: m.id, x: m.x, y: m.y });
                 }
                 damage *= 1.3; // +30% damage to infected
               }
