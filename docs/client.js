@@ -2716,6 +2716,9 @@
   function updateFeedbackUI() {
     if (!feedbackListEl) return;
 
+    // Update tab counts
+    updateFeedbackTabCounts();
+
     // Filter by current type and sort: new first, then acknowledged, then resolved
     const statusOrder = { "new": 0, "acknowledged": 1, "resolved": 2 };
     const filtered = feedbackList
@@ -2842,6 +2845,19 @@
     if (hours < 24) return `${hours}h ago`;
     const days = Math.floor(hours / 24);
     return `${days}d ago`;
+  }
+
+  function updateFeedbackTabCounts() {
+    // Count open (non-resolved) items for each type
+    const openBugs = feedbackList.filter(f => f.type === "bug" && f.status !== "resolved").length;
+    const openIdeas = feedbackList.filter(f => f.type === "idea" && f.status !== "resolved").length;
+    
+    if (tabBugs) {
+      tabBugs.innerHTML = `🐛 Bugs <span class="feedback-tab-count">${openBugs}</span>`;
+    }
+    if (tabIdeas) {
+      tabIdeas.innerHTML = `💡 Ideas <span class="feedback-tab-count">${openIdeas}</span>`;
+    }
   }
 
   // Tab switching

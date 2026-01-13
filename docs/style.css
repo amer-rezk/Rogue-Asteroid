@@ -45,7 +45,7 @@ html, body {
   gap: 30px;
   width: 100%;
   height: 100%;
-  padding: 30px;
+  padding: 30px 30px 30px 0;
   align-items: stretch;
   justify-content: center;
 }
@@ -586,9 +586,11 @@ canvas {
   background: var(--panel-bg);
   backdrop-filter: blur(10px);
   border: 1px solid rgba(0, 255, 255, 0.2);
+  border-left: none;
   box-shadow: 0 0 30px rgba(0,255,255,0.1);
-  border-radius: 20px;
+  border-radius: 0 20px 20px 0;
   padding: 30px;
+  padding-left: 40px;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -627,6 +629,27 @@ canvas {
   color: #888;
   cursor: pointer;
   transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.feedback-tab-count {
+  background: rgba(255,255,255,0.2);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 14px;
+  min-width: 24px;
+  text-align: center;
+}
+
+.feedback-tab.active .feedback-tab-count {
+  background: rgba(0,0,0,0.3);
+}
+
+.feedback-tab[data-type="bug"].active .feedback-tab-count {
+  background: rgba(0,0,0,0.3);
 }
 
 .feedback-tab:hover {
@@ -829,10 +852,17 @@ canvas {
     align-items: center;
   }
   
+  .menu-layout {
+    padding: 30px;
+  }
+  
   .feedback-panel {
     width: 100%;
     max-width: 800px;
     order: 2;
+    border-radius: 20px;
+    border-left: 1px solid rgba(0, 255, 255, 0.2);
+    padding-left: 30px;
   }
   
   .leaderboard-panel {
