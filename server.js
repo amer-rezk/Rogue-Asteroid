@@ -848,10 +848,10 @@ function lobbySnapshot() {
 // ROGUELIKE UPGRADES SYSTEM
 // ============================================================================
 const RARITY_CONFIG = {
-  common: { weight: 75, color: "#ffffff", scale: 1.0, label: "COMMON" },
-  rare: { weight: 17, color: "#00ffff", scale: 1.5, label: "RARE" },
-  epic: { weight: 6, color: "#bf00ff", scale: 2.5, label: "EPIC" },
-  legendary: { weight: 2, color: "#ffaa00", scale: 4.0, label: "LEGENDARY" },
+  common: { weight: 65, color: "#ffffff", scale: 1.0, label: "COMMON" },
+  rare: { weight: 20, color: "#00ffff", scale: 1.5, label: "RARE" },
+  epic: { weight: 10, color: "#bf00ff", scale: 2.5, label: "EPIC" },
+  legendary: { weight: 5, color: "#ffaa00", scale: 4.0, label: "LEGENDARY" },
 };
 
 const UPGRADE_DEFS = [
@@ -879,6 +879,9 @@ function rollRarity() {
   return "legendary";
 }
 
+// Cards that don't have a common variant
+const RARE_PLUS_ONLY = ["multi", "chain", "rico"];
+
 function makeUpgradeOptions(player) {
   const opts = [];
   const banished = player.banishedUpgrades || [];
@@ -890,25 +893,22 @@ function makeUpgradeOptions(player) {
   const pool = availableDefs.length > 0 ? availableDefs : UPGRADE_DEFS;
 
   for (let i = 0; i < 3; i++) {
-    const def = pool[Math.floor(Math.random() * pool.length)];
-    if (opts.find(o => o.defId === def.id)) { i--; continue; }
-    if (def.type === "bool" && player.upgrades[def.stat]) { i--; continue; }
-    if (def.stat === "slugChance" && (player.upgrades.slugChance || 0) >= 100) { i--; continue; }
-
-    // Roll rarity - some cards are rare+ only
-    const isRarePlusOnly = (def.id === "multi" || def.id === "chain" || def.id === "rico");
-    let rarityKey;
-    
-    if (isRarePlusOnly) {
-      // Roll only among rare/epic/legendary with correct proportions
-      // Rare: 17, Epic: 6, Legendary: 2 -> Total: 25
-      const rand = Math.random() * 25;
-      if (rand < 17) rarityKey = "rare";           // 68% (17/25)
-      else if (rand < 23) rarityKey = "epic";      // 24% (6/25)
-      else rarityKey = "legendary";                 // 8% (2/25)
-    } else {
+    // Roll card and rarity together, reroll if invalid combo
+    let def, rarityKey;
+    let attempts = 0;
+    do {
+      def = pool[Math.floor(Math.random() * pool.length)];
       rarityKey = rollRarity();
-    }
+      attempts++;
+      // Reroll if: rare+ only card landed on common, OR duplicate card, OR maxed bool/slug
+    } while (
+      attempts < 50 && (
+        (RARE_PLUS_ONLY.includes(def.id) && rarityKey === "common") ||
+        opts.find(o => o.defId === def.id) ||
+        (def.type === "bool" && player.upgrades[def.stat]) ||
+        (def.stat === "slugChance" && (player.upgrades.slugChance || 0) >= 100)
+      )
+    );
 
     const rarity = RARITY_CONFIG[rarityKey];
 
