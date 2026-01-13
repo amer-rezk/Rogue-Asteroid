@@ -593,32 +593,82 @@ const missilesBySlot = [[], [], [], []];
 // Tick counter for broadcast throttling
 let tickCount = 0;
 
-// Leaderboard
+// Leaderboard & Feedback System (Upstash Redis)
 let leaderboard = [];
+let feedbackList = []; // Bug reports and ideas
 const MAX_LEADERBOARD_ENTRIES = 10;
-const LEADERBOARD_FILE = path.join(__dirname, "leaderboard.json");
+const MAX_FEEDBACK_ENTRIES = 50;
 
-function loadLeaderboard() {
+// Upstash Redis config (set via environment variables)
+const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL || "";
+const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
+
+async function redisGet(key) {
+  if (!UPSTASH_URL || !UPSTASH_TOKEN) return null;
   try {
-    if (fs.existsSync(LEADERBOARD_FILE)) {
-      const data = fs.readFileSync(LEADERBOARD_FILE, "utf8");
-      leaderboard = JSON.parse(data);
-      console.log(`Loaded ${leaderboard.length} leaderboard entries`);
-    }
+    const res = await fetch(`${UPSTASH_URL}/get/${key}`, {
+      headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` }
+    });
+    const data = await res.json();
+    return data.result ? JSON.parse(data.result) : null;
   } catch (err) {
-    console.error("Failed to load leaderboard:", err);
+    console.error(`Redis GET ${key} failed:`, err.message);
+    return null;
+  }
+}
+
+async function redisSet(key, value) {
+  if (!UPSTASH_URL || !UPSTASH_TOKEN) return false;
+  try {
+    const res = await fetch(`${UPSTASH_URL}/set/${key}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
+      body: JSON.stringify(value)
+    });
+    return res.ok;
+  } catch (err) {
+    console.error(`Redis SET ${key} failed:`, err.message);
+    return false;
+  }
+}
+
+async function loadLeaderboard() {
+  const data = await redisGet("leaderboard");
+  if (data) {
+    leaderboard = data;
+    console.log(`Loaded ${leaderboard.length} leaderboard entries from Redis`);
+  } else {
+    console.log("No leaderboard data in Redis, starting fresh");
     leaderboard = [];
   }
 }
 
-function saveLeaderboard() {
-  // Use async write so the game doesn't freeze
-  fs.writeFile(LEADERBOARD_FILE, JSON.stringify(leaderboard, null, 2), (err) => {
-    if (err) console.error("Failed to save leaderboard:", err);
-  });
+async function saveLeaderboard() {
+  const success = await redisSet("leaderboard", leaderboard);
+  if (!success) console.error("Failed to save leaderboard to Redis");
 }
 
-loadLeaderboard();
+async function loadFeedback() {
+  const data = await redisGet("feedback");
+  if (data) {
+    feedbackList = data;
+    console.log(`Loaded ${feedbackList.length} feedback entries from Redis`);
+  } else {
+    console.log("No feedback data in Redis, starting fresh");
+    feedbackList = [];
+  }
+}
+
+async function saveFeedback() {
+  const success = await redisSet("feedback", feedbackList);
+  if (!success) console.error("Failed to save feedback to Redis");
+}
+
+// Load data on startup
+(async () => {
+  await loadLeaderboard();
+  await loadFeedback();
+})();
 
 // Chat system
 let chatHistory = [];
@@ -840,7 +890,7 @@ function lobbySnapshot() {
     }));
   const readyCount = list.filter(p => p.ready).length;
   const allReady = list.length > 0 && list.every(p => p.ready);
-  return { players: list, hostId, allReady, readyCount, leaderboard, spectatorCount: spectators.size };
+  return { players: list, hostId, allReady, readyCount, leaderboard, feedbackList, spectatorCount: spectators.size };
 }
 
 
@@ -6057,6 +6107,80 @@ wss.on("connection", (ws) => {
         leaderboard = [];
         saveLeaderboard();
         broadcast({ t: "lobby", ...lobbySnapshot() });
+      }
+      return;
+    }
+
+    // Submit bug report or idea
+    if (msg.t === "submitFeedback") {
+      const text = (msg.text || "").toString().trim();
+      const type = msg.feedbackType === "idea" ? "idea" : "bug";
+      if (text.length < 5 || text.length > 500) return;
+      
+      // Rate limit: 1 submission per player per minute
+      const now = Date.now();
+      if (p.lastFeedbackTime && now - p.lastFeedbackTime < 60000) {
+        send(ws, { t: "feedbackError", message: "Please wait before submitting again" });
+        return;
+      }
+      p.lastFeedbackTime = now;
+      
+      const entry = {
+        id: Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
+        type,
+        text,
+        author: p.name || "Anonymous",
+        timestamp: now,
+        status: "new", // new, acknowledged, resolved
+        votes: 0
+      };
+      
+      feedbackList.unshift(entry);
+      if (feedbackList.length > MAX_FEEDBACK_ENTRIES) {
+        feedbackList = feedbackList.slice(0, MAX_FEEDBACK_ENTRIES);
+      }
+      saveFeedback();
+      broadcast({ t: "feedbackUpdate", feedbackList });
+      return;
+    }
+
+    // Vote on feedback
+    if (msg.t === "voteFeedback") {
+      const entry = feedbackList.find(f => f.id === msg.id);
+      if (entry) {
+        // Track who voted to prevent double voting
+        if (!p.votedFeedback) p.votedFeedback = new Set();
+        if (!p.votedFeedback.has(msg.id)) {
+          p.votedFeedback.add(msg.id);
+          entry.votes = (entry.votes || 0) + 1;
+          saveFeedback();
+          broadcast({ t: "feedbackUpdate", feedbackList });
+        }
+      }
+      return;
+    }
+
+    // Admin: Update feedback status
+    if (msg.t === "updateFeedbackStatus") {
+      const password = process.env.LEADERBOARD_PASSWORD || "1122";
+      if (msg.password === password) {
+        const entry = feedbackList.find(f => f.id === msg.id);
+        if (entry && ["new", "acknowledged", "resolved"].includes(msg.status)) {
+          entry.status = msg.status;
+          saveFeedback();
+          broadcast({ t: "feedbackUpdate", feedbackList });
+        }
+      }
+      return;
+    }
+
+    // Admin: Delete feedback
+    if (msg.t === "deleteFeedback") {
+      const password = process.env.LEADERBOARD_PASSWORD || "1122";
+      if (msg.password === password) {
+        feedbackList = feedbackList.filter(f => f.id !== msg.id);
+        saveFeedback();
+        broadcast({ t: "feedbackUpdate", feedbackList });
       }
       return;
     }

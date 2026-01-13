@@ -174,6 +174,14 @@
   const leaderboardPanel = document.getElementById("leaderboardPanel");
   const leaderboardList = document.getElementById("leaderboardList");
   const clearLeaderboardBtn = document.getElementById("clearLeaderboardBtn");
+  
+  // Feedback system elements
+  const feedbackPanel = document.getElementById("feedbackPanel");
+  const feedbackInput = document.getElementById("feedbackInput");
+  const feedbackSubmit = document.getElementById("feedbackSubmit");
+  const feedbackListEl = document.getElementById("feedbackList");
+  const tabBugs = document.getElementById("tabBugs");
+  const tabIdeas = document.getElementById("tabIdeas");
 
   // Load saved name from localStorage
   const savedName = localStorage.getItem("rogueAsteroidPlayerName");
@@ -341,6 +349,8 @@
   let allReady = false;
   let readyCount = 0;
   let leaderboard = [];
+  let feedbackList = [];
+  let currentFeedbackType = "bug"; // "bug" or "idea"
   let lastSnap = null;
   let upgradeOptions = [];
   let upgradePicked = false;
@@ -1903,6 +1913,7 @@
         allReady = msg.allReady;
         readyCount = msg.readyCount || 0;
         leaderboard = msg.leaderboard || [];
+        feedbackList = msg.feedbackList || [];
         isHost = msg.hostId === myId;
         if (phase === "playing" || phase === "upgrades" || phase === "gameover") {
           lastSnap = null;
@@ -2457,6 +2468,15 @@
         }
         updateChatUI();
         break;
+
+      case "feedbackUpdate":
+        feedbackList = msg.feedbackList || [];
+        updateFeedbackUI();
+        break;
+        
+      case "feedbackError":
+        alert(msg.message || "Feedback error");
+        break;
     }
   }
 
@@ -2630,6 +2650,9 @@
 
     // Update leaderboard
     updateLeaderboardUI();
+    
+    // Update feedback panel
+    updateFeedbackUI();
   }
 
   function updateLeaderboardUI() {
@@ -2680,6 +2703,108 @@
         send({ t: "clearLeaderboard", password: password });
       } else if (password !== null) {
         alert("Incorrect password!");
+      }
+    });
+  }
+
+
+  // ============================================================================
+  // FEEDBACK SYSTEM
+  // ============================================================================
+  function updateFeedbackUI() {
+    if (!feedbackListEl) return;
+
+    // Filter by current type
+    const filtered = feedbackList.filter(f => f.type === currentFeedbackType);
+
+    if (filtered.length > 0) {
+      feedbackListEl.innerHTML = "";
+      for (const entry of filtered) {
+        const div = document.createElement("div");
+        div.className = `feedback-entry ${entry.type} status-${entry.status}`;
+
+        const timeAgo = getTimeAgo(entry.timestamp);
+        const typeIcon = entry.type === "bug" ? "🐛" : "💡";
+        const statusBadge = entry.status !== "new" 
+          ? `<span class="feedback-status ${entry.status}">${entry.status}</span>` 
+          : "";
+
+        div.innerHTML = `
+          <div class="feedback-entry-header">
+            <span class="feedback-type">${typeIcon} ${entry.type}</span>
+            <span class="feedback-meta">${escapeHtml(entry.author)} • ${timeAgo}</span>
+          </div>
+          <div class="feedback-text">${escapeHtml(entry.text)}</div>
+          <div class="feedback-footer">
+            <button class="feedback-vote" data-id="${entry.id}">👍 ${entry.votes || 0}</button>
+            ${statusBadge}
+          </div>
+        `;
+        feedbackListEl.appendChild(div);
+      }
+
+      // Add vote handlers
+      feedbackListEl.querySelectorAll(".feedback-vote").forEach(btn => {
+        btn.addEventListener("click", () => {
+          send({ t: "voteFeedback", id: btn.dataset.id });
+        });
+      });
+    } else {
+      feedbackListEl.innerHTML = `<div class="feedback-empty" style="color:#666;font-size:11px;text-align:center;padding:20px;">No ${currentFeedbackType === "bug" ? "bug reports" : "ideas"} yet. Be the first!</div>`;
+    }
+  }
+
+  function getTimeAgo(timestamp) {
+    const seconds = Math.floor((Date.now() - timestamp) / 1000);
+    if (seconds < 60) return "just now";
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  }
+
+  // Tab switching
+  if (tabBugs) {
+    tabBugs.addEventListener("click", () => {
+      currentFeedbackType = "bug";
+      tabBugs.classList.add("active");
+      tabIdeas.classList.remove("active");
+      updateFeedbackUI();
+    });
+  }
+  if (tabIdeas) {
+    tabIdeas.addEventListener("click", () => {
+      currentFeedbackType = "idea";
+      tabIdeas.classList.remove("active");
+      tabIdeas.classList.add("active");
+      tabBugs.classList.remove("active");
+      updateFeedbackUI();
+    });
+  }
+
+  // Submit feedback
+  if (feedbackSubmit && feedbackInput) {
+    feedbackSubmit.addEventListener("click", () => {
+      const text = feedbackInput.value.trim();
+      if (text.length < 5) {
+        alert("Please enter at least 5 characters");
+        return;
+      }
+      if (text.length > 500) {
+        alert("Maximum 500 characters");
+        return;
+      }
+      send({ t: "submitFeedback", feedbackType: currentFeedbackType, text });
+      feedbackInput.value = "";
+    });
+
+    // Submit on Enter (with Shift for newline)
+    feedbackInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        feedbackSubmit.click();
       }
     });
   }
