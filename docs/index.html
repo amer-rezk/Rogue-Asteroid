@@ -12,6 +12,25 @@
   <!-- Menu Screen -->
   <div id="menuScreen">
     <div class="menu-layout">
+      <!-- Feedback Panel (Left Side) -->
+      <div id="feedbackPanel" class="feedback-panel">
+        <div class="feedback-header">
+          <h2>📝 FEEDBACK</h2>
+        </div>
+        
+        <div class="feedback-tabs">
+          <button id="tabBugs" class="feedback-tab active" data-type="bug">🐛 Bugs</button>
+          <button id="tabIdeas" class="feedback-tab" data-type="idea">💡 Ideas</button>
+        </div>
+        
+        <div class="feedback-form">
+          <textarea id="feedbackInput" placeholder="Describe the bug or share your idea..." maxlength="500"></textarea>
+          <button id="feedbackSubmit" class="btn-small">SUBMIT</button>
+        </div>
+        
+        <div id="feedbackList" class="feedback-list"></div>
+      </div>
+
       <div class="menu-container">
         <h1 class="title">☄️ ROGUE ASTEROID</h1>
         <p class="subtitle">COMPETITIVE ASTEROID WARFARE</p>

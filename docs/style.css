@@ -43,7 +43,7 @@ html, body {
 .menu-layout {
   display: flex;
   gap: 20px;
-  max-width: 900px;
+  max-width: 1200px;
   width: 100%;
   padding: 20px;
   align-items: flex-start;
@@ -571,10 +571,224 @@ canvas {
   box-shadow: 0 0 12px var(--cyan);
 }
 
+/* Feedback Panel */
+.feedback-panel {
+  width: 280px;
+  background: var(--panel-bg);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(0, 255, 255, 0.2);
+  box-shadow: 0 0 30px rgba(0,255,255,0.1);
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.feedback-header {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(0,255,255,0.2);
+}
+
+.feedback-header h2 {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 14px;
+  color: var(--cyan);
+  margin: 0;
+}
+
+.feedback-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.feedback-tab {
+  flex: 1;
+  padding: 8px;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 10px;
+  font-weight: bold;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 4px;
+  color: #888;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.feedback-tab:hover {
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+}
+
+.feedback-tab.active {
+  background: rgba(0,255,255,0.15);
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+
+.feedback-tab[data-type="bug"].active {
+  background: rgba(255,100,100,0.15);
+  border-color: #ff6666;
+  color: #ff6666;
+}
+
+.feedback-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.feedback-form textarea {
+  width: 100%;
+  height: 60px;
+  padding: 10px;
+  font-family: inherit;
+  font-size: 12px;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 4px;
+  color: #fff;
+  resize: none;
+}
+
+.feedback-form textarea:focus {
+  outline: none;
+  border-color: var(--cyan);
+}
+
+.feedback-form .btn-small {
+  align-self: flex-end;
+  background: rgba(0,255,255,0.2);
+  border-color: rgba(0,255,255,0.4);
+  color: var(--cyan);
+}
+
+.feedback-form .btn-small:hover {
+  background: rgba(0,255,255,0.4);
+  border-color: var(--cyan);
+  color: #fff;
+}
+
+.feedback-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.feedback-entry {
+  background: rgba(255,255,255,0.03);
+  padding: 10px;
+  border-radius: 4px;
+  border-left: 3px solid #555;
+}
+
+.feedback-entry.bug {
+  border-left-color: #ff6666;
+}
+
+.feedback-entry.idea {
+  border-left-color: #66ff66;
+}
+
+.feedback-entry.status-acknowledged {
+  border-left-color: #ffaa00;
+}
+
+.feedback-entry.status-resolved {
+  opacity: 0.6;
+  border-left-color: #888;
+}
+
+.feedback-entry-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.feedback-type {
+  font-size: 10px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.feedback-entry.bug .feedback-type { color: #ff6666; }
+.feedback-entry.idea .feedback-type { color: #66ff66; }
+
+.feedback-meta {
+  font-size: 9px;
+  color: #666;
+}
+
+.feedback-text {
+  font-size: 11px;
+  color: #ccc;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.feedback-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.feedback-vote {
+  font-size: 10px;
+  padding: 3px 8px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 3px;
+  color: #888;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.feedback-vote:hover {
+  background: rgba(0,255,255,0.15);
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+
+.feedback-status {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+
+.feedback-status.new {
+  background: rgba(0,255,255,0.2);
+  color: var(--cyan);
+}
+
+.feedback-status.acknowledged {
+  background: rgba(255,170,0,0.2);
+  color: #ffaa00;
+}
+
+.feedback-status.resolved {
+  background: rgba(100,255,100,0.2);
+  color: #66ff66;
+}
+
 @media (max-width: 800px) {
   .menu-layout {
     flex-direction: column;
     align-items: center;
+  }
+  
+  .feedback-panel {
+    width: 100%;
+    max-width: 520px;
+    order: 2;
   }
   
   .leaderboard-panel {
