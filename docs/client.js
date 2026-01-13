@@ -2695,14 +2695,12 @@
     }
   }
 
-  // Clear leaderboard button with password
+  // Clear leaderboard button with password (server validates)
   if (clearLeaderboardBtn) {
     clearLeaderboardBtn.addEventListener("click", () => {
-      const password = prompt("Enter password to clear leaderboard:");
-      if (password === "1122") {
+      const password = prompt("Enter admin password to clear leaderboard:");
+      if (password) {
         send({ t: "clearLeaderboard", password: password });
-      } else if (password !== null) {
-        alert("Incorrect password!");
       }
     });
   }
@@ -2711,6 +2709,10 @@
   // ============================================================================
   // FEEDBACK SYSTEM
   // ============================================================================
+  // Admin mode for feedback (activated by entering password)
+  let feedbackAdminMode = false;
+  let feedbackAdminPassword = "";
+
   function updateFeedbackUI() {
     if (!feedbackListEl) return;
 
@@ -2729,16 +2731,36 @@
           ? `<span class="feedback-status ${entry.status}">${entry.status}</span>` 
           : "";
 
+        // Admin controls
+        const adminControls = feedbackAdminMode ? `
+          <div class="feedback-admin-controls" style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="feedback-admin-btn" data-action="acknowledge" data-id="${entry.id}">✓ ACK</button>
+            <button class="feedback-admin-btn" data-action="resolve" data-id="${entry.id}">✔ DONE</button>
+            <button class="feedback-admin-btn" data-action="comment" data-id="${entry.id}">💬 NOTE</button>
+            <button class="feedback-admin-btn" data-action="delete" data-id="${entry.id}" style="color:#ff4444;border-color:#ff4444;">🗑 DEL</button>
+          </div>
+        ` : "";
+
+        // Show admin comment if exists
+        const commentHtml = entry.adminComment ? `
+          <div class="feedback-comment">
+            <div class="feedback-comment-label">Admin Note:</div>
+            ${escapeHtml(entry.adminComment)}
+          </div>
+        ` : "";
+
         div.innerHTML = `
           <div class="feedback-entry-header">
             <span class="feedback-type">${typeIcon} ${entry.type}</span>
             <span class="feedback-meta">${escapeHtml(entry.author)} • ${timeAgo}</span>
           </div>
           <div class="feedback-text">${escapeHtml(entry.text)}</div>
+          ${commentHtml}
           <div class="feedback-footer">
             <button class="feedback-vote" data-id="${entry.id}">👍 ${entry.votes || 0}</button>
             ${statusBadge}
           </div>
+          ${adminControls}
         `;
         feedbackListEl.appendChild(div);
       }
@@ -2749,9 +2771,57 @@
           send({ t: "voteFeedback", id: btn.dataset.id });
         });
       });
+
+      // Add admin action handlers
+      if (feedbackAdminMode) {
+        feedbackListEl.querySelectorAll(".feedback-admin-btn").forEach(btn => {
+          btn.addEventListener("click", () => {
+            const action = btn.dataset.action;
+            const id = btn.dataset.id;
+            
+            if (action === "acknowledge") {
+              send({ t: "updateFeedbackStatus", id, status: "acknowledged", password: feedbackAdminPassword });
+            } else if (action === "resolve") {
+              send({ t: "updateFeedbackStatus", id, status: "resolved", password: feedbackAdminPassword });
+            } else if (action === "comment") {
+              const comment = prompt("Enter admin note:");
+              if (comment && comment.trim()) {
+                send({ t: "addFeedbackComment", id, comment: comment.trim(), password: feedbackAdminPassword });
+              }
+            } else if (action === "delete") {
+              if (confirm("Delete this feedback permanently?")) {
+                send({ t: "deleteFeedback", id, password: feedbackAdminPassword });
+              }
+            }
+          });
+        });
+      }
     } else {
-      feedbackListEl.innerHTML = `<div class="feedback-empty" style="color:#666;font-size:11px;text-align:center;padding:20px;">No ${currentFeedbackType === "bug" ? "bug reports" : "ideas"} yet. Be the first!</div>`;
+      feedbackListEl.innerHTML = `<div class="feedback-empty" style="color:#666;font-size:16px;text-align:center;padding:30px;">No ${currentFeedbackType === "bug" ? "bug reports" : "ideas"} yet. Be the first!</div>`;
     }
+  }
+
+  // Toggle admin mode with double-click on feedback header
+  const feedbackHeader = document.querySelector(".feedback-header");
+  if (feedbackHeader) {
+    feedbackHeader.addEventListener("dblclick", () => {
+      if (!feedbackAdminMode) {
+        const pw = prompt("Enter admin password:");
+        if (pw) {
+          feedbackAdminPassword = pw;
+          feedbackAdminMode = true;
+          feedbackHeader.style.borderColor = "#ff6666";
+          feedbackHeader.querySelector("h2").textContent = "📝 FEEDBACK (ADMIN)";
+          updateFeedbackUI();
+        }
+      } else {
+        feedbackAdminMode = false;
+        feedbackAdminPassword = "";
+        feedbackHeader.style.borderColor = "";
+        feedbackHeader.querySelector("h2").textContent = "📝 FEEDBACK";
+        updateFeedbackUI();
+      }
+    });
   }
 
   function getTimeAgo(timestamp) {

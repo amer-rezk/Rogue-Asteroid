@@ -6185,6 +6185,20 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    // Admin: Add comment to feedback
+    if (msg.t === "addFeedbackComment") {
+      const password = process.env.LEADERBOARD_PASSWORD || "1122";
+      if (msg.password === password) {
+        const entry = feedbackList.find(f => f.id === msg.id);
+        if (entry && msg.comment && msg.comment.length <= 500) {
+          entry.adminComment = msg.comment;
+          saveFeedback();
+          broadcast({ t: "feedbackUpdate", feedbackList });
+        }
+      }
+      return;
+    }
+
     // Pause game - any player can pause
     if (msg.t === "pauseGame" && phase === "playing" && !gamePaused && pauseCountdown <= 0) {
       gamePaused = true;
