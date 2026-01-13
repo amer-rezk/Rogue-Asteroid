@@ -604,12 +604,19 @@ const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL || "";
 const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
 
 async function redisGet(key) {
-  if (!UPSTASH_URL || !UPSTASH_TOKEN) return null;
+  if (!UPSTASH_URL || !UPSTASH_TOKEN) {
+    console.log("Redis not configured - missing UPSTASH_URL or TOKEN");
+    return null;
+  }
   try {
     const res = await fetch(`${UPSTASH_URL}/get/${key}`, {
       headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` }
     });
     const data = await res.json();
+    if (data.error) {
+      console.error(`Redis GET ${key} error:`, data.error);
+      return null;
+    }
     return data.result ? JSON.parse(data.result) : null;
   } catch (err) {
     console.error(`Redis GET ${key} failed:`, err.message);
@@ -618,14 +625,28 @@ async function redisGet(key) {
 }
 
 async function redisSet(key, value) {
-  if (!UPSTASH_URL || !UPSTASH_TOKEN) return false;
+  if (!UPSTASH_URL || !UPSTASH_TOKEN) {
+    console.log("Redis not configured - missing UPSTASH_URL or TOKEN");
+    return false;
+  }
   try {
-    const res = await fetch(`${UPSTASH_URL}/set/${key}`, {
+    // Upstash REST API expects the value as a JSON array command
+    const jsonValue = JSON.stringify(value);
+    const res = await fetch(`${UPSTASH_URL}`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
-      body: JSON.stringify(value)
+      headers: { 
+        Authorization: `Bearer ${UPSTASH_TOKEN}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(["SET", key, jsonValue])
     });
-    return res.ok;
+    const data = await res.json();
+    if (data.error) {
+      console.error(`Redis SET ${key} error:`, data.error);
+      return false;
+    }
+    console.log(`Redis SET ${key} success`);
+    return true;
   } catch (err) {
     console.error(`Redis SET ${key} failed:`, err.message);
     return false;
@@ -633,6 +654,9 @@ async function redisSet(key, value) {
 }
 
 async function loadLeaderboard() {
+  console.log("Loading leaderboard from Redis...");
+  console.log("UPSTASH_URL configured:", !!UPSTASH_URL);
+  console.log("UPSTASH_TOKEN configured:", !!UPSTASH_TOKEN);
   const data = await redisGet("leaderboard");
   if (data) {
     leaderboard = data;
@@ -649,6 +673,7 @@ async function saveLeaderboard() {
 }
 
 async function loadFeedback() {
+  console.log("Loading feedback from Redis...");
   const data = await redisGet("feedback");
   if (data) {
     feedbackList = data;
@@ -6120,7 +6145,7 @@ wss.on("connection", (ws) => {
       // Rate limit: 1 submission per player per minute
       const now = Date.now();
       if (p.lastFeedbackTime && now - p.lastFeedbackTime < 60000) {
-        send(ws, { t: "feedbackError", message: "Please wait before submitting again" });
+        safeSend(ws, { t: "feedbackError", message: "Please wait before submitting again" });
         return;
       }
       p.lastFeedbackTime = now;

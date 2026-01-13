@@ -2716,8 +2716,17 @@
   function updateFeedbackUI() {
     if (!feedbackListEl) return;
 
-    // Filter by current type
-    const filtered = feedbackList.filter(f => f.type === currentFeedbackType);
+    // Filter by current type and sort: new first, then acknowledged, then resolved
+    const statusOrder = { "new": 0, "acknowledged": 1, "resolved": 2 };
+    const filtered = feedbackList
+      .filter(f => f.type === currentFeedbackType)
+      .sort((a, b) => {
+        const statusDiff = (statusOrder[a.status] || 0) - (statusOrder[b.status] || 0);
+        if (statusDiff !== 0) return statusDiff;
+        // Within same status, sort by votes (highest first), then by time (newest first)
+        if ((b.votes || 0) !== (a.votes || 0)) return (b.votes || 0) - (a.votes || 0);
+        return (b.timestamp || 0) - (a.timestamp || 0);
+      });
 
     if (filtered.length > 0) {
       feedbackListEl.innerHTML = "";
