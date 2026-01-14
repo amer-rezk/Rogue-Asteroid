@@ -382,6 +382,7 @@
   let latency = 0;
   let lastPingTime = 0;
   let pingInterval = null;
+  let httpKeepAliveInterval = null; // HTTP ping to prevent Koyeb timeout
 
   // Module Card System
   let moduleCardPhase = false;
@@ -1727,6 +1728,14 @@
           ws.send(JSON.stringify({ t: "ping", ts: lastPingTime }));
         }
       }, 2000); // Ping every 2 seconds
+      
+      // Start HTTP keep-alive to prevent Koyeb timeout (every 2 minutes)
+      if (httpKeepAliveInterval) clearInterval(httpKeepAliveInterval);
+      httpKeepAliveInterval = setInterval(() => {
+        // Extract base URL from WebSocket URL
+        const baseUrl = DEFAULT_SERVER.replace("wss://", "https://").replace("ws://", "http://").replace("/ws", "");
+        fetch(`${baseUrl}/keepalive`).catch(() => {}); // Silent fail is fine
+      }, 120000); // Every 2 minutes
     };
 
     ws.onclose = () => {
@@ -1735,6 +1744,11 @@
       if (pingInterval) {
         clearInterval(pingInterval);
         pingInterval = null;
+      }
+      // Clear HTTP keep-alive interval
+      if (httpKeepAliveInterval) {
+        clearInterval(httpKeepAliveInterval);
+        httpKeepAliveInterval = null;
       }
       latency = 0;
 

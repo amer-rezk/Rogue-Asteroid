@@ -430,7 +430,11 @@ app.use(express.static(path.join(__dirname, "docs")));
 // Cache music for 1 day (86400000 ms) to save bandwidth/CPU
 const oneDay = 86400000;
 app.use("/Music", express.static(path.join(__dirname, "docs", "Music"), { maxAge: oneDay }));
-app.get("/health", (_, res) => res.json({ ok: true }));
+app.get("/health", (_, res) => res.json({ ok: true, uptime: process.uptime(), players: players.size }));
+app.get("/keepalive", (_, res) => {
+  // This endpoint is called periodically by clients to prevent Koyeb timeout
+  res.json({ ok: true, time: Date.now() });
+});
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
